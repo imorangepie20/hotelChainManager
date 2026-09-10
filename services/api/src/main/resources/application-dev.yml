@@ -1,0 +1,17 @@
+spring:
+  flyway:
+    locations: classpath:db/migration,classpath:db/dev
+
+test-payment:
+  enabled: true
+
+reservation:
+  expiry-job-enabled: true
+
+staff:
+  dev:
+    enabled: ${STAFF_DEV_ENABLED:false}
+    hq-password: ${STAFF_HQ_PASSWORD:}
+    sokcho-password: ${STAFF_SOKCHO_PASSWORD:}
+    seoraksan-password: ${STAFF_SEORAKSAN_PASSWORD:}
+    jeju-password: ${STAFF_JEJU_PASSWORD:}

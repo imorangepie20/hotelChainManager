@@ -1,0 +1,32 @@
+spring:
+  application:
+    name: hotel-chain-api
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:55432/hotel_chain}
+    username: ${DATABASE_USER:hotel_app}
+    password: ${DATABASE_PASSWORD:hotel_local_only}
+    hikari:
+      connection-timeout: 3000
+      validation-timeout: 1000
+  flyway:
+    locations: classpath:db/migration
+
+server:
+  port: 4080
+
+reservation:
+  hold-ttl: ${RESERVATION_HOLD_TTL:10m}
+
+management:
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+      group:
+        readiness:
+          include: readinessState,db
+  endpoints:
+    web:
+      exposure:
+        include: health

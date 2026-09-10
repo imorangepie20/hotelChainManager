@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+**/node_modules/
+**/target/
+**/dist/
+**/*.tsbuildinfo
+.logs/
+.nested-git-backups/
+docs/diagrams/*.visual-check.*.png

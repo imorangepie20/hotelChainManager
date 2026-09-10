@@ -1,0 +1,56 @@
+name: hotel-chain-manager
+
+services:
+  db:
+    image: postgres:16.15-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+    environment:
+      POSTGRES_DB: ${HOTEL_DB_NAME:-hotel_chain}
+      POSTGRES_USER: ${HOTEL_DB_USER:-hotel_app}
+      POSTGRES_PASSWORD: ${HOTEL_DB_PASSWORD:-hotel_local_only}
+    ports:
+      - "127.0.0.1:55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - hotel-db-data:/var/lib/postgresql/data
+
+  db-test:
+    image: postgres:16.15-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+    environment:
+      POSTGRES_DB: ${HOTEL_TEST_DB_NAME:-hotel_chain_test}
+      POSTGRES_USER: ${HOTEL_TEST_DB_USER:-hotel_test}
+      POSTGRES_PASSWORD: ${HOTEL_TEST_DB_PASSWORD:-hotel_test}
+    ports:
+      - "127.0.0.1:55433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 1s
+      timeout: 3s
+      retries: 20
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  api:
+    build:
+      context: services/api
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      DATABASE_URL: jdbc:postgresql://db:5432/${HOTEL_DB_NAME:-hotel_chain}
+      DATABASE_USER: ${HOTEL_DB_USER:-hotel_app}
+      DATABASE_PASSWORD: ${HOTEL_DB_PASSWORD:-hotel_local_only}
+      STAFF_DEV_ENABLED: ${STAFF_DEV_ENABLED:-false}
+      STAFF_HQ_PASSWORD: ${STAFF_HQ_PASSWORD:-}
+      STAFF_SOKCHO_PASSWORD: ${STAFF_SOKCHO_PASSWORD:-}
+      STAFF_SEORAKSAN_PASSWORD: ${STAFF_SEORAKSAN_PASSWORD:-}
+      STAFF_JEJU_PASSWORD: ${STAFF_JEJU_PASSWORD:-}
+    ports:
+      - "127.0.0.1:4080:4080"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  hotel-db-data:

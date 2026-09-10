@@ -1,0 +1,81 @@
+schema_version: 1
+name: portable-project-harness
+source_project: B2B-STM
+language: ko
+
+entrypoints:
+  agent_rules: AGENTS.md
+  current_context: docs/overview/current-development-context.md
+  change_log_directory: docs/changes
+
+document_order:
+  - docs/project-rules/core-principles.md
+  - docs/project-rules/doc-access-order.md
+  - docs/overview/current-development-context.md
+  - docs/overview/project-brief.md
+  - docs/architecture/system-outline.md
+  - docs/business-logic/operating-scenarios.md
+  - docs/decisions/decision-log.md
+
+required_skills:
+  - using-superpowers
+  - brainstorming
+  - writing-plans
+  - executing-plans
+  - test-driven-development
+  - systematic-debugging
+  - verification-before-completion
+
+conditional_skills:
+  architecture_visualization:
+    - archify
+  ui:
+    - ui-styling
+    - ui-ux-pro-max
+    - designlang:extract-design
+  harness_maintenance:
+    - harness:harness
+  review:
+    - requesting-code-review
+    - receiving-code-review
+  parallel_work:
+    - dispatching-parallel-agents
+    - subagent-driven-development
+
+verified_plugins:
+  - name: harness
+    version: 1.2.0
+  - name: designlang
+    version: 13.2.0
+    source: https://github.com/Manavarya09/design-extract.git
+    commit: a9e832efe304330a7fc491511c0ca30a34bc0106
+
+verified_external_skills:
+  - name: archify
+    version: "2.17"
+    source: https://github.com/tt-a1i/archify.git
+    commit: 10722002bb8777ecb639d93c49586fae4adf3ae4
+    folder_hash: 8aa4cadc3cde102db4009f23f951cb4cf1e28d61
+    runtime: node >=18
+    guide: docs/harness/archify-guide.md
+
+project_boundaries:
+  secrets_in_repository: false
+  local_tool_cache_in_repository: false
+  test_data_equals_production_data: false
+  reference_theme_is_mutable: false
+
+implementation_quality:
+  functional_ui_uses_verified_components: true
+  visual_facsimile_is_completion: false
+  browser_interaction_verification_required: true
+
+replace_for_new_project:
+  - source_project
+  - domain_relationships
+  - reference_theme
+  - technology_stack
+  - ports
+  - database_names
+  - verification_commands
+  - deployment_target

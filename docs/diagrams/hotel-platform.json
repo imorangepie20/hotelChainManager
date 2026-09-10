@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {"title": "호텔 플랫폼 · 설계 분석 (구현 전)", "quality_profile": "showcase", "viewBox": [1200, 660]},
+  "components": [
+    {"id":"guest","type":"frontend","label":"고객 웹","sublabel":"React · :4000","pos":[60,290],"size":[190,80]},
+    {"id":"admin","type":"frontend","label":"본사 · 지점 관리자","sublabel":"SDTPL_ADM · :4001","pos":[450,70],"size":[240,80]},
+    {"id":"api","type":"backend","label":"예약 · 운영 API","sublabel":"Spring Boot · :4080","pos":[450,290],"size":[240,80]},
+    {"id":"db","type":"database","label":"PostgreSQL","sublabel":"재고 · 가격 · 예약 · 객실","pos":[900,290],"size":[230,80]},
+    {"id":"ai","type":"backend","label":"AI 예약 도우미","sublabel":"FastAPI · LangGraph :9000","pos":[60,520],"size":[250,80]}
+  ],
+  "connections": [
+    {"from":"guest","to":"api","label":"검색 · 예약 · 취소"},
+    {"from":"admin","to":"api","label":"지점 권한 검증","labelDy":70,"fromSide":"bottom","toSide":"top"},
+    {"from":"api","to":"db","label":"원자적 재고 변경"},
+    {"from":"guest","to":"ai","label":"조건 상담","fromSide":"bottom","toSide":"top"},
+    {"from":"ai","to":"api","label":"가격 · 재고 조회","fromSide":"right","toSide":"bottom"}
+  ],
+  "cards": [
+    {"dot":"cyan","title":"화면 분석","items":["Reports: 기간 필터와 지표 카드","Accounts: 목록과 상세의 분할 화면"]},
+    {"dot":"emerald","title":"호텔 업무 적용","items":["본사: 지점별 실적과 정책","지점: 예약 배정과 청소 상태"]},
+    {"dot":"amber","title":"경계와 미구현","items":["AI 확정 금지 · 결제는 고객 화면","현재 문서 설계이며 제품 API 미구현"]}
+  ]
+}
+
