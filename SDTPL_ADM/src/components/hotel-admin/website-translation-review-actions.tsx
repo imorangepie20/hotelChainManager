@@ -61,6 +61,7 @@ export function WebsiteTranslationReviewActions({
   const [rejectionError, setRejectionError] = useState("");
   const inFlight = useRef(false);
   const rejectButtonRef = useRef<HTMLButtonElement>(null);
+  const requestButtonRef = useRef<HTMLButtonElement>(null);
   const blocked = dirty || busy || archived || activeAction !== null;
 
   function restoreRejectFocus() {
@@ -72,6 +73,13 @@ export function WebsiteTranslationReviewActions({
     setRejectionComment("");
     setRejectionError("");
     restoreRejectFocus();
+  }
+
+  function closeRejectedDialog() {
+    setRejectOpen(false);
+    setRejectionComment("");
+    setRejectionError("");
+    window.setTimeout(() => requestButtonRef.current?.focus(), 0);
   }
 
   async function runAction(action: ReviewAction, work: () => Promise<WebsiteTranslationReviewState | void>, successMessage: string) {
@@ -110,7 +118,7 @@ export function WebsiteTranslationReviewActions({
     const comment = rejectionComment.trim();
     if (!comment) return;
     const succeeded = await runAction("reject", () => rejectWebsiteTranslationReview(token, pageId, draftVersion, comment), "영어 번역을 반려했습니다.");
-    if (succeeded) closeRejectDialog();
+    if (succeeded) closeRejectedDialog();
   }
 
   async function publish() {
@@ -134,7 +142,7 @@ export function WebsiteTranslationReviewActions({
         {archived && <p className="text-sm text-muted-foreground">보관된 페이지에서는 검토 작업을 진행할 수 없습니다.</p>}
       </div>
       <div className="flex flex-wrap gap-2">
-        {state.status === "DRAFT" && <Button type="button" disabled={blocked || draftVersion === 0} onClick={() => void requestReview()}>{activeAction === "request" ? actionLabel : "검토 요청"}</Button>}
+        {state.status === "DRAFT" && <Button ref={requestButtonRef} type="button" disabled={blocked || draftVersion === 0} onClick={() => void requestReview()}>{activeAction === "request" ? actionLabel : "검토 요청"}</Button>}
         {state.status === "IN_REVIEW" && <>
           <Button type="button" disabled={blocked} onClick={() => void approveReview()}>{activeAction === "approve" ? actionLabel : "승인"}</Button>
           <Button ref={rejectButtonRef} type="button" variant="outline" disabled={blocked} onClick={() => { setRejectionError(""); setRejectOpen(true); }}>반려</Button>

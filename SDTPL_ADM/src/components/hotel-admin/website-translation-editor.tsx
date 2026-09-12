@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -95,6 +95,8 @@ export function WebsiteTranslationEditor({ token, pageId, catalog, onDirtyChange
   const [error, setError] = useState("");
   const [initializing, setInitializing] = useState(false);
   const [reload, setReload] = useState(0);
+  const changeDirty = useCallback((dirty: boolean) => { setEditorDirty(dirty); onDirtyChange(dirty); }, [onDirtyChange]);
+  const changeBusy = useCallback((busy: boolean) => { setEditorBusy(busy); onBusyChange(busy); }, [onBusyChange]);
   useEffect(() => {
     let active = true;
     setDocument(null); setSource(null); setHistory([]); setReviewState({ status: "DRAFT", reviewedDraftVersion: null, events: [] });
@@ -104,8 +106,6 @@ export function WebsiteTranslationEditor({ token, pageId, catalog, onDirtyChange
       .catch((cause) => { if (active) setError(cause instanceof Error ? cause.message : "영어 번역을 불러오지 못했습니다."); });
     return () => { active = false; };
   }, [token, pageId, reload, onDirtyChange, onBusyChange]);
-  function changeDirty(dirty: boolean) { setEditorDirty(dirty); onDirtyChange(dirty); }
-  function changeBusy(busy: boolean) { setEditorBusy(busy); onBusyChange(busy); }
   function retry() { setDocument(null); setError(""); changeDirty(false); changeBusy(false); setReload((value) => value + 1); }
   async function initialize() {
     if (!source || initializing || source.lifecycleStatus !== "ACTIVE") return;

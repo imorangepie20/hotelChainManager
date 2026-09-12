@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 const SOKCHO = "11000000-0000-0000-0000-000000000001";
 const HOME_PAGE = "home-page";
@@ -74,12 +74,20 @@ for (const width of [1280, 390]) test(`edits and publishes the English translati
     await page.getByRole("heading", { name: "웹사이트 콘텐츠", exact: true }).scrollIntoViewIfNeeded();
     await page.screenshot({ path: `../.tmp/cms-locale-admin-${width}.png`, fullPage: true });
   }
-  const overflow = await page.evaluate(() => [...document.querySelectorAll("body *")].filter((element) => element.getBoundingClientRect().right > window.innerWidth + 1).map((element) => ({ tag: element.tagName, className: element.className, text: element.textContent?.slice(0, 60) })).slice(-12));
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), JSON.stringify(overflow)).toBe(true);
+  await expectNoHorizontalOverflow(page);
   await page.getByRole("button", { name: "초안 저장", exact: true }).click();
   await page.getByRole("button", { name: "검토 요청", exact: true }).click();
   await expect(page.getByText("검토 중", { exact: true })).toBeVisible();
   await expect(page.getByText("검토 대상 초안 v2", { exact: true })).toBeVisible();
+  if (width === 390) {
+    await expectNoHorizontalOverflow(page);
+    const mobileRejectButton = page.getByRole("button", { name: "반려", exact: true });
+    await mobileRejectButton.click();
+    await expect(page.getByRole("alertdialog")).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    await page.keyboard.press("Escape");
+    await expect(mobileRejectButton).toBeFocused();
+  }
   await page.getByRole("button", { name: "승인", exact: true }).click();
   await expect(page.getByText("승인됨", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "발행", exact: true }).click();
@@ -94,7 +102,7 @@ for (const width of [1280, 390]) test(`edits and publishes the English translati
   await expect(page.getByLabel("히어로 제목", { exact: true })).toHaveValue("브랜드 이야기");
 });
 
-test("rejects an English translation with a required reason and restores focus", async ({ page }) => {
+test("rejects an English translation and returns dialog focus on cancel, Escape, and success", async ({ page }) => {
   let review = translationReviewState({ status: "IN_REVIEW", reviewedDraftVersion: 1 });
   let rejection: Record<string, unknown> | undefined;
   let rejectAttempts = 0;
@@ -119,6 +127,16 @@ test("rejects an English translation with a required reason and restores focus",
   await expect(dialog.getByRole("heading", { name: "영어 번역을 반려할까요?", exact: true })).toBeVisible();
   const submit = dialog.getByRole("button", { name: "반려하기", exact: true });
   await expect(submit).toBeDisabled();
+  await dialog.getByRole("button", { name: "취소", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(rejectButton).toBeFocused();
+
+  await rejectButton.click();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(rejectButton).toBeFocused();
+
+  await rejectButton.click();
   const rejectionField = dialog.getByLabel("반려 사유", { exact: true });
   await expect(rejectionField).toHaveAttribute("maxlength", "2000");
   await rejectionField.fill("이미지 설명을 영어로 보완해 주세요.");
@@ -129,16 +147,82 @@ test("rejects an English translation with a required reason and restores focus",
   expect(rejection).toEqual({ expectedDraftVersion: 1, comment: "이미지 설명을 영어로 보완해 주세요." });
   await expect(page.getByLabel("영어 번역 검토").getByText("초안", { exact: true })).toBeVisible();
   await expect(page.getByRole("status").filter({ hasText: "영어 번역을 반려했습니다." })).toBeVisible();
+  await expect(page.getByRole("button", { name: "검토 요청", exact: true })).toBeFocused();
+});
 
-  review = translationReviewState({ status: "IN_REVIEW", reviewedDraftVersion: 1 });
-  await page.reload();
+test("keeps navigation blocked while an English review request is pending", async ({ page }) => {
+  const translationPath = `/api/staff/website/pages/${STORY_PAGE}/translations/en`;
+  let releaseRequest: (() => Promise<void>) | undefined;
+  let requestCount = 0;
+  await page.route(`**${translationPath}`, route => route.fulfill({ json: contentPageDocument({ publishedVersion: 0, publishedMetadata: null }) }));
+  await page.route(`**${translationPath}/versions`, route => route.fulfill({ json: [] }));
+  await page.route(`**${translationPath}/review`, route => route.fulfill({ json: translationReviewState() }));
+  await page.route(`**${translationPath}/review/request`, async route => {
+    requestCount += 1;
+    await new Promise<void>(resolve => {
+      releaseRequest = async () => {
+        await route.fulfill({ json: translationReviewState({ status: "IN_REVIEW", reviewedDraftVersion: 1 }) });
+        resolve();
+      };
+    });
+  });
+
+  await page.goto("/dashboard/website");
   await page.getByRole("button", { name: /브랜드 이야기/ }).click();
   await page.getByRole("button", { name: "영어", exact: true }).click();
-  const reopenedRejectButton = page.getByRole("button", { name: "반려", exact: true });
-  await reopenedRejectButton.click();
-  await page.keyboard.press("Escape");
-  await expect(page.getByRole("alertdialog")).toHaveCount(0);
-  await expect(reopenedRejectButton).toBeFocused();
+  const requestButton = page.getByRole("button", { name: "검토 요청", exact: true });
+  await requestButton.click();
+  await expect.poll(() => Boolean(releaseRequest)).toBe(true);
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+
+  await expect(page.getByRole("button", { name: "한국어", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: /^홈/ }).click();
+  await expect(page.getByLabel("영어 번역 검토")).toBeVisible();
+  await expect(page.getByLabel("히어로 제목", { exact: true })).toHaveValue("브랜드 이야기");
+  await page.getByRole("button", { name: "검토 요청 중", exact: true }).evaluate(button => (button as HTMLButtonElement).click());
+  expect(requestCount).toBe(1);
+
+  await releaseRequest!();
+  await expect(page.getByText("검토 중", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "한국어", exact: true })).toBeEnabled();
+});
+
+test("blocks review transitions for dirty and archived English translations", async ({ page }) => {
+  const translationPath = `/api/staff/website/pages/${STORY_PAGE}/translations/en`;
+  let document = contentPageDocument({ publishedVersion: 0, publishedMetadata: null });
+  let review = translationReviewState({ status: "IN_REVIEW", reviewedDraftVersion: 1 });
+  await page.route(`**${translationPath}`, route => route.fulfill({ json: document }));
+  await page.route(`**${translationPath}/versions`, route => route.fulfill({ json: [] }));
+  await page.route(`**${translationPath}/review`, route => route.fulfill({ json: review }));
+
+  async function openEnglishEditor() {
+    await page.getByRole("button", { name: /브랜드 이야기/ }).click();
+    await page.getByRole("button", { name: "영어", exact: true }).click();
+  }
+
+  await page.goto("/dashboard/website");
+  await openEnglishEditor();
+  await page.getByLabel("히어로 제목", { exact: true }).fill("Unsaved review edit");
+  await expect(page.getByRole("button", { name: "승인", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "반려", exact: true })).toBeDisabled();
+
+  review = translationReviewState({ status: "APPROVED", reviewedDraftVersion: 1 });
+  await page.reload();
+  await openEnglishEditor();
+  await page.getByLabel("히어로 제목", { exact: true }).fill("Unsaved approved edit");
+  await expect(page.getByRole("button", { name: "발행", exact: true })).toBeDisabled();
+
+  document = contentPageDocument({ publishedVersion: 0, publishedMetadata: null, lifecycleStatus: "ARCHIVED" });
+  review = translationReviewState({ status: "IN_REVIEW", reviewedDraftVersion: 1 });
+  await page.reload();
+  await openEnglishEditor();
+  await expect(page.getByRole("button", { name: "승인", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "반려", exact: true })).toBeDisabled();
+
+  review = translationReviewState({ status: "APPROVED", reviewedDraftVersion: 1 });
+  await page.reload();
+  await openEnglishEditor();
+  await expect(page.getByRole("button", { name: "발행", exact: true })).toBeDisabled();
 });
 
 test("translates rich text paragraphs and gallery captions without changing the schema", async ({ page }) => {
@@ -299,6 +383,14 @@ function contentPageDocument(overrides: Record<string, unknown> = {}) {
 
 function translationReviewState(overrides: Record<string, unknown> = {}) {
   return { status: "DRAFT", reviewedDraftVersion: null, events: [], ...overrides };
+}
+
+async function expectNoHorizontalOverflow(page: Page) {
+  const overflow = await page.evaluate(() => [...document.querySelectorAll("body *")]
+    .filter(element => element.getBoundingClientRect().right > window.innerWidth + 1)
+    .map(element => ({ tag: element.tagName, className: element.className, text: element.textContent?.slice(0, 60) }))
+    .slice(-12));
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), JSON.stringify(overflow)).toBe(true);
 }
 
 function typedPageDocument(overrides: Record<string, unknown> = {}) {
