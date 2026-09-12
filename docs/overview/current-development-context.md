@@ -10,7 +10,7 @@
 
 
 
-최종 갱신: 2026-09-11
+최종 갱신: 2026-09-12
 
 
 
@@ -46,6 +46,16 @@
 
 
 ## 현재 상태
+
+- 고객 웹의 한국어·영문 본문, UI, 브랜드와 제목을 Pretendard로 통일했다. 고객 웹에 `pretendard` 1.3.9를 고정하고 로컬 가변 다이나믹 서브셋을 사용하며, 기존 Google Fonts 요청과 `DM Sans`·`Noto Sans KR`·`Playfair Display` 선언을 제거했다. 영문 CMS 1280px·390px, 한국어 헤더 1186px·1024px, 데스크톱 액션 1440px Playwright 회귀 5건과 production build를 통과했다. 실제 한국어·영문 화면에서 대상 글리프 로딩과 계산 스타일, 가로 오버플로 부재를 확인했다. 상세 기록은 [고객 웹 Pretendard 변경 기록](../changes/2026-09-12-customer-pretendard-font.md)을 따른다.
+
+- 고객 설악산 페이지의 약 1186px 화면에서 상단 메뉴가 글자 단위로 줄바꿈되던 문제를 수정했다. 메뉴 링크와 고정 헤더 요소를 한 줄로 유지하고 간격을 가용 폭에 맞게 조정하며, 1100px 이하에서는 헤더만 메뉴 버튼으로 전환한다. 데스크톱 우측의 `예약 조회`와 현재 언어 표시는 동일한 44px 높이와 하단 기준선으로 정렬했다. 1440px 액션 정렬, 1186px 한 줄 표시, 1024px 메뉴 열기, 영문 CMS 1280px·390px 회귀와 고객 production build를 통과했다. 실제 1441px 화면에서 두 액션의 상·하단과 높이가 일치하고 가로 오버플로가 없음을 확인했다. 상세 기록은 [고객 헤더 반응형 내비게이션 변경 기록](../changes/2026-09-12-customer-header-responsive-navigation.md)을 따른다.
+
+- 사용자의 명시적 요청으로 CMS 트리의 편집 가능한 홈·지점 3개·브랜드 3개를 실제 영어로 번역해 모두 발행했다. 공개 경로는 `/en`, `/en/stays/{sokcho|seoraksan|jeju}`, `/en/brand/{story|haneul-story|forest-gallery-demo}`다. 영문 홈 발행 뒤 고객 파서가 block ID가 있는 `HOME` 응답을 거부하는 오류를 TDD로 수정했고, 고객 영문 E2E 1280px·390px 2건, 관련 직접 테스트 4건, production build와 실제 7개 URL 렌더링을 확인했다. 기존 한국어 원문·이미지·기간·연결은 유지했으며 예약 CTA는 아직 한국어 예약 화면으로 연결됨을 표시한다. 상세 기록은 [전체 영문 발행 변경 기록](../changes/2026-09-12-all-english-publication.md)을 따른다.
+
+- V21은 영어 번역 초안을 version에 묶어 `DRAFT → IN_REVIEW → APPROVED → PUBLISHED`로 검토·승인한 뒤에만 발행하도록 제한한다. 저장은 검토·승인을 무효화하되 기존 공개본과 공개 media usage를 유지하고, 반려는 필수 사유와 함께 초안으로 되돌린다. 일반 페이지 보관은 공개를 중단하며 `PUBLISHED`를 같은 version의 `APPROVED`로 바꾼다. 관리자 홈·지점·일반 페이지는 공통 action bar, 최근 검토 event 50건, 기존 발행 이력, mutation 성공 뒤 이력 읽기 재시도를 제공한다. PostgreSQL 통합 16건과 관리자 편집기 Chromium E2E 46건, 관리자·고객 production build를 통과했다. Docker API 재빌드에서 개발 DB V20→V21 적용과 health `UP`을 확인했고, 실제 영어 공개 7개 경로가 모두 HTTP 200·비어 있지 않은 콘텐츠를 반환했다. 읽기 전용 DB 집계는 발행 source와 초안 version이 같은 7행 모두 `PUBLISHED`, 불일치 0행이다. 물리 장치, 역할 분리, 예약 발행, 알림·경보, 한국어 승인은 범위 밖이다. 상세 결과와 이전 binary 롤백 제약은 [영어 번역 검토·승인 변경 기록](../changes/2026-09-12-cms-translation-review.md)을 따른다.
+
+- V20은 기존 기획의 한국어·영어 독립 초안/발행 첫 단계를 구현했다. 기존 한국어 데이터/API를 유지하고 영어 번역·메뉴·SEO·alt/캡션·연결 snapshot·version/history·media usage를 분리한다. 본사는 명시적 초안 가져오기 후 직접 번역·저장·발행하며 고객 `/en`에는 영어 발행본만 제공한다. 관련 PostgreSQL 통합 55건, 관리자/고객 직접 Chromium E2E 13건, 관리자 TypeScript·고객 직접 테스트/production build가 통과했다. 직접 lint는 오류 0·경고 10건이다. Docker API 재빌드·V20 성공·health `UP`, 기존 한국어 페이지와 usage 체크섬 보존 및 미발행 영어 404/빈 공개 목록을 읽기 전용으로 확인했다. V20 구현 검증 당시에는 실제 사용자 CMS mutation이 없었고, 이후 사용자 요청에 따른 실제 발행은 위 최신 항목을 따른다. 임의 언어별 slug·SECTION 번역·번역 승인·영어 이력 복원/비교·예약/결제/AI 전체 영어 UI는 후속이다. 상세 결과와 롤백 제약은 [다국어 변경 기록](../changes/2026-09-12-cms-locales.md)을 따른다.
 
 
 
@@ -356,3 +366,12 @@
 - V12는 이미지 파일을 고객 CMS 문서의 자유 경로가 아니라 카탈로그 자산 UUID로 관리한다. 본사만 업로드·목록·사용 위치를 조회하고, 서버가 실제 PNG/JPEG 형식과 한도를 검사한 뒤 UUID 공개 경로를 문서에 넣는다. V13은 본사 자산명·기본 alt의 버전 기반 저장, 참조 없는 자산만 가능한 보관·복원, 보관 업로드의 공개 전달 차단과 재검증 캐시를 추가했다. V14는 일반 페이지를 보관해 공개를 중단하고 초안으로 복원하는 상태 전환을 추가했다. Docker named volume은 파일을 이미지 재생성 뒤에도 유지하며, 영구 삭제·파일 교체·변환·CDN·객체 저장소는 다음 단계다.
 
 - V16 통합 리조트 콘텐츠 모델은 콘텐츠 종류별 블록과 초안·발행 연결(객실 유형·대상 지점·관련 페이지)을 추가했다. `WebsitePageIntegrationTest` 22건, 고객 파서·예약 의도·갤러리 검사와 production build, 관리자 Chromium E2E 4건·TypeScript 검사를 통과했다. API 재빌드 뒤 health `UP` 및 기존 `/brand/story` 공개 resolve를 읽기 전용으로 확인했으며, 실제 사용자 페이지·미디어에 저장·발행·수명주기 요청을 보내지 않았다. 상세 범위와 미구현 항목은 [변경 기록](../changes/2026-09-12-unified-resort-content-model.md)을 따른다.
+
+- V17은 미발행 콘텐츠 페이지의 부모 이동과 최대 4단계 트리를 추가했다. 본사 impact 조회 뒤에만 이동을 실행하며, 이동은 하위 초안 경로·draft version·audit만 갱신한다. 발행된 root 또는 하위 페이지는 redirect 정책 전까지 서버에서 거부한다. 서버 통합 23건, 관리자 이동 E2E 1건, TypeScript 검사, Docker API 재빌드와 health `UP`, 기존 `/brand/story` 읽기 전용 resolve를 확인했다. 실제 사용자 CMS 페이지·자산에는 이동 요청을 보내지 않았다. 상세 결과는 [부모 이동 변경 기록](../changes/2026-09-12-content-page-parent-move.md)을 따른다.
+
+- V18은 발행 콘텐츠 페이지 이동 때 이전 공개 경로를 영구 301 redirect로 보존한다. 서버는 root·하위 published path와 snapshot 메타데이터, redirect row, audit을 transaction에서 함께 갱신하고 redirect chain·cycle을 거부한다. 공개 resolve는 현재 공개본 우선, 없을 때 한 번만 301을 반환한다. 관리자는 impact에서 301 경로를 확인하고 발행 버전을 포함해 이동한다. `WebsitePageIntegrationTest` 26건, 발행/미발행 이동 Chromium E2E 2건과 TypeScript 검사를 통과했다. Docker API 재빌드의 Flyway V18 적용과 health `UP`, 기존 `/brand/story` 공개 resolve를 확인했으며 실제 사용자 CMS 변경 요청은 보내지 않았다. 사용자 페이지 이동이 없으므로 runtime old-path 301/new-path resolve 쌍은 서버 통합 테스트에서만 확인했다. 상세 결과는 [redirect 변경 기록](../changes/2026-09-12-content-page-redirect.md)을 따른다.
+
+- 관리자 사이드바를 현재 동작하는 호텔 운영 기능 중심으로 정리했다. 본사에는 운영 대시보드·오늘의 운영·웹사이트 CMS를, 지점 직원에게는 운영 메뉴만 표시하며 메뉴 검색에도 같은 권한 필터를 적용한다. 템플릿 샘플 메뉴는 제거했고, 아직 화면이 없는 메뉴는 추가하지 않았다. 관리자 내비게이션 Playwright 2건과 TypeScript 검사를 통과했으며 데스크톱과 390×844 모바일 사이드바를 확인했다. 상세 결과는 [관리자 내비게이션 변경 기록](../changes/2026-09-12-admin-navigation.md)을 따른다.
+- 제공된 관리자 템플릿의 전체 메뉴 정의는 `SDTPL_ADM/src/lib/template-nav.ts`로 분리해 보존했다. 현재 역할별 운영 메뉴에는 연결하지 않고, 기능을 실제 구현할 때 기존 템플릿 화면·공통 컴포넌트와 함께 선택적으로 재사용한다.
+- V19는 참조 없는 보관 업로드 미디어를 보관 후 30일이 지난 경우에만 영구 삭제한다. 본사 전용 DELETE API는 자산 버전·출처·상태·사용 위치·유예 기간을 확인하고, 파일을 같은 볼륨에 격리한 뒤 DB 트랜잭션 롤백 시 복구·커밋 시 제거한다. 관리자는 삭제 가능일과 복구 불가 확인을 거쳐 실행한다. Docker 환경의 V19 적용과 API `4080` 포트 헬스 `UP`, 실제 관리자 화면의 활성 자산 6건 조회를 확인했으며 사용자 자산에는 삭제 요청을 보내지 않았다. 상세 범위는 [변경 기록](../changes/2026-09-12-media-permanent-delete.md)을 따른다.
+- 미디어 파일 교체는 공통 이미지 필드에서 새 PNG/JPEG 자산을 업로드하고 기존·새 이미지 확인 뒤 현재 편집 위치만 교체한다. 페이지별 alt·기존 파일·다른 위치와 페이지·발행 이력은 유지하며 초안 저장과 명시적 발행으로만 공개를 바꾼다. 기존 본사 업로드·페이지 API를 재사용해 migration·파일 덮어쓰기는 없다. 관리자 직접 E2E 13건, 미디어 서버 통합 15건, TypeScript 검사를 통과했다. 데스크톱·390×844 확인창과 로컬 API health `UP`·기존 페이지 공개 resolve를 확인했으며 실제 사용자 CMS mutation은 하지 않았다. 직접 lint는 오류 0·경고 12건이다. 상세 범위와 미검증 항목은 [파일 교체 변경 기록](../changes/2026-09-12-media-file-replacement.md)을 따른다.

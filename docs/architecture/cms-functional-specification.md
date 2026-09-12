@@ -1,6 +1,6 @@
 # 고객 웹 CMS 기능 명세
 
-최종 갱신: 2026-09-11  
+최종 갱신: 2026-09-12
 적용 대상: `STAY HANEUL` 고객 웹과 본사 관리자 `/dashboard/website`
 
 > 이 문서는 현재 구현된 CMS 기능을 기록한다. 롯데리조트급 콘텐츠 운영을 위한 재정의 목표와 이후 구현 경계는 [롯데리조트급 CMS 기능 설계](lotte-resort-level-cms-functional-design.md)를 따른다.
@@ -115,7 +115,35 @@
 - 사용 위치가 하나라도 있거나 현재 화면의 저장되지 않은 초안이 자산을 선택한 경우 보관 버튼을 비활성화한다. 서버도 사용 위치 0건을 다시 확인한다.
 - 보관된 업로드 자산은 새 문서에서 선택할 수 없고 공개 전달도 `404`다. 파일은 유지하며 복원하면 다시 활성 자산이 된다.
 - 자산 이름·기본 alt·보관·복원은 자산 version을 조건으로 처리한다. 오래된 요청은 `409 WEBSITE_MEDIA_VERSION_CONFLICT`로 거부한다.
-- 보관된 업로드 자산의 영구 삭제와 파일 교체는 후속 범위다. 번들 이미지와 참조 중인 자산은 향후에도 삭제 대상에서 제외한다.
+- 참조 없는 `UPLOADED`·`ARCHIVED` 자산만 보관 후 30일과 자산 version 확인을 거쳐 영구 삭제한다. 번들·활성·참조 중인 자산은 삭제하지 않는다.
+
+### 6.3 현재 이미지 파일 교체
+
+- 공통 이미지 필드의 `파일 교체`는 기존 파일을 덮어쓰지 않고 새 PNG/JPEG 자산을 업로드한다. 지점 대표 이미지, 홈·일반 페이지 HERO, 갤러리의 개별 이미지에 적용한다.
+- 업로드한 새 자산을 선택하고 `교체 확인`에서 기존·새 이미지와 영향 범위를 검토한 뒤 `교체하기`로 현재 메모리 초안 위치만 변경한다.
+- 페이지별 alt는 유지한다. 관리자는 새 이미지의 의미에 맞는지 확인·수정해야 한다. 일반 `미디어 선택`의 기본 alt 복사 동작은 그대로다.
+- 다른 위치·페이지·현재 공개본·발행 이력·기존 자산·파일은 자동으로 변경하지 않는다. 초안 저장과 명시적 발행은 기존 페이지 API·version·usage 계약을 따른다.
+- 취소·업로드 실패·닫힌 뒤 도착한 업로드 응답은 페이지에 적용하지 않는다. 업로드 후 취소한 새 자산은 카탈로그에 남으며 기존 보관·삭제 정책으로 관리한다.
+- 기존 자산의 사용 위치를 일괄 이동하는 기능과 파일 덮어쓰기는 제공하지 않는다.
+
+### 6.4 한국어·영어 독립 초안과 발행
+
+- 기존 기획의 다국어 요구를 V20 확장 단계로 구현했다. 페이지 identity·종류·지점·부모 구조는 공유하고 한국어 기존 저장 모델과 API는 유지한다. 영어 콘텐츠·메뉴·SEO·alt·캡션·연결 snapshot·버전·발행 이력은 추가 번역 테이블에서 관리한다.
+- 본사 관리자가 한국어/영어를 선택한다. 영어 조회만으로 초안을 생성하지 않으며 `한국어 초안을 가져오기` 후 직접 번역·저장·발행한다. 미저장 언어 전환은 확인창으로 보호한다. 구조 이동·페이지 전체 보관/복원/삭제는 한국어 화면에서 수행한다.
+- 영어 경로는 `/en` 접두사와 기존 구조 슬러그를 사용한다. 영어 발행본은 한국어 수정·이동만으로 바뀌지 않는다. 영어 초안 저장 후 재발행하면 변경된 영어 주소에 단일 301을 생성한다. 언어별 임의 슬러그는 후속 범위다.
+- 공개 navigation/resolve/collection은 `locale=ko|en`을 받는다. resolve의 `/en` 경로는 locale 생략 시에도 영어로 해석한다. 미발행 영어는 404/빈 목록으로 응답하고 한국어 콘텐츠로 대체하지 않는다. 영어 메뉴는 번역된 페이지만 표시하며 미번역 SECTION 라벨 대신 자식 페이지를 루트 메뉴로 표시한다.
+- 전체 페이지 보관은 두 언어 공개본과 공개 미디어 참조를 중단한다. 복원은 초안만 유지하며 언어별 재발행이 필요하다. 영구 삭제는 번역·번역 이력을 함께 제거하되 자산은 보존한다.
+- 고객 영어 CMS 화면과 누락 안내를 제공하며 예약·결제·AI 전체 UI 영어화는 포함하지 않는다. 예약 이동은 한국어 예약 화면으로 연결된다는 점을 표시한다. 설계와 검증은 [다국어 변경 기록](../changes/2026-09-12-cms-locales.md)을 따른다.
+
+### 6.5 영어 번역 검토와 승인
+
+- V21은 영어 번역 row에 `DRAFT`, `IN_REVIEW`, `APPROVED`, `PUBLISHED` 상태와 검토 대상 `draft_version`을 추가하고, 요청·승인·반려·승인 무효화·발행 event를 최근순 최대 50건까지 보존한다. 기존 공개본 중 발행 source version과 현재 초안 version이 같은 row는 `PUBLISHED`로 backfill하며 소급 event는 만들지 않는다. 나머지는 `DRAFT`다.
+- `DRAFT → IN_REVIEW → APPROVED → PUBLISHED`만 정상 진행한다. `IN_REVIEW` 반려는 1~2,000자의 사유와 함께 `DRAFT`로 돌아간다. 요청·승인 comment는 선택이며 최대 2,000자다.
+- 영어 저장은 초안 version을 올리고 `IN_REVIEW`, `APPROVED`, `PUBLISHED` 상태를 `DRAFT`로 무효화해 `APPROVAL_INVALIDATED`를 남긴다. 이미 공개된 snapshot과 공개 media usage는 그대로 유지한다.
+- 발행은 현재 초안 version과 연결된 `APPROVED`만 허용한다. 검토 전 direct publish, 오래된 version, 중복·잘못된 전이는 `409`로 거부한다. 공개 API에는 검토 상태·comment·담당자를 노출하지 않는다.
+- 일반 페이지 보관은 영어 공개본과 공개 usage를 비우면서 `PUBLISHED`를 같은 version의 `APPROVED`로 바꾼다. 복원 후에는 보관 전에 승인된 현재 초안을 다시 발행할 수 있으며, 초안을 저장하면 기존 규칙대로 승인이 무효화된다.
+- 관리자 홈·지점 랜딩·일반 페이지 영어 편집기는 공통 action bar와 상태 배지, 반려 dialog, 검토·기존 발행 이력을 사용한다. 미저장·처리 중·보관 상태에서는 전이를 막고, mutation 성공 뒤 이력 조회가 실패하면 성공 상태를 유지한 채 읽기만 다시 시도한다.
+- 첫 단계의 작성·요청·승인·반려·발행은 모두 기존 `HQ_ADMIN` 권한이다. 물리 장치 검증, 작성자·승인자 역할 분리, 예약 발행, 알림·경보, 한국어 승인 workflow는 구현·검증 범위가 아니다. 상세 근거는 [영어 번역 검토·승인 변경 기록](../changes/2026-09-12-cms-translation-review.md)을 따른다.
 
 ## 7. 주요 API 계약
 
@@ -129,6 +157,13 @@
 | 본사 | `GET /api/staff/website/pages` | 페이지 트리 조회 |
 | 본사 | `POST /api/staff/website/pages` | 일반 페이지 생성 |
 | 본사 | `GET/PUT /api/staff/website/pages/{pageId}` | 일반 페이지 초안 조회·저장 |
+| 본사 | `GET/POST/PUT /api/staff/website/pages/{pageId}/translations/en` | 영어 초안 조회·명시적 가져오기·저장 |
+| 본사 | `POST /api/staff/website/pages/{pageId}/translations/en/publish` | 영어 독립 발행 |
+| 본사 | `GET /api/staff/website/pages/{pageId}/translations/en/versions` | 영어 발행 이력 |
+| 본사 | `GET /api/staff/website/pages/{pageId}/translations/en/review` | 영어 검토 상태와 최근 event 최대 50건 조회 |
+| 본사 | `POST /api/staff/website/pages/{pageId}/translations/en/review/request` | 현재 영어 초안 검토 요청 |
+| 본사 | `POST /api/staff/website/pages/{pageId}/translations/en/review/approve` | 검토 중인 같은 version 승인 |
+| 본사 | `POST /api/staff/website/pages/{pageId}/translations/en/review/reject` | 필수 사유와 함께 검토 반려 |
 | 본사 | `POST /api/staff/website/pages/{pageId}/publish` | 일반·지점 랜딩 발행 |
 | 본사 | `POST /api/staff/website/pages/{pageId}/archive`, `/restore` | 일반 페이지 보관·초안 복원 |
 | 본사 | `DELETE /api/staff/website/pages/{pageId}` | 보관된 일반 페이지 영구 삭제 |
@@ -144,6 +179,6 @@
 
 현재 CMS는 초안/발행 분리, 페이지 트리, 홈·지점·일반 페이지 편집, SEO, 안전한 이미지 카탈로그·업로드·참조 보호, 미디어 보관/복원, 일반 페이지 보관/복원/영구 삭제, 발행 이력 복원·비교, 저장 전 preview까지 구현했다.
 
-다음 단계는 페이지 부모 이동과 깊은 트리, 보관된 업로드 자산의 영구 삭제·파일 교체, 한국어·영어 번역과 승인, 인증된 초안 URL preview, canonical·OG·robots, 예약 발행, 블록 이동 감지다.
+페이지 부모 이동·redirect·최대 4단계 트리, 보관된 업로드 자산의 30일 유예 영구 삭제와 현재 이미지 위치의 파일 교체, 한국어·영어 독립 초안/발행과 영어 번역 검토·승인 첫 단계도 구현했다. 다음 단계는 언어별 임의 슬러그·SECTION 번역·영어 이력 복원/비교·역할 분리, 미디어 사용 위치 일괄 이동·variant, 인증된 초안 URL preview, canonical·OG·robots, 예약 발행·알림, 한국어 승인과 블록 이동 감지다.
 
 검증 기록과 테스트 범위는 [CMS 변경 기록](../changes/2026-09-10-web-content-management.md), 전체 제품 경계는 [전체 구현 설계서](full-site-implementation-design.md), 최신 진행 상태는 [현재 개발 상태](../overview/current-development-context.md)에 기록한다.
