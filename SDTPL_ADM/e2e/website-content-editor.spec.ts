@@ -177,6 +177,8 @@ test("keeps navigation blocked while an English review request is pending", asyn
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 
   await expect(page.getByRole("button", { name: "한국어", exact: true })).toBeDisabled();
+  await expect(page.getByLabel("히어로 제목", { exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "초안 저장", exact: true })).toBeDisabled();
   await page.getByRole("button", { name: /^홈/ }).click();
   await expect(page.getByLabel("영어 번역 검토")).toBeVisible();
   await expect(page.getByLabel("히어로 제목", { exact: true })).toHaveValue("브랜드 이야기");
@@ -186,6 +188,7 @@ test("keeps navigation blocked while an English review request is pending", asyn
   await releaseRequest!();
   await expect(page.getByText("검토 중", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "한국어", exact: true })).toBeEnabled();
+  await expect(page.getByLabel("히어로 제목", { exact: true })).toBeEnabled();
 });
 
 test("blocks review transitions for dirty and archived English translations", async ({ page }) => {

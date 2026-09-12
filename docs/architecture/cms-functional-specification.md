@@ -137,7 +137,7 @@
 
 ### 6.5 영어 번역 검토와 승인
 
-- V21은 영어 번역 row에 `DRAFT`, `IN_REVIEW`, `APPROVED`, `PUBLISHED` 상태와 검토 대상 `draft_version`을 추가하고, 요청·승인·반려·승인 무효화·발행 event를 최근순 최대 50건까지 보존한다. 기존 공개본 중 발행 source version과 현재 초안 version이 같은 row는 `PUBLISHED`로 backfill하며 소급 event는 만들지 않는다. 나머지는 `DRAFT`다.
+- V21은 영어 번역 row에 `DRAFT`, `IN_REVIEW`, `APPROVED`, `PUBLISHED` 상태와 검토 대상 `draft_version`을 추가하고, 요청·승인·반려·승인 무효화·발행 event를 최근순 최대 50건까지 보존한다. 기존 공개본 중 발행 source version과 현재 초안 version이 같은 row는 `PUBLISHED`로 backfill하며 소급 event는 만들지 않는다. 나머지는 `DRAFT`다. V22는 비-DRAFT 상태의 검토 version이 반드시 존재하도록 DB 제약을 보강한다.
 - `DRAFT → IN_REVIEW → APPROVED → PUBLISHED`만 정상 진행한다. `IN_REVIEW` 반려는 1~2,000자의 사유와 함께 `DRAFT`로 돌아간다. 요청·승인 comment는 선택이며 최대 2,000자다.
 - 영어 저장은 초안 version을 올리고 `IN_REVIEW`, `APPROVED`, `PUBLISHED` 상태를 `DRAFT`로 무효화해 `APPROVAL_INVALIDATED`를 남긴다. 이미 공개된 snapshot과 공개 media usage는 그대로 유지한다.
 - 발행은 현재 초안 version과 연결된 `APPROVED`만 허용한다. 검토 전 direct publish, 오래된 version, 중복·잘못된 전이는 `409`로 거부한다. 공개 API에는 검토 상태·comment·담당자를 노출하지 않는다.

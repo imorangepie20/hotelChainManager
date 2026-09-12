@@ -267,7 +267,7 @@ class WebsiteTranslationIntegrationTest {
                         """.formatted(translationTable));
             }
 
-            isolatedFlyway(schema, MigrationVersion.fromVersion("21")).migrate();
+            isolatedFlyway(schema, MigrationVersion.fromVersion("22")).migrate();
 
             try (var connection = dataSource.getConnection()) {
                 var isolatedJdbc = new JdbcTemplate(new SingleConnectionDataSource(connection, true));
@@ -286,9 +286,15 @@ class WebsiteTranslationIntegrationTest {
                                 "PUBLISHED", 3, 3, 2, 3, "current-publication"),
                         new ReviewMigrationRow(UUID.fromString("12000000-0000-0000-0000-000000000005"),
                                 "DRAFT", null, 4, 2, 3, "diverged-publication"));
+
+                org.assertj.core.api.Assertions.assertThatThrownBy(() -> isolatedJdbc.update("""
+                        update %s set review_status = 'APPROVED', reviewed_draft_version = null
+                        where page_id = '12000000-0000-0000-0000-000000000005'
+                        """.formatted(translationTable)))
+                        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
             }
         } catch (Exception exception) {
-            throw new IllegalStateException("V20에서 V21 검토 상태로 이관할 수 없습니다.", exception);
+            throw new IllegalStateException("V20에서 최신 검토 상태로 이관할 수 없습니다.", exception);
         } finally {
             try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
                 statement.execute("drop schema if exists \"" + schema + "\" cascade");

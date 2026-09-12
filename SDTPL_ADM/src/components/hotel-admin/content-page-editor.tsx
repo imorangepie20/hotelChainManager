@@ -109,7 +109,7 @@ function TranslationBlockFields({ block, onChange }: { block: ContentBlock; onCh
   return null;
 }
 
-export function ContentPageEditor({ token, document, catalog, locale = "ko", initialDirty = false, showPublishAction = true, onDirtyChange, onBusyChange, onSaved, onPublished, onLifecycleChanged, onDeleted }: {
+export function ContentPageEditor({ token, document, catalog, locale = "ko", initialDirty = false, showPublishAction = true, externalBusy = false, onDirtyChange, onBusyChange, onSaved, onPublished, onLifecycleChanged, onDeleted }: {
   token: string;
   document: WebsitePageDocument;
   catalog: ContentReferenceCatalog;
@@ -117,6 +117,7 @@ export function ContentPageEditor({ token, document, catalog, locale = "ko", ini
   onBusyChange?: (busy: boolean) => void;
   initialDirty?: boolean;
   showPublishAction?: boolean;
+  externalBusy?: boolean;
   onDirtyChange: (dirty: boolean) => void;
   onSaved: (document: WebsitePageDocument, versions: WebContentVersion[], versionsFresh?: boolean) => void;
   onPublished: (document: WebsitePageDocument, versions: WebContentVersion[]) => void;
@@ -140,6 +141,7 @@ export function ContentPageEditor({ token, document, catalog, locale = "ko", ini
   const isContentPage = document.pageType === "CONTENT_PAGE";
   const canManageLifecycle = isContentPage && locale === "ko";
   const isArchived = document.lifecycleStatus === "ARCHIVED";
+  const interactionBusy = busy || externalBusy;
 
   useEffect(() => { onDirtyChange(dirty); }, [dirty, onDirtyChange]);
   useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
@@ -201,7 +203,7 @@ export function ContentPageEditor({ token, document, catalog, locale = "ko", ini
   }
 
   async function save() {
-    if (isArchived || busy || connectionError) return;
+    if (isArchived || interactionBusy || connectionError) return;
     setBusy(true); setError(""); setNotice("");
     try {
       const saved = locale === "en"
@@ -221,7 +223,7 @@ export function ContentPageEditor({ token, document, catalog, locale = "ko", ini
     finally { setBusy(false); }
   }
   async function publish() {
-    if (dirty || isArchived || busy) return;
+    if (dirty || isArchived || interactionBusy) return;
     setBusy(true); setError(""); setNotice("");
     try {
       const published = locale === "en"
@@ -240,7 +242,7 @@ export function ContentPageEditor({ token, document, catalog, locale = "ko", ini
   }
 
   async function archive() {
-    if (!isContentPage || busy || dirty) return;
+    if (!isContentPage || interactionBusy || dirty) return;
     setBusy(true); setError(""); setNotice("");
     try {
       const archived = await archiveWebsitePage(token, document.id, { expectedLifecycleVersion: lifecycleVersion, expectedDraftVersion: draftVersion, expectedPublishedVersion: publishedVersion });
@@ -251,7 +253,7 @@ export function ContentPageEditor({ token, document, catalog, locale = "ko", ini
   }
 
   async function restore() {
-    if (!isContentPage || !isArchived || busy) return;
+    if (!isContentPage || !isArchived || interactionBusy) return;
     setBusy(true); setError(""); setNotice("");
     try {
       const restored = await restoreWebsitePage(token, document.id, { expectedLifecycleVersion: lifecycleVersion, expectedDraftVersion: draftVersion, expectedPublishedVersion: publishedVersion });
@@ -262,7 +264,7 @@ export function ContentPageEditor({ token, document, catalog, locale = "ko", ini
   }
 
   async function permanentlyDelete() {
-    if (!isContentPage || !isArchived || busy) return;
+    if (!isContentPage || !isArchived || interactionBusy) return;
     setBusy(true); setError(""); setNotice("");
     try {
       await deleteWebsitePage(token, document.id, {
@@ -276,9 +278,9 @@ export function ContentPageEditor({ token, document, catalog, locale = "ko", ini
     finally { setBusy(false); }
   }
 
-  return <Card className="min-w-0"><CardHeader><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><CardTitle><h2>{isHomePage ? "홈페이지 콘텐츠" : "일반 콘텐츠 페이지"}</h2></CardTitle><CardDescription>{isHomePage ? "홈페이지의 HERO, TEXT, CTA를 편집합니다. 예약 검색과 재고·가격은 별도 예약 시스템에서 관리합니다." : "콘텐츠 유형과 연결 범위에 맞는 안전한 블록을 편집합니다."}</CardDescription></div><div className="flex flex-wrap gap-2">{isContentPage && <Button type="button" variant="outline" onClick={() => setPreviewOpen(true)}><Eye /> 미리보기</Button>}{canManageLifecycle && isArchived ? <><Button variant="outline" onClick={() => void restore()} disabled={busy}><RotateCcw /> 초안으로 복원</Button><Button type="button" variant="destructive" onClick={() => setDeleteConfirmationOpen(true)} disabled={busy}><Trash2 /> 영구 삭제</Button></> : canManageLifecycle && <><Button variant="destructive" onClick={() => setArchiveConfirmationOpen(true)} disabled={busy || dirty} title={dirty ? "저장되지 않은 변경사항을 먼저 초안으로 저장해 주세요." : undefined} aria-describedby={dirty ? "archive-before-save-hint" : undefined}><Archive /> 페이지 보관</Button>{dirty && <span id="archive-before-save-hint" className="sr-only">저장되지 않은 변경사항을 먼저 초안으로 저장해야 페이지를 보관할 수 있습니다.</span>}</>}<Button variant="outline" onClick={() => void save()} disabled={busy || isArchived || !dirty || Boolean(connectionError)}><FilePenLine /> 초안 저장</Button>{showPublishAction && <Button onClick={() => void publish()} disabled={busy || isArchived || dirty || Boolean(connectionError)}><Send /> 발행</Button>}</div></div></CardHeader><CardContent className="space-y-6">
+  return <Card className="min-w-0"><CardHeader><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><CardTitle><h2>{isHomePage ? "홈페이지 콘텐츠" : "일반 콘텐츠 페이지"}</h2></CardTitle><CardDescription>{isHomePage ? "홈페이지의 HERO, TEXT, CTA를 편집합니다. 예약 검색과 재고·가격은 별도 예약 시스템에서 관리합니다." : "콘텐츠 유형과 연결 범위에 맞는 안전한 블록을 편집합니다."}</CardDescription></div><div className="flex flex-wrap gap-2">{isContentPage && <Button type="button" variant="outline" onClick={() => setPreviewOpen(true)}><Eye /> 미리보기</Button>}{canManageLifecycle && isArchived ? <><Button variant="outline" onClick={() => void restore()} disabled={interactionBusy}><RotateCcw /> 초안으로 복원</Button><Button type="button" variant="destructive" onClick={() => setDeleteConfirmationOpen(true)} disabled={interactionBusy}><Trash2 /> 영구 삭제</Button></> : canManageLifecycle && <><Button variant="destructive" onClick={() => setArchiveConfirmationOpen(true)} disabled={interactionBusy || dirty} title={dirty ? "저장되지 않은 변경사항을 먼저 초안으로 저장해 주세요." : undefined} aria-describedby={dirty ? "archive-before-save-hint" : undefined}><Archive /> 페이지 보관</Button>{dirty && <span id="archive-before-save-hint" className="sr-only">저장되지 않은 변경사항을 먼저 초안으로 저장해야 페이지를 보관할 수 있습니다.</span>}</>}<Button variant="outline" onClick={() => void save()} disabled={interactionBusy || isArchived || !dirty || Boolean(connectionError)}><FilePenLine /> 초안 저장</Button>{showPublishAction && <Button onClick={() => void publish()} disabled={interactionBusy || isArchived || dirty || Boolean(connectionError)}><Send /> 발행</Button>}</div></div></CardHeader><CardContent className="space-y-6">
     {isArchived && <section role="status" className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950"><p className="font-semibold">보관된 페이지입니다.</p><p className="mt-1">고객 웹과 메뉴에 표시되지 않습니다. 초안으로 복원한 뒤 내용을 확인하고 다시 발행해 주세요.</p></section>}
-    <fieldset disabled={isArchived} className="grid min-w-0 gap-6 border-0 p-0">
+    <fieldset disabled={isArchived || interactionBusy} className="grid min-w-0 gap-6 border-0 p-0">
     {!isHomePage && <section className="space-y-4 rounded-xl border p-4"><h2 className="font-semibold">페이지 정보</h2><div className="grid gap-4 md:grid-cols-2">{locale === "en" ? <p className="text-sm text-muted-foreground">구조 슬러그: {metadata.slug} · 한국어 페이지 구조와 공유합니다.</p> : <Field label="주소 슬러그" value={metadata.slug} onChange={(slug) => changeMetadata({ ...metadata, slug })} />}<Field label="메뉴 이름" value={metadata.menuLabel} onChange={(menuLabel) => changeMetadata({ ...metadata, menuLabel })} /><label className="flex min-h-8 items-center gap-2 text-sm font-medium"><Checkbox aria-label="메뉴에 노출" checked={metadata.menuVisible} onCheckedChange={(menuVisible) => changeMetadata({ ...metadata, menuVisible })} />메뉴에 노출</label><label className="grid gap-1 text-sm font-medium">메뉴 순서<Input aria-label="메뉴 순서" type="number" min={0} value={metadata.menuOrder} onChange={(event) => changeMetadata({ ...metadata, menuOrder: Math.max(0, Number(event.target.value) || 0) })} /></label></div><p className="text-xs text-muted-foreground">초안 주소: {document.draftMetadata.path.replace(/[^/]+$/, metadata.slug)}</p></section>}
     {isContentPage && (document.contentKind === "ROOM" || document.contentKind === "PROMOTION") && <section className="space-y-4 rounded-xl border p-4"><h2 className="font-semibold">연결 대상</h2>{document.contentKind === "PROMOTION" && <fieldset className="grid gap-2"><legend className="text-sm font-medium">대상 지점</legend>{catalog.hotels.map((hotel) => <label key={hotel.id} className="flex min-h-11 items-center gap-2 text-sm"><Checkbox aria-label={`대상 지점 ${hotel.name}`} checked={connections.targetHotelIds.includes(hotel.id)} onCheckedChange={(checked) => changeConnections({ ...connections, targetHotelIds: checked === true ? [...connections.targetHotelIds, hotel.id] : connections.targetHotelIds.filter((id) => id !== hotel.id) })} />{hotel.name}</label>)}</fieldset>}<label className="grid gap-1 text-sm font-medium">연결 객실 유형<select aria-label="연결 객실 유형" value={connections.roomTypeIds[0] ?? ""} onChange={(event) => changeConnections({ ...connections, roomTypeIds: event.target.value ? [event.target.value] : [] })} className="min-h-11 rounded-md border bg-background px-3"><option value="">객실 유형을 선택하세요</option>{catalog.hotels.filter((hotel) => document.contentKind !== "ROOM" || hotel.id === document.hotelId).flatMap((hotel) => hotel.roomTypes.map((room) => <option key={room.id} value={room.id}>{room.name}</option>))}</select></label>{connectionError && <p role="alert" className="text-sm text-destructive">{connectionError}</p>}</section>}
     <section className="space-y-4 rounded-xl border p-4"><h2 className="font-semibold">검색 결과</h2><Field label="검색 결과 제목" value={text(seo.title)} maxLength={60} onChange={(title) => change({ ...content, seo: { ...seo, title } })} /><Field label="검색 결과 설명" value={text(seo.description)} multiline maxLength={160} onChange={(description) => change({ ...content, seo: { ...seo, description } })} /></section>
@@ -295,5 +297,5 @@ export function ContentPageEditor({ token, document, catalog, locale = "ko", ini
     <div className="flex flex-wrap gap-2">{addableBlocks.map((type) => <Button key={type} type="button" variant="outline" onClick={() => addBlock(type)} disabled={pageBlocks.length >= 20}><Plus /> {({ TEXT: "텍스트 블록 추가", CTA: "CTA 블록 추가", IMAGE_GALLERY: "갤러리 추가", FEATURE_GRID: "특징 추가", SPEC_TABLE: "사양 표 추가", ACCORDION: "FAQ 추가", NOTICE_LIST: "안내 추가", RICH_TEXT: "소개 추가", OPERATING_HOURS: "운영 시간 추가", LOCATION: "위치 추가", PROMOTION_SUMMARY: "프로모션 요약 추가", RELATED_COLLECTION: "관련 콘텐츠 추가", BOOKING_CTA: "예약 CTA 추가" } as Record<string, string>)[type]}</Button>)}</div>
     </fieldset>
     {(notice || error) && <p role="status" className={error ? "text-sm text-destructive" : "text-sm text-emerald-700"}>{error || notice}</p>}
-  </CardContent><ContentPagePreviewDialog open={previewOpen} onOpenChange={setPreviewOpen} metadata={metadata} content={content} /><AlertDialog open={archiveConfirmationOpen} onOpenChange={setArchiveConfirmationOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>페이지를 보관할까요?</AlertDialogTitle><AlertDialogDescription>보관하면 고객 웹과 메뉴에서 즉시 제외됩니다. 주소와 초안·발행 이력은 유지되며, 복원 뒤에는 다시 발행해야 공개됩니다.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>취소</AlertDialogCancel><AlertDialogAction variant="destructive" disabled={busy} onClick={() => void archive()}>보관하기</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog><AlertDialog open={deleteConfirmationOpen} onOpenChange={setDeleteConfirmationOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>보관된 페이지를 영구 삭제할까요?</AlertDialogTitle><AlertDialogDescription><strong>{metadata.menuLabel}</strong> 페이지와 발행 이력, 감사 이력, 미디어 사용 위치를 영구 삭제합니다. 이 작업은 되돌릴 수 없습니다.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel disabled={busy}>취소</AlertDialogCancel><AlertDialogAction variant="destructive" disabled={busy} onClick={(event) => { event.preventDefault(); void permanentlyDelete(); }}><Trash2 /> 영구 삭제</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></Card>;
+  </CardContent><ContentPagePreviewDialog open={previewOpen} onOpenChange={setPreviewOpen} metadata={metadata} content={content} /><AlertDialog open={archiveConfirmationOpen} onOpenChange={setArchiveConfirmationOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>페이지를 보관할까요?</AlertDialogTitle><AlertDialogDescription>보관하면 고객 웹과 메뉴에서 즉시 제외됩니다. 주소와 초안·발행 이력은 유지되며, 복원 뒤에는 다시 발행해야 공개됩니다.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>취소</AlertDialogCancel><AlertDialogAction variant="destructive" disabled={interactionBusy} onClick={() => void archive()}>보관하기</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog><AlertDialog open={deleteConfirmationOpen} onOpenChange={setDeleteConfirmationOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>보관된 페이지를 영구 삭제할까요?</AlertDialogTitle><AlertDialogDescription><strong>{metadata.menuLabel}</strong> 페이지와 발행 이력, 감사 이력, 미디어 사용 위치를 영구 삭제합니다. 이 작업은 되돌릴 수 없습니다.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel disabled={interactionBusy}>취소</AlertDialogCancel><AlertDialogAction variant="destructive" disabled={interactionBusy} onClick={(event) => { event.preventDefault(); void permanentlyDelete(); }}><Trash2 /> 영구 삭제</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></Card>;
 }
