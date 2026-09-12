@@ -9,6 +9,8 @@ const JEJU = "11000000-0000-0000-0000-000000000003";
 const SEORAKSAN_ROOM = "12000000-0000-0000-0000-000000000002";
 const JEJU_ROOM = "12000000-0000-0000-0000-000000000003";
 const SEORAKSAN_ROOMS_SECTION = "seoraksan-rooms-section";
+const ROOM_PAGE = "room-page";
+const PROMOTION_PAGE = "promotion-page";
 const BUNDLED_ASSET = "14000000-0000-0000-0000-000000000001";
 const UPLOADED_ASSET = "14000000-0000-0000-0000-000000000002";
 const ARCHIVED_ASSET = "14000000-0000-0000-0000-000000000003";
@@ -36,6 +38,8 @@ function contentPageDocument(overrides: Record<string, unknown> = {}) {
     id: STORY_PAGE,
     pageType: "CONTENT_PAGE",
     hotelId: null,
+    contentKind: "BRAND",
+    draftConnections: { roomTypeIds: [], targetHotelIds: [], relatedPages: [] },
     draftContent: {
       seo: { title: "브랜드 이야기 | STAY HANEUL", description: "STAY HANEUL이 만드는 머무름의 기준을 소개합니다." },
       blocks: [{ type: "HERO", imageAssetId: BUNDLED_ASSET, imageSrc: "/images/sokcho-coast-hero.png", imageAlt: "브랜드 이야기", eyebrow: "STAY HANEUL", title: "브랜드 이야기", description: "머무름의 기준을 만듭니다." }],
@@ -49,6 +53,21 @@ function contentPageDocument(overrides: Record<string, unknown> = {}) {
     lifecycleVersion: 1,
     ...overrides,
   };
+}
+
+function typedPageDocument(overrides: Record<string, unknown> = {}) {
+  return contentPageDocument({
+    ...overrides,
+    draftContent: {
+      seo: { title: "유형 페이지", description: "유형별 콘텐츠를 소개합니다." },
+      blocks: [
+        { type: "HERO", imageAssetId: BUNDLED_ASSET, imageSrc: "/images/sokcho-coast-hero.png", imageAlt: "유형 대표 이미지", eyebrow: "STAY HANEUL", title: "유형 페이지", description: "유형별 소개입니다." },
+        { type: "SPEC_TABLE", title: "상세 정보", rows: [{ label: "안내", value: "내용" }] },
+        { type: "PROMOTION_SUMMARY", title: "프로모션 안내", salesPeriod: "9월", stayPeriod: "10월", benefits: ["조식"] },
+        { type: "BOOKING_CTA", title: "객실 검색", description: "실시간 객실을 확인합니다.", label: "객실 검색", hotelId: SEORAKSAN, roomTypeId: SEORAKSAN_ROOM },
+      ],
+    },
+  });
 }
 
 function contentPageVersionComparison(baseVersion: number, compareVersion: number) {
@@ -477,6 +496,74 @@ test("creates typed pages with scoped references", async ({ page }) => {
   await promotionDialog.getByLabel("주소 슬러그").fill("autumn-escape");
   await expect(promotionDialog.getByRole("button", { name: "페이지 만들기" })).toBeDisabled();
   await expect(promotionDialog.getByText("대상 지점을 하나 이상 선택해 주세요.", { exact: true })).toBeVisible();
+});
+
+test("edits room and promotion connections with typed preview", async ({ page }) => {
+  await page.route("**/api/staff/website/pages", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    const request = route.request().postDataJSON();
+    const room = request.contentKind === "ROOM";
+    return route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(typedPageDocument({
+        id: room ? ROOM_PAGE : PROMOTION_PAGE,
+        contentKind: room ? "ROOM" : "PROMOTION",
+        hotelId: room ? SEORAKSAN : null,
+        draftConnections: room
+          ? { roomTypeIds: [SEORAKSAN_ROOM], targetHotelIds: [], relatedPages: [] }
+          : { roomTypeIds: [SEORAKSAN_ROOM], targetHotelIds: [SEORAKSAN, JEJU], relatedPages: [] },
+      })),
+    });
+  });
+
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "+ 페이지" }).click();
+  let dialog = page.getByRole("dialog", { name: "콘텐츠 페이지 만들기" });
+  await dialog.getByLabel("콘텐츠 유형").click();
+  await page.getByRole("option", { name: "객실" }).click();
+  await dialog.getByLabel("상위 섹션").click();
+  await page.getByRole("option", { name: "설악산 객실" }).click();
+  await dialog.getByLabel("객실 유형").click();
+  await page.getByRole("option", { name: "포레스트 스위트" }).click();
+  await dialog.getByLabel("메뉴 이름").fill("설악 포레스트 스위트");
+  await dialog.getByLabel("주소 슬러그").fill("forest-suite-editor");
+  await dialog.getByRole("button", { name: "페이지 만들기" }).click();
+
+  await page.getByLabel("연결 객실 유형").selectOption(SEORAKSAN_ROOM);
+  await page.getByRole("button", { name: "항목 추가" }).click();
+  await page.getByLabel("예약 CTA 문구").fill("예약 조건 확인");
+  await expect(page.getByLabel("예약 CTA 대상 지점")).toHaveValue(SEORAKSAN);
+  await page.getByRole("button", { name: "미리보기", exact: true }).click();
+  let preview = page.getByRole("dialog", { name: "일반 페이지 미리보기" });
+  await preview.getByRole("button", { name: "모바일 390px", exact: true }).click();
+  await expect(preview.locator("article")).toHaveCSS("width", "390px");
+  await expect(preview.getByRole("button", { name: "예약 조건 확인" })).toBeDisabled();
+  await preview.getByRole("button", { name: "닫기", exact: true }).click();
+
+  const roomSave = page.waitForRequest((request) => request.method() === "PUT" && request.url().endsWith(`/api/staff/website/pages/${ROOM_PAGE}`));
+  await page.getByRole("button", { name: "초안 저장" }).click();
+  expect((await roomSave).postDataJSON()).toEqual(expect.objectContaining({ connections: { roomTypeIds: [SEORAKSAN_ROOM], targetHotelIds: [], relatedPages: [] } }));
+
+  await page.getByRole("button", { name: "+ 페이지" }).click();
+  dialog = page.getByRole("dialog", { name: "콘텐츠 페이지 만들기" });
+  await dialog.getByLabel("콘텐츠 유형").click();
+  await page.getByRole("option", { name: "프로모션" }).click();
+  await dialog.getByLabel("상위 섹션").click();
+  await page.getByRole("option", { name: "브랜드" }).click();
+  await dialog.getByText("설악산", { exact: true }).click();
+  await dialog.getByText("제주도", { exact: true }).click();
+  await dialog.getByLabel("메뉴 이름").fill("가을 휴식");
+  await dialog.getByLabel("주소 슬러그").fill("autumn-editor");
+  await dialog.getByRole("button", { name: "페이지 만들기" }).click();
+
+  await page.getByRole("checkbox", { name: /대상 지점 제주도/ }).first().click();
+  await page.getByLabel("연결 객실 유형").selectOption(JEJU_ROOM);
+  await expect(page.getByText("선택한 객실 유형은 대상 지점에 포함되어야 합니다.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "초안 저장" })).toBeDisabled();
+  await page.getByRole("button", { name: "미리보기", exact: true }).click();
+  preview = page.getByRole("dialog", { name: "일반 페이지 미리보기" });
+  await expect(preview).toContainText("표시 정보이며 실제 예약 가격은 선택 조건에서 다시 계산됩니다.");
+  await expect(preview).not.toContainText("실시간 가격");
 });
 
 test("previews unsaved content page edits without changing server state", async ({ page }) => {

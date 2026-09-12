@@ -8,7 +8,7 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 import type { WebsitePageDraftMetadata } from "@/lib/staff-api";
 
 type ContentRecord = Record<string, unknown>;
-type ContentBlock = ContentRecord & { type: "HERO" | "TEXT" | "CTA" | "IMAGE_GALLERY" | "FEATURE_GRID" | "SPEC_TABLE" | "ACCORDION" | "NOTICE_LIST" };
+type ContentBlock = ContentRecord & { type: "HERO" | "TEXT" | "CTA" | "IMAGE_GALLERY" | "FEATURE_GRID" | "SPEC_TABLE" | "ACCORDION" | "NOTICE_LIST" | "RICH_TEXT" | "OPERATING_HOURS" | "LOCATION" | "PROMOTION_SUMMARY" | "RELATED_COLLECTION" | "BOOKING_CTA" };
 
 const customerWebOrigin = (process.env.NEXT_PUBLIC_CUSTOMER_WEB_ORIGIN ?? "http://127.0.0.1:4000").replace(/\/$/, "");
 const localImage = /^\/images\/[A-Za-z0-9][A-Za-z0-9._/-]*$/;
@@ -25,7 +25,7 @@ function text(value: unknown): string {
 
 function blocks(value: unknown): ContentBlock[] {
   return Array.isArray(value)
-    ? value.filter((block): block is ContentBlock => Boolean(block) && typeof block === "object" && !Array.isArray(block) && ["HERO", "TEXT", "CTA", "IMAGE_GALLERY", "FEATURE_GRID", "SPEC_TABLE", "ACCORDION", "NOTICE_LIST"].includes(text((block as ContentRecord).type)))
+    ? value.filter((block): block is ContentBlock => Boolean(block) && typeof block === "object" && !Array.isArray(block) && ["HERO", "TEXT", "CTA", "IMAGE_GALLERY", "FEATURE_GRID", "SPEC_TABLE", "ACCORDION", "NOTICE_LIST", "RICH_TEXT", "OPERATING_HOURS", "LOCATION", "PROMOTION_SUMMARY", "RELATED_COLLECTION", "BOOKING_CTA"].includes(text((block as ContentRecord).type)))
     : [];
 }
 
@@ -127,6 +127,12 @@ export function ContentPagePreviewDialog({ open, onOpenChange, metadata, content
                   <PreviewCta label={text(cta.label)} />
                 </section>;
               }
+
+              if (block.type === "BOOKING_CTA") return <section key={`booking-${index}`} className="rounded-lg bg-stone-200 p-6"><h2 className="font-heading text-2xl font-semibold">{text(block.title)}</h2><p className="mt-3 text-sm text-slate-700">{text(block.description)}</p><Button type="button" disabled className="mt-5">{text(block.label) || "객실 검색"}</Button></section>;
+              if (block.type === "PROMOTION_SUMMARY") return <section key={`promotion-${index}`} className="rounded-lg border border-stone-200 p-6"><h2 className="font-heading text-2xl font-semibold">{text(block.title)}</h2><p className="mt-3 text-sm text-slate-700">{text(block.salesPeriod)} · {text(block.stayPeriod)}</p><p className="mt-3 text-sm text-slate-600">표시 정보이며 실제 예약 가격은 선택 조건에서 다시 계산됩니다.</p></section>;
+              if (block.type === "LOCATION") return <section key={`location-${index}`}><h2 className="font-heading text-2xl font-semibold">{text(block.title)}</h2><p className="mt-3 text-sm text-slate-700">{text(block.address)}</p><p className="mt-2 text-sm text-slate-600">{text(block.directions)}</p></section>;
+              if (block.type === "OPERATING_HOURS") return <section key={`hours-${index}`}><h2 className="font-heading text-2xl font-semibold">{text(block.title)}</h2><div className="mt-4 overflow-x-auto"><table className="w-full text-left text-sm"><tbody>{(Array.isArray(block.entries) ? block.entries : []).map((entry, entryIndex) => { const item = record(entry); return <tr key={entryIndex} className="border-b"><th className="py-2 pr-4">{text(item.dayLabel)}</th><td className="py-2">{item.closed === true ? "휴무" : `${text(item.opensAt)} – ${text(item.closesAt)}`}</td></tr>; })}</tbody></table></div></section>;
+              if (block.type === "RICH_TEXT" || block.type === "RELATED_COLLECTION") return <section key={`${block.type}-${index}`}><h2 className="font-heading text-2xl font-semibold">{text(block.title)}</h2><p className="mt-3 text-sm text-slate-600">{text(block.description) || (Array.isArray(block.paragraphs) ? block.paragraphs.map(text).join(" ") : "관련 콘텐츠를 표시합니다.")}</p></section>;
 
               if (["IMAGE_GALLERY", "FEATURE_GRID", "SPEC_TABLE", "ACCORDION", "NOTICE_LIST"].includes(block.type)) {
                 const entries = Array.isArray(block.items) ? block.items : Array.isArray(block.rows) ? block.rows : [];
