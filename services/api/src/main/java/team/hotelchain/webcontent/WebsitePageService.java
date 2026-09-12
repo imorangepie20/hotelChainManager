@@ -225,6 +225,10 @@ public class WebsitePageService {
         clearConnections(archived.id(), "PUBLISHED");
         mediaReferences.synchronizePublished(archived.id(), archived.pageType(), archived.publishedContent());
         jdbc.update("""
+                update website_page_translation set review_status = 'APPROVED'
+                where page_id = ? and locale = 'en' and review_status = 'PUBLISHED'
+                """, archived.id());
+        jdbc.update("""
                 insert into website_page_audit (page_id, action, actor_id, details)
                 values (?, 'ARCHIVED', ?, jsonb_build_object('path', ?, 'lifecycleVersion', ?))
                 """, archived.id(), actor.id(), archived.publishedPath(), archived.lifecycleVersion());

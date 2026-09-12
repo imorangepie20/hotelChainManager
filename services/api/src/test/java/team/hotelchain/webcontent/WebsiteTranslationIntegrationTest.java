@@ -134,6 +134,7 @@ class WebsiteTranslationIntegrationTest {
     @Test
     void requiresCurrentApprovalAndInvalidatesItOnSaveWithoutChangingPublishedContent() throws Exception {
         String token = headquarters();
+        UUID actor = access.requireHeadquarters(token).id();
         var created = pages.createContentPage(token, UUID.fromString("12000000-0000-0000-0000-000000000005"),
                 new WebsitePageDraftMetadata("locale-story", "Published page", true, 10),
                 content("Published title", "Published alt"));
@@ -171,7 +172,14 @@ class WebsiteTranslationIntegrationTest {
                 .containsExactly(WebsiteTranslationReviewStatus.DRAFT, null);
         assertThat(saved.publishedVersion()).isEqualTo(1);
         assertThat(saved.publishedMetadata().path()).isEqualTo("/en/brand/locale-story");
+        assertThat(saved.publishedMetadata().menuLabel()).isEqualTo("Published page");
+        assertThat(saved.publishedMetadata().menuVisible()).isTrue();
+        assertThat(saved.publishedMetadata().menuOrder()).isEqualTo(10);
         assertThat(saved.publishedConnections()).isEqualTo(WebsitePageConnections.empty());
+        assertThat(jdbc.queryForObject("""
+                select published_from_draft_version from website_page_translation
+                where page_id = ? and locale = 'en'
+                """, Integer.class, ko.id())).isEqualTo(1);
         assertThat(json.writeValueAsString(translations.resolve("/en/brand/locale-story").content()))
                 .contains("\"title\":\"Published title\"")
                 .doesNotContain("Draft title");
@@ -180,7 +188,11 @@ class WebsiteTranslationIntegrationTest {
                 where page_id = ? and locale = 'en' and document_state = 'PUBLISHED'
                 """, Integer.class, ko.id())).isPositive();
         assertThat(translations.review(token, ko.id()).events())
-                .anySatisfy(event -> assertThat(event.action()).isEqualTo("APPROVAL_INVALIDATED"));
+                .filteredOn(event -> event.action().equals("APPROVAL_INVALIDATED"))
+                .singleElement().satisfies(event -> {
+                    assertThat(event.draftVersion()).isEqualTo(2);
+                    assertThat(event.actorId()).isEqualTo(actor);
+                });
 
         jdbc.update("""
                 update website_page_translation
@@ -294,6 +306,10 @@ class WebsiteTranslationIntegrationTest {
         approveEnglish(token, ko.id(), 1);
         translations.publish(token, ko.id(), new PublishWebsitePageRequest(1, 0));
         var archived = pages.archiveContentPage(token, ko.id(), new WebsitePageLifecycleRequest(ko.lifecycleVersion(), ko.draftVersion(), ko.publishedVersion()));
+        assertThat(translations.review(token, ko.id()))
+                .extracting(WebsiteTranslationReviewState::status,
+                        WebsiteTranslationReviewState::reviewedDraftVersion)
+                .containsExactly(WebsiteTranslationReviewStatus.APPROVED, 1);
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> translations.resolve("/en/brand/locale-story"))
                 .isInstanceOf(WebsitePageNotFoundException.class);
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> translations.publish(token, ko.id(), new PublishWebsitePageRequest(1, 1)))
@@ -303,12 +319,7 @@ class WebsiteTranslationIntegrationTest {
         var restored = pages.restoreContentPage(token, ko.id(), new WebsitePageLifecycleRequest(archived.lifecycleVersion(), archived.draftVersion(), archived.publishedVersion()));
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> translations.resolve("/en/brand/locale-story"))
                 .isInstanceOf(WebsitePageNotFoundException.class);
-        var english = translations.draft(token, ko.id());
-        translations.save(token, ko.id(), new SaveWebsitePageRequest(1,
-                new WebsitePageDraftMetadata("locale-story", "Our story", true, 10),
-                english.draftContent(), english.draftConnections()));
-        approveEnglish(token, ko.id(), 2);
-        translations.publish(token, ko.id(), new PublishWebsitePageRequest(2, 1));
+        translations.publish(token, ko.id(), new PublishWebsitePageRequest(1, 1));
         assertThat(translations.resolve("/en/brand/locale-story").path()).isEqualTo("/en/brand/locale-story");
         archived = pages.archiveContentPage(token, ko.id(), new WebsitePageLifecycleRequest(restored.lifecycleVersion(), restored.draftVersion(), restored.publishedVersion()));
         pages.deleteArchivedContentPage(token, ko.id(), new WebsitePageLifecycleRequest(archived.lifecycleVersion(), archived.draftVersion(), archived.publishedVersion()));
