@@ -154,8 +154,8 @@ export function WebsiteTranslationEditor({ token, pageId, catalog, onDirtyChange
     catch (cause) { setError(cause instanceof Error ? cause.message : "영어 초안을 가져오지 못했습니다."); }
     finally { setInitializing(false); changeBusy(false); }
   }
-  const saved = (next: WebsitePageDocument, versions: WebContentVersion[] = []) => {
-    setDocument(next); setHistory(versions); setReviewState((current) => ({ status: "DRAFT", reviewedDraftVersion: null, events: current.events }));
+  const saved = (next: WebsitePageDocument, versions?: WebContentVersion[], versionsFresh = versions !== undefined) => {
+    setDocument(next); if (versionsFresh && versions) setHistory(versions); setReviewState((current) => ({ status: "DRAFT", reviewedDraftVersion: null, events: current.events }));
     setReviewReady(true);
     void refreshHistory();
   };

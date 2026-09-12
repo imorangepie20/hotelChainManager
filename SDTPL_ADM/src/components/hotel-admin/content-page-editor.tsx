@@ -118,7 +118,7 @@ export function ContentPageEditor({ token, document, catalog, locale = "ko", ini
   initialDirty?: boolean;
   showPublishAction?: boolean;
   onDirtyChange: (dirty: boolean) => void;
-  onSaved: (document: WebsitePageDocument, versions: WebContentVersion[]) => void;
+  onSaved: (document: WebsitePageDocument, versions: WebContentVersion[], versionsFresh?: boolean) => void;
   onPublished: (document: WebsitePageDocument, versions: WebContentVersion[]) => void;
   onLifecycleChanged: (document: WebsitePageDocument, versions: WebContentVersion[]) => void;
   onDeleted: () => void;
@@ -209,12 +209,14 @@ export function ContentPageEditor({ token, document, catalog, locale = "ko", ini
         : isHomePage
         ? await saveWebsiteHome(token, { expectedDraftVersion: draftVersion, content })
         : await saveWebsitePage(token, document.id, { expectedDraftVersion: draftVersion, page: metadata, content, connections });
-      const history = locale === "en"
-        ? await getWebsiteTranslationVersions(token, document.id)
-        : isHomePage
+      if (locale === "en") {
+        applyDocument(saved); setDirty(false); setNotice("초안이 저장되었습니다. 검토를 요청해 주세요."); onSaved(saved, [], false);
+        return;
+      }
+      const history = isHomePage
         ? await getWebsiteHomeVersions(token)
         : await getWebsitePageVersions(token, document.id);
-      applyDocument(saved); setDirty(false); setNotice(locale === "en" ? "초안이 저장되었습니다. 검토를 요청해 주세요." : "초안이 저장되었습니다. 이제 저장된 초안을 발행할 수 있습니다."); onSaved(saved, history);
+      applyDocument(saved); setDirty(false); setNotice("초안이 저장되었습니다. 이제 저장된 초안을 발행할 수 있습니다."); onSaved(saved, history);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "초안을 저장하지 못했습니다."); }
     finally { setBusy(false); }
   }
