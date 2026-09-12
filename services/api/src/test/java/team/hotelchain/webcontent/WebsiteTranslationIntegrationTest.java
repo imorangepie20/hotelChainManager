@@ -111,6 +111,65 @@ class WebsiteTranslationIntegrationTest {
     }
 
     @Test
+    void requestsAndApprovesTheCurrentEnglishDraft() throws Exception {
+        String token = headquarters();
+        var ko = story(token);
+        translations.initialize(token, ko.id(), ko.draftVersion(), ko.lifecycleVersion());
+        var mvc = MockMvcBuilders.webAppContextSetup(context).build();
+        String path = "/api/staff/website/pages/" + ko.id() + "/translations/en/review";
+
+        mvc.perform(post(path + "/request").header("X-Staff-Session", token)
+                        .contentType("application/json")
+                        .content("{\"expectedDraftVersion\":1,\"comment\":\"Please review\"}"))
+                .andExpect(status().isOk());
+        mvc.perform(post(path + "/approve").header("X-Staff-Session", token)
+                        .contentType("application/json")
+                        .content("{\"expectedDraftVersion\":1,\"comment\":\"Approved\"}"))
+                .andExpect(status().isOk());
+
+        assertThat(translations.review(token, ko.id()).status())
+                .isEqualTo(WebsiteTranslationReviewStatus.APPROVED);
+    }
+
+    @Test
+    void requiresAReasonAndAuditsRejectedReviews() throws Exception {
+        String token = headquarters();
+        UUID actor = access.requireHeadquarters(token).id();
+        var ko = story(token);
+        translations.initialize(token, ko.id(), ko.draftVersion(), ko.lifecycleVersion());
+        var mvc = MockMvcBuilders.webAppContextSetup(context).build();
+        String path = "/api/staff/website/pages/" + ko.id() + "/translations/en/review";
+        mvc.perform(post(path + "/request").header("X-Staff-Session", token)
+                        .contentType("application/json")
+                        .content("{\"expectedDraftVersion\":1,\"comment\":null}"))
+                .andExpect(status().isOk());
+
+        String blankResponse = mvc.perform(post(path + "/reject").header("X-Staff-Session", token)
+                        .contentType("application/json")
+                        .content("{\"expectedDraftVersion\":1,\"comment\":\"   \"}"))
+                .andExpect(status().isBadRequest())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(read(blankResponse).get("code"))
+                .isEqualTo("WEBSITE_TRANSLATION_REJECTION_REASON_REQUIRED");
+
+        mvc.perform(post(path + "/reject").header("X-Staff-Session", token)
+                        .contentType("application/json")
+                        .content("{\"expectedDraftVersion\":1,\"comment\":\"  Needs a complete alt text  \"}"))
+                .andExpect(status().isOk());
+
+        var rejected = translations.review(token, ko.id());
+        assertThat(rejected.status()).isEqualTo(WebsiteTranslationReviewStatus.DRAFT);
+        assertThat(rejected.reviewedDraftVersion()).isNull();
+        assertThat(rejected.events()).first().satisfies(event -> {
+            assertThat(event.action()).isEqualTo("REJECTED");
+            assertThat(event.draftVersion()).isEqualTo(1);
+            assertThat(event.actorId()).isEqualTo(actor);
+            assertThat(event.createdAt()).isNotNull();
+            assertThat(event.comment()).isEqualTo("Needs a complete alt text");
+        });
+    }
+
+    @Test
     void migratesOnlyCurrentV20PublicationsToPublishedReviewState() {
         String schema = "translation_review_" + UUID.randomUUID().toString().replace("-", "");
         String translationTable = "\"" + schema + "\".website_page_translation";

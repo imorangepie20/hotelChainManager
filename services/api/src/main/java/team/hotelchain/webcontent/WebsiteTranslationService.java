@@ -80,6 +80,70 @@ public class WebsiteTranslationService {
     }
 
     @Transactional
+    public WebsiteTranslationReviewState requestReview(String token, UUID pageId,
+            WebsiteTranslationReviewActionRequest request) {
+        UUID actor = access.requireHeadquarters(token).id();
+        WebsitePageDocument source = lockedSource(token, pageId);
+        Translation current = requiredLockedTranslation(pageId);
+        String comment = optionalReviewComment(request);
+        requireCurrentReviewVersion(request.expectedDraftVersion(), current);
+        requireReviewStatus(current, WebsiteTranslationReviewStatus.DRAFT);
+        normalize(source, current.draftContent(), current.draftConnections(), true);
+        rejectCollision(pageId, current.draftMetadata().path());
+        jdbc.update("""
+                update website_page_translation
+                set review_status = 'IN_REVIEW', reviewed_draft_version = draft_version,
+                    updated_at = current_timestamp, updated_by = ?
+                where page_id = ? and locale = 'en'
+                """, actor, pageId);
+        reviewEvent(pageId, actor, "REVIEW_REQUESTED", current.draftVersion(), comment);
+        return review(token, pageId);
+    }
+
+    @Transactional
+    public WebsiteTranslationReviewState approveReview(String token, UUID pageId,
+            WebsiteTranslationReviewActionRequest request) {
+        UUID actor = access.requireHeadquarters(token).id();
+        lockedSource(token, pageId);
+        Translation current = requiredLockedTranslation(pageId);
+        String comment = optionalReviewComment(request);
+        requireCurrentReviewVersion(request.expectedDraftVersion(), current);
+        requireReviewStatus(current, WebsiteTranslationReviewStatus.IN_REVIEW);
+        if (!Integer.valueOf(current.draftVersion()).equals(current.reviewedDraftVersion())) {
+            throw reviewStale();
+        }
+        jdbc.update("""
+                update website_page_translation
+                set review_status = 'APPROVED', updated_at = current_timestamp, updated_by = ?
+                where page_id = ? and locale = 'en'
+                """, actor, pageId);
+        reviewEvent(pageId, actor, "APPROVED", current.draftVersion(), comment);
+        return review(token, pageId);
+    }
+
+    @Transactional
+    public WebsiteTranslationReviewState rejectReview(String token, UUID pageId,
+            WebsiteTranslationReviewActionRequest request) {
+        UUID actor = access.requireHeadquarters(token).id();
+        lockedSource(token, pageId);
+        Translation current = requiredLockedTranslation(pageId);
+        String comment = requiredRejectionComment(request);
+        requireCurrentReviewVersion(request.expectedDraftVersion(), current);
+        requireReviewStatus(current, WebsiteTranslationReviewStatus.IN_REVIEW);
+        if (!Integer.valueOf(current.draftVersion()).equals(current.reviewedDraftVersion())) {
+            throw reviewStale();
+        }
+        jdbc.update("""
+                update website_page_translation
+                set review_status = 'DRAFT', reviewed_draft_version = null,
+                    updated_at = current_timestamp, updated_by = ?
+                where page_id = ? and locale = 'en'
+                """, actor, pageId);
+        reviewEvent(pageId, actor, "REJECTED", current.draftVersion(), comment);
+        return review(token, pageId);
+    }
+
+    @Transactional
     public WebsitePageDocument initialize(String token, UUID pageId, int sourceVersion, int lifecycleVersion) {
         UUID actor = access.requireHeadquarters(token).id();
         WebsitePageDocument source = lockedSource(token, pageId);
@@ -326,6 +390,13 @@ public class WebsiteTranslationService {
         return current;
     }
 
+    private Translation requiredLockedTranslation(UUID id) {
+        Translation current = jdbc.query("select * from website_page_translation where page_id = ? and locale = 'en' for update",
+                rs -> rs.next() ? row(rs) : null, id);
+        if (current == null) throw new BusinessConflictException("WEBSITE_TRANSLATION_MISSING", "먼저 영어 번역 초안을 가져와 주세요.");
+        return current;
+    }
+
     private Translation translation(UUID id) {
         return jdbc.query("select * from website_page_translation where page_id = ? and locale = 'en'", rs -> rs.next() ? row(rs) : null, id);
     }
@@ -336,7 +407,9 @@ public class WebsiteTranslationService {
                 readConnections(rs.getString("draft_connections")), readConnections(rs.getString("published_connections")),
                 rs.getInt("draft_version"), rs.getInt("published_version"),
                 new WebsitePageMetadata(draftPath.substring(draftPath.lastIndexOf('/') + 1), draftPath, rs.getString("draft_menu_label"), rs.getBoolean("draft_menu_visible"), rs.getInt("draft_menu_order")),
-                publishedPath == null ? null : new WebsitePageMetadata(publishedPath.substring(publishedPath.lastIndexOf('/') + 1), publishedPath, rs.getString("published_menu_label"), rs.getBoolean("published_menu_visible"), rs.getInt("published_menu_order")));
+                publishedPath == null ? null : new WebsitePageMetadata(publishedPath.substring(publishedPath.lastIndexOf('/') + 1), publishedPath, rs.getString("published_menu_label"), rs.getBoolean("published_menu_visible"), rs.getInt("published_menu_order")),
+                WebsiteTranslationReviewStatus.valueOf(rs.getString("review_status")),
+                rs.getObject("reviewed_draft_version", Integer.class));
     }
 
     private Map<String, Object> read(String value) {
@@ -358,10 +431,55 @@ public class WebsiteTranslationService {
         jdbc.update("insert into website_page_audit (page_id, action, actor_id, details) values (?, ?, ?, ?::jsonb)", id, action, actor, stringify(details));
     }
 
+    private String optionalReviewComment(WebsiteTranslationReviewActionRequest request) {
+        if (request == null || request.expectedDraftVersion() <= 0) {
+            throw new IllegalArgumentException("초안 버전은 1 이상이어야 합니다.");
+        }
+        String comment = request.comment() == null ? null : request.comment().trim();
+        if (comment != null && comment.length() > 2000) {
+            throw new IllegalArgumentException("검토 코멘트는 2,000자 이하여야 합니다.");
+        }
+        return comment == null || comment.isBlank() ? null : comment;
+    }
+
+    private String requiredRejectionComment(WebsiteTranslationReviewActionRequest request) {
+        String comment = optionalReviewComment(request);
+        if (comment == null) {
+            throw new WebsiteTranslationReviewValidationException(
+                    "WEBSITE_TRANSLATION_REJECTION_REASON_REQUIRED", "반려 사유를 1~2,000자로 입력해 주세요.");
+        }
+        return comment;
+    }
+
+    private void requireCurrentReviewVersion(int expectedDraftVersion, Translation current) {
+        if (expectedDraftVersion != current.draftVersion()) throw reviewStale();
+    }
+
+    private void requireReviewStatus(Translation current, WebsiteTranslationReviewStatus expected) {
+        if (current.reviewStatus() != expected) {
+            throw new BusinessConflictException("WEBSITE_TRANSLATION_REVIEW_STATE_CONFLICT",
+                    "현재 검토 상태에서는 요청한 작업을 수행할 수 없습니다. 최신 상태를 확인해 주세요.");
+        }
+    }
+
+    private void reviewEvent(UUID pageId, UUID actor, String action, int draftVersion, String comment) {
+        jdbc.update("""
+                insert into website_translation_review_event
+                    (page_id, locale, action, draft_version, actor_id, comment)
+                values (?, 'en', ?, ?, ?, ?)
+                """, pageId, action, draftVersion, actor, comment);
+    }
+
+    private BusinessConflictException reviewStale() {
+        return new BusinessConflictException("WEBSITE_TRANSLATION_REVIEW_STALE",
+                "번역 초안 version이 변경되었습니다. 최신 페이지를 다시 불러와 주세요.");
+    }
+
     private BusinessConflictException stale() { return new BusinessConflictException("WEBSITE_TRANSLATION_CONFLICT", "번역 또는 원본이 변경되었습니다. 최신 페이지를 다시 불러와 주세요."); }
 
     private record Translation(Map<String, Object> draftContent, Map<String, Object> publishedContent,
             WebsitePageConnections draftConnections, WebsitePageConnections publishedConnections, int draftVersion, int publishedVersion,
-            WebsitePageMetadata draftMetadata, WebsitePageMetadata publishedMetadata) {}
+            WebsitePageMetadata draftMetadata, WebsitePageMetadata publishedMetadata,
+            WebsiteTranslationReviewStatus reviewStatus, Integer reviewedDraftVersion) {}
     private record PublishedRow(UUID id, UUID parentId, String type, ContentKind kind, UUID hotelId, Translation translation) {}
 }

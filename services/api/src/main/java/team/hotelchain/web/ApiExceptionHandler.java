@@ -6,6 +6,7 @@ import team.hotelchain.staff.StaffAccessDeniedException;
 import team.hotelchain.staff.StaffAuthenticationException;
 import team.hotelchain.webcontent.WebsitePageNotFoundException;
 import team.hotelchain.webcontent.WebsiteMediaNotFoundException;
+import team.hotelchain.webcontent.WebsiteTranslationReviewValidationException;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -14,6 +15,12 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
+
+    @ExceptionHandler(WebsiteTranslationReviewValidationException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public ApiError translationReviewValidation(WebsiteTranslationReviewValidationException exception) {
+        return new ApiError(exception.code(), exception.getMessage());
+    }
 
     @ExceptionHandler(IllegalArgumentException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
