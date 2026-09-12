@@ -25,6 +25,9 @@ import {
   deleteWebsitePage,
   getWebsiteHomeVersions,
   getWebsitePageVersions,
+  getWebsiteTranslationVersions,
+  saveWebsiteTranslation,
+  publishWebsiteTranslation,
   publishWebsiteHome,
   publishWebsitePage,
   restoreWebsitePage,
@@ -34,7 +37,6 @@ import {
   type WebsitePageConnections,
   type ContentReferenceCatalog,
   type WebsitePageDraftMetadata,
-  type WebsitePageTreeItem,
   type WebContentVersion,
 } from "@/lib/staff-api";
 
@@ -55,6 +57,10 @@ function contentFrom(document: WebsitePageDocument): ContentRecord {
   return { seo: record(value.seo), blocks: blocks(value.blocks) };
 }
 
+function connectionsFrom(document: WebsitePageDocument): WebsitePageConnections {
+  return document.draftConnections ?? { roomTypeIds: [], targetHotelIds: [], relatedPages: [] };
+}
+
 function Field({ label, value, onChange, multiline = false, maxLength }: { label: string; value: string; onChange: (value: string) => void; multiline?: boolean; maxLength?: number }) {
   return <label className="grid gap-1 text-sm font-medium">{label}{multiline
     ? <Textarea aria-label={label} value={value} maxLength={maxLength} onChange={(event) => onChange(event.target.value)} />
@@ -69,15 +75,16 @@ function BlockControls({ label, index, total, onMove, onRemove }: { label: strin
   </div></div>;
 }
 
-function RichBlockEditor({ block, index, total, label, token, protectedAssetIds, onMove, onRemove, onChange }: { block: ContentBlock; index: number; total: number; label: string; token: string; protectedAssetIds: string[]; onMove: (direction: -1 | 1) => void; onRemove: () => void; onChange: (update: (block: ContentBlock) => ContentBlock) => void }) {
+function RichBlockEditor({ block, index, total, label, token, locale, protectedAssetIds, onMove, onRemove, onChange }: { block: ContentBlock; index: number; total: number; label: string; token: string; locale: "ko" | "en"; protectedAssetIds: string[]; onMove: (direction: -1 | 1) => void; onRemove: () => void; onChange: (update: (block: ContentBlock) => ContentBlock) => void }) {
   const entries = Array.isArray(block.items) ? block.items : Array.isArray(block.rows) ? block.rows : [];
   const key = block.type === "SPEC_TABLE" ? "rows" : "items";
   const minimum = block.type === "IMAGE_GALLERY" || block.type === "FEATURE_GRID" ? 2 : 1;
   const limit = block.type === "IMAGE_GALLERY" ? 12 : block.type === "FEATURE_GRID" ? 6 : block.type === "NOTICE_LIST" ? 20 : 12;
   const update = (entryIndex: number, next: ContentRecord) => onChange((current) => ({ ...current, [key]: entries.map((entry, itemIndex) => itemIndex === entryIndex ? next : entry) }));
   return <section className="space-y-4 rounded-xl border p-4"><BlockControls label={label} index={index} total={total} onMove={onMove} onRemove={onRemove} /><Field label={`${label} 제목`} maxLength={160} value={text(block.title)} onChange={(title) => onChange((current) => ({ ...current, title }))} />
+    {locale === "en" && <>{([['eyebrow', '상단 문구', 100], ['description', '설명', 1000]] as const).map(([key, name, maxLength]) => <Field key={key} label={`${label} ${name}`} maxLength={maxLength} multiline={key === "description"} value={text(block[key])} onChange={(value) => onChange((current) => { const next = { ...current, [key]: value }; if (!value.trim()) delete next[key]; return next; })} />)}</>}
     {entries.map((entry, entryIndex) => { const item = record(entry); return <div className="grid gap-3 rounded-lg border bg-muted/20 p-3" key={entryIndex}>
-      {block.type === "IMAGE_GALLERY" ? <MediaField token={token} assetId={text(item.imageAssetId)} deliveryUrl={text(item.imageSrc)} altText={text(item.imageAlt)} protectedAssetIds={protectedAssetIds} onAssetSelect={(asset) => update(entryIndex, { ...item, imageAssetId: asset.id, imageSrc: asset.deliveryUrl, imageAlt: asset.defaultAltText })} onAltTextChange={(imageAlt) => update(entryIndex, { ...item, imageAlt })} />
+      {block.type === "IMAGE_GALLERY" ? <><MediaField token={token} assetId={text(item.imageAssetId)} deliveryUrl={text(item.imageSrc)} altText={text(item.imageAlt)} protectedAssetIds={protectedAssetIds} onAssetSelect={(asset, imageAlt) => update(entryIndex, { ...item, imageAssetId: asset.id, imageSrc: asset.deliveryUrl, imageAlt })} onAltTextChange={(imageAlt) => update(entryIndex, { ...item, imageAlt })} /><Field label={`${label} ${entryIndex + 1} 캡션`} maxLength={300} value={text(item.caption)} onChange={(caption) => { const next: ContentRecord = { ...item, caption }; if (!caption.trim()) delete next.caption; update(entryIndex, next); }} /></>
         : block.type === "SPEC_TABLE" ? <><Field label={`${label} ${entryIndex + 1} 항목`} maxLength={100} value={text(item.label)} onChange={(value) => update(entryIndex, { ...item, label: value })} /><Field label={`${label} ${entryIndex + 1} 값`} maxLength={300} value={text(item.value)} onChange={(value) => update(entryIndex, { ...item, value })} /></>
         : block.type === "NOTICE_LIST" ? <Field label={`${label} ${entryIndex + 1} 내용`} multiline maxLength={1000} value={text(item.text)} onChange={(value) => update(entryIndex, { ...item, text: value })} />
         : <><Field label={`${label} ${entryIndex + 1} 제목`} maxLength={160} value={text(item.title)} onChange={(value) => update(entryIndex, { ...item, title: value })} /><Field label={`${label} ${entryIndex + 1} ${block.type === "ACCORDION" ? "답변" : "설명"}`} multiline maxLength={block.type === "ACCORDION" ? 2000 : 500} value={text(block.type === "ACCORDION" ? item.content : item.description)} onChange={(value) => update(entryIndex, { ...item, [block.type === "ACCORDION" ? "content" : "description"]: value })} /></>}
@@ -87,11 +94,29 @@ function RichBlockEditor({ block, index, total, label, token, protectedAssetIds,
   </section>;
 }
 
-export function ContentPageEditor({ token, document, catalog, initialDirty = false, onDirtyChange, onSaved, onPublished, onLifecycleChanged, onDeleted }: {
+function TranslationBlockFields({ block, onChange }: { block: ContentBlock; onChange: (update: (block: ContentBlock) => ContentBlock) => void }) {
+  const setText = (key: string, value: string, optional = false) => onChange((current) => {
+    const next = { ...current, [key]: value };
+    if (optional && !value.trim()) delete next[key];
+    return next;
+  });
+  const field = (key: string, label: string, maxLength: number, optional = false) => <Field key={key} label={label} value={text(block[key])} maxLength={maxLength} multiline={maxLength > 300} onChange={(value) => setText(key, value, optional)} />;
+  const list = (key: string, label: string, maxLength: number) => (Array.isArray(block[key]) ? block[key] as unknown[] : []).map((value, index) => <Field key={`${key}-${index}`} label={`${label} ${index + 1}`} value={text(value)} multiline maxLength={maxLength} onChange={(value) => onChange((current) => ({ ...current, [key]: (current[key] as unknown[]).map((item, itemIndex) => itemIndex === index ? value : item) }))} />);
+  if (block.type === "RICH_TEXT") return <>{field("eyebrow", "소개 상단 문구", 100)}{list("paragraphs", "소개 문단", 1000)}</>;
+  if (block.type === "PROMOTION_SUMMARY") return <>{field("salesPeriod", "예약 기간", 100)}{field("stayPeriod", "투숙 기간", 100)}{list("benefits", "혜택", 200)}{field("displayPrice", "표시 가격 설명", 100, true)}{list("tags", "태그", 50)}</>;
+  if (block.type === "LOCATION") return <>{field("address", "주소", 300)}{field("directions", "길 안내", 1000, true)}{field("mapHref", "지도 링크", 255, true)}</>;
+  if (block.type === "OPERATING_HOURS") return <>{field("description", "운영 설명", 1000, true)}{field("exceptions", "예외 안내", 1000, true)}{field("location", "운영 위치", 200, true)}{field("phone", "전화번호", 40, true)}{(Array.isArray(block.entries) ? block.entries : []).map((entry, index) => <Field key={index} label={`운영 요일 ${index + 1}`} maxLength={50} value={text(record(entry).dayLabel)} onChange={(dayLabel) => onChange((current) => ({ ...current, entries: (current.entries as unknown[]).map((item, itemIndex) => itemIndex === index ? { ...record(item), dayLabel } : item) }))} />)}<p className="text-xs text-muted-foreground">운영 시각과 휴무 여부는 가져온 값을 유지합니다.</p></>;
+  return null;
+}
+
+export function ContentPageEditor({ token, document, catalog, locale = "ko", initialDirty = false, showPublishAction = true, onDirtyChange, onBusyChange, onSaved, onPublished, onLifecycleChanged, onDeleted }: {
   token: string;
   document: WebsitePageDocument;
   catalog: ContentReferenceCatalog;
+  locale?: "ko" | "en";
+  onBusyChange?: (busy: boolean) => void;
   initialDirty?: boolean;
+  showPublishAction?: boolean;
   onDirtyChange: (dirty: boolean) => void;
   onSaved: (document: WebsitePageDocument, versions: WebContentVersion[]) => void;
   onPublished: (document: WebsitePageDocument, versions: WebContentVersion[]) => void;
@@ -99,10 +124,10 @@ export function ContentPageEditor({ token, document, catalog, initialDirty = fal
   onDeleted: () => void;
 }) {
   const [content, setContent] = useState<ContentRecord>(() => contentFrom(document));
-  const [connections, setConnections] = useState<WebsitePageConnections>(() => document.draftConnections);
+  const [connections, setConnections] = useState<WebsitePageConnections>(() => connectionsFrom(document));
   const [metadata, setMetadata] = useState<WebsitePageDraftMetadata>(() => ({ slug: document.draftMetadata.slug, menuLabel: document.draftMetadata.menuLabel, menuVisible: document.draftMetadata.menuVisible, menuOrder: document.draftMetadata.menuOrder }));
   const [draftVersion, setDraftVersion] = useState(document.draftVersion);
-  const [publishedVersion, setPublishedVersion] = useState(document.publishedVersion || INITIAL_PUBLISHED_VERSION);
+  const [publishedVersion, setPublishedVersion] = useState(document.publishedVersion ?? INITIAL_PUBLISHED_VERSION);
   const [lifecycleVersion, setLifecycleVersion] = useState(document.lifecycleVersion);
   const [dirty, setDirty] = useState(initialDirty);
   const [busy, setBusy] = useState(false);
@@ -113,14 +138,16 @@ export function ContentPageEditor({ token, document, catalog, initialDirty = fal
   const [previewOpen, setPreviewOpen] = useState(false);
   const isHomePage = document.pageType === "HOME_PAGE";
   const isContentPage = document.pageType === "CONTENT_PAGE";
-  const isArchived = isContentPage && document.lifecycleStatus === "ARCHIVED";
+  const canManageLifecycle = isContentPage && locale === "ko";
+  const isArchived = document.lifecycleStatus === "ARCHIVED";
 
   useEffect(() => { onDirtyChange(dirty); }, [dirty, onDirtyChange]);
+  useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
   useEffect(() => {
     setContent(contentFrom(document));
-    setConnections(document.draftConnections);
+    setConnections(connectionsFrom(document));
     setMetadata({ slug: document.draftMetadata.slug, menuLabel: document.draftMetadata.menuLabel, menuVisible: document.draftMetadata.menuVisible, menuOrder: document.draftMetadata.menuOrder });
-    setDraftVersion(document.draftVersion); setPublishedVersion(document.publishedVersion || INITIAL_PUBLISHED_VERSION); setLifecycleVersion(document.lifecycleVersion); setDirty(initialDirty);
+    setDraftVersion(document.draftVersion); setPublishedVersion(document.publishedVersion ?? INITIAL_PUBLISHED_VERSION); setLifecycleVersion(document.lifecycleVersion); setDirty(initialDirty);
   }, [document, initialDirty]);
 
   const pageBlocks = blocks(content.blocks);
@@ -166,10 +193,10 @@ export function ContentPageEditor({ token, document, catalog, initialDirty = fal
 
   function applyDocument(next: WebsitePageDocument) {
     setContent(contentFrom(next));
-    setConnections(next.draftConnections);
+    setConnections(connectionsFrom(next));
     setMetadata({ slug: next.draftMetadata.slug, menuLabel: next.draftMetadata.menuLabel, menuVisible: next.draftMetadata.menuVisible, menuOrder: next.draftMetadata.menuOrder });
     setDraftVersion(next.draftVersion);
-    setPublishedVersion(next.publishedVersion || INITIAL_PUBLISHED_VERSION);
+    setPublishedVersion(next.publishedVersion ?? INITIAL_PUBLISHED_VERSION);
     setLifecycleVersion(next.lifecycleVersion);
   }
 
@@ -177,13 +204,17 @@ export function ContentPageEditor({ token, document, catalog, initialDirty = fal
     if (isArchived || busy || connectionError) return;
     setBusy(true); setError(""); setNotice("");
     try {
-      const saved = isHomePage
+      const saved = locale === "en"
+        ? await saveWebsiteTranslation(token, document.id, { expectedDraftVersion: draftVersion, page: metadata, content, connections })
+        : isHomePage
         ? await saveWebsiteHome(token, { expectedDraftVersion: draftVersion, content })
         : await saveWebsitePage(token, document.id, { expectedDraftVersion: draftVersion, page: metadata, content, connections });
-      const history = isHomePage
+      const history = locale === "en"
+        ? await getWebsiteTranslationVersions(token, document.id)
+        : isHomePage
         ? await getWebsiteHomeVersions(token)
         : await getWebsitePageVersions(token, document.id);
-      applyDocument(saved); setDirty(false); setNotice("초안이 저장되었습니다. 이제 저장된 초안을 발행할 수 있습니다."); onSaved(saved, history);
+      applyDocument(saved); setDirty(false); setNotice(locale === "en" ? "초안이 저장되었습니다. 검토를 요청해 주세요." : "초안이 저장되었습니다. 이제 저장된 초안을 발행할 수 있습니다."); onSaved(saved, history);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "초안을 저장하지 못했습니다."); }
     finally { setBusy(false); }
   }
@@ -191,10 +222,14 @@ export function ContentPageEditor({ token, document, catalog, initialDirty = fal
     if (dirty || isArchived || busy) return;
     setBusy(true); setError(""); setNotice("");
     try {
-      const published = isHomePage
+      const published = locale === "en"
+        ? await publishWebsiteTranslation(token, document.id, draftVersion, publishedVersion)
+        : isHomePage
         ? await publishWebsiteHome(token, draftVersion, publishedVersion)
         : await publishWebsitePage(token, document.id, draftVersion, publishedVersion);
-      const history = isHomePage
+      const history = locale === "en"
+        ? await getWebsiteTranslationVersions(token, document.id)
+        : isHomePage
         ? await getWebsiteHomeVersions(token)
         : await getWebsitePageVersions(token, document.id);
       applyDocument(published); setNotice("발행본이 고객 웹에 적용되었습니다."); onPublished(published, history);
@@ -239,21 +274,20 @@ export function ContentPageEditor({ token, document, catalog, initialDirty = fal
     finally { setBusy(false); }
   }
 
-  return <Card className="min-w-0"><CardHeader><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><CardTitle><h2>{isHomePage ? "홈페이지 콘텐츠" : "일반 콘텐츠 페이지"}</h2></CardTitle><CardDescription>{isHomePage ? "홈페이지의 HERO, TEXT, CTA를 편집합니다. 예약 검색과 재고·가격은 별도 예약 시스템에서 관리합니다." : "콘텐츠 유형과 연결 범위에 맞는 안전한 블록을 편집합니다."}</CardDescription></div><div className="flex flex-wrap gap-2">{isContentPage && <Button type="button" variant="outline" onClick={() => setPreviewOpen(true)}><Eye /> 미리보기</Button>}{isArchived ? <><Button variant="outline" onClick={() => void restore()} disabled={busy}><RotateCcw /> 초안으로 복원</Button><Button type="button" variant="destructive" onClick={() => setDeleteConfirmationOpen(true)} disabled={busy}><Trash2 /> 영구 삭제</Button></> : isContentPage && <><Button variant="destructive" onClick={() => setArchiveConfirmationOpen(true)} disabled={busy || dirty} title={dirty ? "저장되지 않은 변경사항을 먼저 초안으로 저장해 주세요." : undefined} aria-describedby={dirty ? "archive-before-save-hint" : undefined}><Archive /> 페이지 보관</Button>{dirty && <span id="archive-before-save-hint" className="sr-only">저장되지 않은 변경사항을 먼저 초안으로 저장해야 페이지를 보관할 수 있습니다.</span>}</>}<Button variant="outline" onClick={() => void save()} disabled={busy || isArchived || !dirty || Boolean(connectionError)}><FilePenLine /> 초안 저장</Button><Button onClick={() => void publish()} disabled={busy || isArchived || dirty || Boolean(connectionError)}><Send /> 발행</Button></div></div></CardHeader><CardContent className="space-y-6">
+  return <Card className="min-w-0"><CardHeader><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><CardTitle><h2>{isHomePage ? "홈페이지 콘텐츠" : "일반 콘텐츠 페이지"}</h2></CardTitle><CardDescription>{isHomePage ? "홈페이지의 HERO, TEXT, CTA를 편집합니다. 예약 검색과 재고·가격은 별도 예약 시스템에서 관리합니다." : "콘텐츠 유형과 연결 범위에 맞는 안전한 블록을 편집합니다."}</CardDescription></div><div className="flex flex-wrap gap-2">{isContentPage && <Button type="button" variant="outline" onClick={() => setPreviewOpen(true)}><Eye /> 미리보기</Button>}{canManageLifecycle && isArchived ? <><Button variant="outline" onClick={() => void restore()} disabled={busy}><RotateCcw /> 초안으로 복원</Button><Button type="button" variant="destructive" onClick={() => setDeleteConfirmationOpen(true)} disabled={busy}><Trash2 /> 영구 삭제</Button></> : canManageLifecycle && <><Button variant="destructive" onClick={() => setArchiveConfirmationOpen(true)} disabled={busy || dirty} title={dirty ? "저장되지 않은 변경사항을 먼저 초안으로 저장해 주세요." : undefined} aria-describedby={dirty ? "archive-before-save-hint" : undefined}><Archive /> 페이지 보관</Button>{dirty && <span id="archive-before-save-hint" className="sr-only">저장되지 않은 변경사항을 먼저 초안으로 저장해야 페이지를 보관할 수 있습니다.</span>}</>}<Button variant="outline" onClick={() => void save()} disabled={busy || isArchived || !dirty || Boolean(connectionError)}><FilePenLine /> 초안 저장</Button>{showPublishAction && <Button onClick={() => void publish()} disabled={busy || isArchived || dirty || Boolean(connectionError)}><Send /> 발행</Button>}</div></div></CardHeader><CardContent className="space-y-6">
     {isArchived && <section role="status" className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950"><p className="font-semibold">보관된 페이지입니다.</p><p className="mt-1">고객 웹과 메뉴에 표시되지 않습니다. 초안으로 복원한 뒤 내용을 확인하고 다시 발행해 주세요.</p></section>}
     <fieldset disabled={isArchived} className="grid min-w-0 gap-6 border-0 p-0">
-    {!isHomePage && <section className="space-y-4 rounded-xl border p-4"><h2 className="font-semibold">페이지 정보</h2><div className="grid gap-4 md:grid-cols-2"><Field label="주소 슬러그" value={metadata.slug} onChange={(slug) => changeMetadata({ ...metadata, slug })} /><Field label="메뉴 이름" value={metadata.menuLabel} onChange={(menuLabel) => changeMetadata({ ...metadata, menuLabel })} /><label className="flex min-h-8 items-center gap-2 text-sm font-medium"><Checkbox aria-label="메뉴에 노출" checked={metadata.menuVisible} onCheckedChange={(menuVisible) => changeMetadata({ ...metadata, menuVisible })} />메뉴에 노출</label><label className="grid gap-1 text-sm font-medium">메뉴 순서<Input aria-label="메뉴 순서" type="number" min={0} value={metadata.menuOrder} onChange={(event) => changeMetadata({ ...metadata, menuOrder: Math.max(0, Number(event.target.value) || 0) })} /></label></div><p className="text-xs text-muted-foreground">초안 주소: {document.draftMetadata.path.replace(/[^/]+$/, metadata.slug)}</p></section>}
-    {!isHomePage && <section className="space-y-4 rounded-xl border p-4"><h2 className="font-semibold">페이지 정보</h2><div className="grid gap-4 md:grid-cols-2"><Field label="주소 슬러그" value={metadata.slug} onChange={(slug) => changeMetadata({ ...metadata, slug })} /><Field label="메뉴 이름" value={metadata.menuLabel} onChange={(menuLabel) => changeMetadata({ ...metadata, menuLabel })} /><label className="flex min-h-8 items-center gap-2 text-sm font-medium"><Checkbox aria-label="메뉴에 노출" checked={metadata.menuVisible} onCheckedChange={(menuVisible) => changeMetadata({ ...metadata, menuVisible })} />메뉴에 노출</label><label className="grid gap-1 text-sm font-medium">메뉴 순서<Input aria-label="메뉴 순서" type="number" min={0} value={metadata.menuOrder} onChange={(event) => changeMetadata({ ...metadata, menuOrder: Math.max(0, Number(event.target.value) || 0) })} /></label></div><p className="text-xs text-muted-foreground">초안 주소: {document.draftMetadata.path.replace(/[^/]+$/, metadata.slug)}</p></section>}
+    {!isHomePage && <section className="space-y-4 rounded-xl border p-4"><h2 className="font-semibold">페이지 정보</h2><div className="grid gap-4 md:grid-cols-2">{locale === "en" ? <p className="text-sm text-muted-foreground">구조 슬러그: {metadata.slug} · 한국어 페이지 구조와 공유합니다.</p> : <Field label="주소 슬러그" value={metadata.slug} onChange={(slug) => changeMetadata({ ...metadata, slug })} />}<Field label="메뉴 이름" value={metadata.menuLabel} onChange={(menuLabel) => changeMetadata({ ...metadata, menuLabel })} /><label className="flex min-h-8 items-center gap-2 text-sm font-medium"><Checkbox aria-label="메뉴에 노출" checked={metadata.menuVisible} onCheckedChange={(menuVisible) => changeMetadata({ ...metadata, menuVisible })} />메뉴에 노출</label><label className="grid gap-1 text-sm font-medium">메뉴 순서<Input aria-label="메뉴 순서" type="number" min={0} value={metadata.menuOrder} onChange={(event) => changeMetadata({ ...metadata, menuOrder: Math.max(0, Number(event.target.value) || 0) })} /></label></div><p className="text-xs text-muted-foreground">초안 주소: {document.draftMetadata.path.replace(/[^/]+$/, metadata.slug)}</p></section>}
     {isContentPage && (document.contentKind === "ROOM" || document.contentKind === "PROMOTION") && <section className="space-y-4 rounded-xl border p-4"><h2 className="font-semibold">연결 대상</h2>{document.contentKind === "PROMOTION" && <fieldset className="grid gap-2"><legend className="text-sm font-medium">대상 지점</legend>{catalog.hotels.map((hotel) => <label key={hotel.id} className="flex min-h-11 items-center gap-2 text-sm"><Checkbox aria-label={`대상 지점 ${hotel.name}`} checked={connections.targetHotelIds.includes(hotel.id)} onCheckedChange={(checked) => changeConnections({ ...connections, targetHotelIds: checked === true ? [...connections.targetHotelIds, hotel.id] : connections.targetHotelIds.filter((id) => id !== hotel.id) })} />{hotel.name}</label>)}</fieldset>}<label className="grid gap-1 text-sm font-medium">연결 객실 유형<select aria-label="연결 객실 유형" value={connections.roomTypeIds[0] ?? ""} onChange={(event) => changeConnections({ ...connections, roomTypeIds: event.target.value ? [event.target.value] : [] })} className="min-h-11 rounded-md border bg-background px-3"><option value="">객실 유형을 선택하세요</option>{catalog.hotels.filter((hotel) => document.contentKind !== "ROOM" || hotel.id === document.hotelId).flatMap((hotel) => hotel.roomTypes.map((room) => <option key={room.id} value={room.id}>{room.name}</option>))}</select></label>{connectionError && <p role="alert" className="text-sm text-destructive">{connectionError}</p>}</section>}
     <section className="space-y-4 rounded-xl border p-4"><h2 className="font-semibold">검색 결과</h2><Field label="검색 결과 제목" value={text(seo.title)} maxLength={60} onChange={(title) => change({ ...content, seo: { ...seo, title } })} /><Field label="검색 결과 설명" value={text(seo.description)} multiline maxLength={160} onChange={(description) => change({ ...content, seo: { ...seo, description } })} /></section>
     {pageBlocks.map((block, index) => {
-      if (block.type === "HERO") { const cta = record(block.cta); return <section key="hero" className="space-y-4 rounded-xl border p-4"><h2 className="font-semibold">히어로</h2><div className="grid gap-4 md:grid-cols-2"><Field label="히어로 상단 문구" maxLength={100} value={text(block.eyebrow)} onChange={(eyebrow) => changeBlock(index, (current) => ({ ...current, eyebrow }))} /><Field label="히어로 제목" maxLength={160} value={text(block.title)} onChange={(title) => changeBlock(index, (current) => ({ ...current, title }))} /><div className="md:col-span-2"><Field label="히어로 설명" multiline maxLength={1000} value={text(block.description)} onChange={(description) => changeBlock(index, (current) => ({ ...current, description }))} /></div><MediaField token={token} assetId={text(block.imageAssetId)} deliveryUrl={text(block.imageSrc)} altText={text(block.imageAlt)} protectedAssetIds={protectedAssetIds} onAssetSelect={(asset) => changeBlock(index, (current) => ({ ...current, imageAssetId: asset.id, imageSrc: asset.deliveryUrl, imageAlt: asset.defaultAltText }))} onAltTextChange={(imageAlt) => changeBlock(index, (current) => ({ ...current, imageAlt }))} /><Field label="히어로 CTA 문구" maxLength={100} value={text(cta.label)} onChange={(label) => changeBlock(index, (current) => ({ ...current, cta: { ...record(current.cta), label } }))} /><Field label="히어로 CTA 주소" maxLength={255} value={text(cta.href)} onChange={(href) => changeBlock(index, (current) => ({ ...current, cta: { ...record(current.cta), href } }))} /></div></section>; }
+      if (block.type === "HERO") { const cta = record(block.cta); return <section key="hero" className="space-y-4 rounded-xl border p-4"><h2 className="font-semibold">히어로</h2><div className="grid gap-4 md:grid-cols-2"><Field label="히어로 상단 문구" maxLength={100} value={text(block.eyebrow)} onChange={(eyebrow) => changeBlock(index, (current) => ({ ...current, eyebrow }))} /><Field label="히어로 제목" maxLength={160} value={text(block.title)} onChange={(title) => changeBlock(index, (current) => ({ ...current, title }))} /><div className="md:col-span-2"><Field label="히어로 설명" multiline maxLength={1000} value={text(block.description)} onChange={(description) => changeBlock(index, (current) => ({ ...current, description }))} /></div><MediaField token={token} assetId={text(block.imageAssetId)} deliveryUrl={text(block.imageSrc)} altText={text(block.imageAlt)} protectedAssetIds={protectedAssetIds} onAssetSelect={(asset, imageAlt) => changeBlock(index, (current) => ({ ...current, imageAssetId: asset.id, imageSrc: asset.deliveryUrl, imageAlt }))} onAltTextChange={(imageAlt) => changeBlock(index, (current) => ({ ...current, imageAlt }))} /><Field label="히어로 CTA 문구" maxLength={100} value={text(cta.label)} onChange={(label) => changeBlock(index, (current) => ({ ...current, cta: { ...record(current.cta), label } }))} /><Field label="히어로 CTA 주소" maxLength={255} value={text(cta.href)} onChange={(href) => changeBlock(index, (current) => ({ ...current, cta: { ...record(current.cta), href } }))} /></div></section>; }
       const typeCount = pageBlocks.slice(0, index + 1).filter((item) => item.type === block.type).length;
       const label = block.type === "TEXT" ? `텍스트 ${typeCount}` : `CTA ${typeCount}`;
       if (block.type === "TEXT") { const paragraphs = Array.isArray(block.paragraphs) ? block.paragraphs.map(text) : [""]; return <section key={`${block.type}-${index}`} className="space-y-4 rounded-xl border p-4"><BlockControls label={label} index={index} total={pageBlocks.length} onMove={(direction) => moveBlock(index, direction)} onRemove={() => change({ ...content, blocks: pageBlocks.filter((_, itemIndex) => itemIndex !== index) })} /><Field label={`${label} 상단 문구`} maxLength={100} value={text(block.eyebrow)} onChange={(eyebrow) => changeBlock(index, (current) => ({ ...current, eyebrow }))} /><Field label={`${label} 제목`} maxLength={160} value={text(block.title)} onChange={(title) => changeBlock(index, (current) => ({ ...current, title }))} />{paragraphs.map((paragraph, paragraphIndex) => <Field key={paragraphIndex} label={`${label} 본문 ${paragraphIndex + 1}`} multiline maxLength={1000} value={paragraph} onChange={(nextParagraph) => { const next = [...paragraphs]; next[paragraphIndex] = nextParagraph; changeBlock(index, (current) => ({ ...current, paragraphs: next })); }} />)}{paragraphs.length < 6 && <Button type="button" size="sm" variant="outline" onClick={() => changeBlock(index, (current) => ({ ...current, paragraphs: [...paragraphs, ""] }))}><Plus /> 본문 추가</Button>}</section>; }
-       if (["IMAGE_GALLERY", "FEATURE_GRID", "SPEC_TABLE", "ACCORDION", "NOTICE_LIST"].includes(block.type)) return <RichBlockEditor key={`${block.type}-${index}`} block={block} index={index} total={pageBlocks.length} label={`${block.type === "IMAGE_GALLERY" ? "갤러리" : block.type === "FEATURE_GRID" ? "특징" : block.type === "SPEC_TABLE" ? "사양 표" : block.type === "ACCORDION" ? "FAQ" : "안내"} ${typeCount}`} token={token} protectedAssetIds={protectedAssetIds} onMove={(direction) => moveBlock(index, direction)} onRemove={() => change({ ...content, blocks: pageBlocks.filter((_, itemIndex) => itemIndex !== index) })} onChange={(update) => changeBlock(index, update)} />;
-      if (block.type === "BOOKING_CTA") return <section key={`${block.type}-${index}`} className="space-y-4 rounded-xl border p-4"><BlockControls label="예약 CTA" index={index} total={pageBlocks.length} onMove={(direction) => moveBlock(index, direction)} onRemove={() => change({ ...content, blocks: pageBlocks.filter((_, itemIndex) => itemIndex !== index) })} /><Field label="예약 CTA 문구" maxLength={100} value={text(block.label)} onChange={(label) => changeBlock(index, (current) => ({ ...current, label }))} /><Field label="예약 CTA 설명" multiline maxLength={1000} value={text(block.description)} onChange={(description) => changeBlock(index, (current) => ({ ...current, description }))} /><label className="grid gap-1 text-sm font-medium">예약 CTA 대상 지점<select aria-label="예약 CTA 대상 지점" value={text(block.hotelId) || document.hotelId || ""} onChange={(event) => changeBlock(index, (current) => ({ ...current, hotelId: event.target.value }))} className="min-h-11 rounded-md border bg-background px-3"><option value="">지점을 선택하세요</option>{catalog.hotels.map((hotel) => <option key={hotel.id} value={hotel.id}>{hotel.name}</option>)}</select></label></section>;
-      if (["RICH_TEXT", "LOCATION", "PROMOTION_SUMMARY", "RELATED_COLLECTION", "OPERATING_HOURS"].includes(block.type)) return <section key={`${block.type}-${index}`} className="space-y-4 rounded-xl border p-4"><BlockControls label={block.type === "RICH_TEXT" ? "소개" : block.type === "LOCATION" ? "위치" : block.type === "PROMOTION_SUMMARY" ? "프로모션 요약" : block.type === "RELATED_COLLECTION" ? "관련 콘텐츠" : "운영 시간"} index={index} total={pageBlocks.length} onMove={(direction) => moveBlock(index, direction)} onRemove={() => change({ ...content, blocks: pageBlocks.filter((_, itemIndex) => itemIndex !== index) })} /><Field label={`${block.type} 제목`} value={text(block.title)} onChange={(title) => changeBlock(index, (current) => ({ ...current, title }))} />{block.type === "LOCATION" ? <><Field label="주소" value={text(block.address)} onChange={(address) => changeBlock(index, (current) => ({ ...current, address }))} /><Field label="길 안내" multiline value={text(block.directions)} onChange={(directions) => changeBlock(index, (current) => ({ ...current, directions }))} /></> : <Field label={`${block.type} 내용`} multiline value={text(block.description) || text(block.salesPeriod) || text((Array.isArray(block.paragraphs) ? block.paragraphs[0] : ""))} onChange={(description) => changeBlock(index, (current) => ({ ...current, description, ...(current.type === "PROMOTION_SUMMARY" ? { salesPeriod: description } : {}) }))} />}</section>;
+       if (["IMAGE_GALLERY", "FEATURE_GRID", "SPEC_TABLE", "ACCORDION", "NOTICE_LIST"].includes(block.type)) return <RichBlockEditor key={`${block.type}-${index}`} block={block} index={index} total={pageBlocks.length} label={`${block.type === "IMAGE_GALLERY" ? "갤러리" : block.type === "FEATURE_GRID" ? "특징" : block.type === "SPEC_TABLE" ? "사양 표" : block.type === "ACCORDION" ? "FAQ" : "안내"} ${typeCount}`} token={token} locale={locale} protectedAssetIds={protectedAssetIds} onMove={(direction) => moveBlock(index, direction)} onRemove={() => change({ ...content, blocks: pageBlocks.filter((_, itemIndex) => itemIndex !== index) })} onChange={(update) => changeBlock(index, update)} />;
+      if (block.type === "BOOKING_CTA") return <section key={`${block.type}-${index}`} className="space-y-4 rounded-xl border p-4"><BlockControls label="예약 CTA" index={index} total={pageBlocks.length} onMove={(direction) => moveBlock(index, direction)} onRemove={() => change({ ...content, blocks: pageBlocks.filter((_, itemIndex) => itemIndex !== index) })} />{locale === "en" && <><Field label="예약 CTA 제목" maxLength={160} value={text(block.title)} onChange={(title) => changeBlock(index, (current) => ({ ...current, title }))} /><Field label="예약 CTA 상단 문구" maxLength={100} value={text(block.eyebrow)} onChange={(eyebrow) => changeBlock(index, (current) => { const next: ContentBlock = { ...current, eyebrow }; if (!eyebrow.trim()) delete next.eyebrow; return next; })} /></>}<Field label="예약 CTA 문구" maxLength={100} value={text(block.label)} onChange={(label) => changeBlock(index, (current) => ({ ...current, label }))} /><Field label="예약 CTA 설명" multiline maxLength={1000} value={text(block.description)} onChange={(description) => changeBlock(index, (current) => ({ ...current, description }))} /><label className="grid gap-1 text-sm font-medium">예약 CTA 대상 지점<select aria-label="예약 CTA 대상 지점" value={text(block.hotelId) || document.hotelId || ""} onChange={(event) => changeBlock(index, (current) => ({ ...current, hotelId: event.target.value }))} className="min-h-11 rounded-md border bg-background px-3"><option value="">지점을 선택하세요</option>{catalog.hotels.map((hotel) => <option key={hotel.id} value={hotel.id}>{hotel.name}</option>)}</select></label></section>;
+      if (["RICH_TEXT", "LOCATION", "PROMOTION_SUMMARY", "RELATED_COLLECTION", "OPERATING_HOURS"].includes(block.type)) return <section key={`${block.type}-${index}`} className="space-y-4 rounded-xl border p-4"><BlockControls label={block.type === "RICH_TEXT" ? "소개" : block.type === "LOCATION" ? "위치" : block.type === "PROMOTION_SUMMARY" ? "프로모션 요약" : block.type === "RELATED_COLLECTION" ? "관련 콘텐츠" : "운영 시간"} index={index} total={pageBlocks.length} onMove={(direction) => moveBlock(index, direction)} onRemove={() => change({ ...content, blocks: pageBlocks.filter((_, itemIndex) => itemIndex !== index) })} /><Field label={`${block.type} 제목`} value={text(block.title)} onChange={(title) => changeBlock(index, (current) => ({ ...current, title }))} />{locale === "en" ? <TranslationBlockFields block={block} onChange={(update) => changeBlock(index, update)} /> : block.type === "LOCATION" ? <><Field label="주소" value={text(block.address)} onChange={(address) => changeBlock(index, (current) => ({ ...current, address }))} /><Field label="길 안내" multiline value={text(block.directions)} onChange={(directions) => changeBlock(index, (current) => ({ ...current, directions }))} /></> : <Field label={`${block.type} 내용`} multiline value={text(block.description) || text(block.salesPeriod) || text((Array.isArray(block.paragraphs) ? block.paragraphs[0] : ""))} onChange={(description) => changeBlock(index, (current) => ({ ...current, description, ...(current.type === "PROMOTION_SUMMARY" ? { salesPeriod: description } : {}) }))} />}</section>;
       const cta = record(block.cta); return <section key={`${block.type}-${index}`} className="space-y-4 rounded-xl border p-4"><BlockControls label={label} index={index} total={pageBlocks.length} onMove={(direction) => moveBlock(index, direction)} onRemove={() => change({ ...content, blocks: pageBlocks.filter((_, itemIndex) => itemIndex !== index) })} /><Field label={`${label} 상단 문구`} maxLength={100} value={text(block.eyebrow)} onChange={(eyebrow) => changeBlock(index, (current) => ({ ...current, eyebrow }))} /><Field label={`${label} 제목`} maxLength={160} value={text(block.title)} onChange={(title) => changeBlock(index, (current) => ({ ...current, title }))} /><Field label={`${label} 설명`} multiline maxLength={1000} value={text(block.description)} onChange={(description) => changeBlock(index, (current) => ({ ...current, description }))} /><Field label={`${label} 버튼 문구`} maxLength={100} value={text(cta.label)} onChange={(label) => changeBlock(index, (current) => ({ ...current, cta: { ...record(current.cta), label } }))} /><Field label={`${label} 버튼 주소`} maxLength={255} value={text(cta.href)} onChange={(href) => changeBlock(index, (current) => ({ ...current, cta: { ...record(current.cta), href } }))} /></section>;
     })}
     <div className="flex flex-wrap gap-2">{addableBlocks.map((type) => <Button key={type} type="button" variant="outline" onClick={() => addBlock(type)} disabled={pageBlocks.length >= 20}><Plus /> {({ TEXT: "텍스트 블록 추가", CTA: "CTA 블록 추가", IMAGE_GALLERY: "갤러리 추가", FEATURE_GRID: "특징 추가", SPEC_TABLE: "사양 표 추가", ACCORDION: "FAQ 추가", NOTICE_LIST: "안내 추가", RICH_TEXT: "소개 추가", OPERATING_HOURS: "운영 시간 추가", LOCATION: "위치 추가", PROMOTION_SUMMARY: "프로모션 요약 추가", RELATED_COLLECTION: "관련 콘텐츠 추가", BOOKING_CTA: "예약 CTA 추가" } as Record<string, string>)[type]}</Button>)}</div>

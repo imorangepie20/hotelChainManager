@@ -194,6 +194,21 @@ export type WebsitePageDocument = {
   lifecycleStatus: "ACTIVE" | "ARCHIVED";
   lifecycleVersion: number;
 };
+export type WebsiteTranslationReviewStatus = "DRAFT" | "IN_REVIEW" | "APPROVED" | "PUBLISHED";
+export type WebsiteTranslationReviewEvent = {
+  id: number;
+  action: "REVIEW_REQUESTED" | "APPROVED" | "REJECTED" | "APPROVAL_INVALIDATED" | "PUBLISHED";
+  draftVersion: number;
+  actorId: string | null;
+  actorDisplayName: string | null;
+  createdAt: string;
+  comment: string | null;
+};
+export type WebsiteTranslationReviewState = {
+  status: WebsiteTranslationReviewStatus;
+  reviewedDraftVersion: number | null;
+  events: WebsiteTranslationReviewEvent[];
+};
 export type WebsiteHomeDocument = Omit<WebsitePageDocument, "pageType" | "hotelId"> & {
   pageType: "HOME_PAGE";
   hotelId: null;
@@ -221,6 +236,19 @@ export type WebsitePageLifecycleInput = {
   expectedDraftVersion: number;
   expectedPublishedVersion: number;
 };
+export type WebsitePageMoveInput = {
+  parentId: string;
+  slug: string;
+  expectedDraftVersion: number;
+  expectedLifecycleVersion: number;
+  expectedPublishedVersion: number;
+};
+export type WebsitePageMoveImpactItem = {
+  pageId: string; currentDraftPath: string; nextDraftPath: string;
+  currentPublishedPath: string | null; nextPublishedPath: string | null;
+  depth: number; published: boolean;
+};
+export type WebsitePageMoveImpact = { pageId: string; newParentId: string; newRootDraftPath: string; items: WebsitePageMoveImpactItem[] };
 export type WebsiteMediaAsset = {
   id: string;
   displayName: string;
@@ -233,8 +261,11 @@ export type WebsiteMediaAsset = {
   usageCount: number;
   status: "ACTIVE" | "ARCHIVED";
   version: number;
+  archivedAt: string | null;
+  permanentDeleteAvailableAt: string | null;
 };
 export type WebsiteMediaUsage = {
+  locale?: "ko" | "en";
   pageId: string;
   pageLabel: string;
   pagePath: string;
@@ -324,6 +355,17 @@ export function restoreWebsiteMedia(token: string, mediaId: string, input: Websi
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
   });
 }
+export async function deleteWebsiteMedia(token: string, mediaId: string, input: WebsiteMediaVersionInput): Promise<void> {
+  const response = await fetch(`/api/staff/website/media/${mediaId}`, {
+    method: "DELETE",
+    headers: { "X-Staff-Session": token, "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(error.message ?? "미디어를 영구 삭제하지 못했습니다.", response.status, error.code);
+  }
+}
 export function getWebsitePageTree(token: string) { return contentRequest<WebsitePageTreeItem[]>("/api/staff/website/pages", token); }
 export function getContentReferenceCatalog(token: string) { return contentRequest<ContentReferenceCatalog>("/api/staff/website/content-reference", token); }
 export function createWebsitePage(token: string, input: CreateWebsitePageInput) {
@@ -331,6 +373,49 @@ export function createWebsitePage(token: string, input: CreateWebsitePageInput) 
 }
 export function getWebsitePage(token: string, pageId: string) {
   return contentRequest<WebsitePageDocument>(`/api/staff/website/pages/${pageId}`, token);
+}
+export function getWebsiteTranslation(token: string, pageId: string) {
+  return contentRequest<WebsitePageDocument>(`/api/staff/website/pages/${pageId}/translations/en`, token);
+}
+export function getWebsiteTranslationReview(token: string, pageId: string) {
+  return contentRequest<WebsiteTranslationReviewState>(`/api/staff/website/pages/${pageId}/translations/en/review`, token);
+}
+export function requestWebsiteTranslationReview(token: string, pageId: string, expectedDraftVersion: number, comment: string | null) {
+  return contentRequest<WebsiteTranslationReviewState>(`/api/staff/website/pages/${pageId}/translations/en/review/request`, token, {
+    method: "POST", body: JSON.stringify({ expectedDraftVersion, comment }),
+  });
+}
+export function approveWebsiteTranslationReview(token: string, pageId: string, expectedDraftVersion: number, comment: string | null) {
+  return contentRequest<WebsiteTranslationReviewState>(`/api/staff/website/pages/${pageId}/translations/en/review/approve`, token, {
+    method: "POST", body: JSON.stringify({ expectedDraftVersion, comment }),
+  });
+}
+export function rejectWebsiteTranslationReview(token: string, pageId: string, expectedDraftVersion: number, comment: string) {
+  return contentRequest<WebsiteTranslationReviewState>(`/api/staff/website/pages/${pageId}/translations/en/review/reject`, token, {
+    method: "POST", body: JSON.stringify({ expectedDraftVersion, comment }),
+  });
+}
+export function initializeWebsiteTranslation(token: string, pageId: string, expectedSourceDraftVersion: number, expectedLifecycleVersion: number) {
+  return contentRequest<WebsitePageDocument>(`/api/staff/website/pages/${pageId}/translations/en`, token, {
+    method: "POST", body: JSON.stringify({ expectedSourceDraftVersion, expectedLifecycleVersion }),
+  });
+}
+export function saveWebsiteTranslation(token: string, pageId: string, input: SaveWebsitePageInput) {
+  return contentRequest<WebsitePageDocument>(`/api/staff/website/pages/${pageId}/translations/en`, token, { method: "PUT", body: JSON.stringify(input) });
+}
+export function publishWebsiteTranslation(token: string, pageId: string, expectedDraftVersion: number, expectedPublishedVersion: number) {
+  return contentRequest<WebsitePageDocument>(`/api/staff/website/pages/${pageId}/translations/en/publish`, token, {
+    method: "POST", body: JSON.stringify({ expectedDraftVersion, expectedPublishedVersion }),
+  });
+}
+export function getWebsiteTranslationVersions(token: string, pageId: string) {
+  return contentRequest<WebContentVersion[]>(`/api/staff/website/pages/${pageId}/translations/en/versions`, token);
+}
+export function getWebsitePageMoveImpact(token: string, pageId: string, parentId: string, slug: string) {
+  return contentRequest<WebsitePageMoveImpact>(`/api/staff/website/pages/${pageId}/move-impact?parentId=${encodeURIComponent(parentId)}&slug=${encodeURIComponent(slug)}`, token);
+}
+export function moveWebsitePage(token: string, pageId: string, input: WebsitePageMoveInput) {
+  return contentRequest<WebsitePageDocument>(`/api/staff/website/pages/${pageId}/move`, token, { method: "POST", body: JSON.stringify(input) });
 }
 export function saveWebsitePage(token: string, pageId: string, input: SaveWebsitePageInput) {
   return contentRequest<WebsitePageDocument>(`/api/staff/website/pages/${pageId}`, token, { method: "PUT", body: JSON.stringify(input) });

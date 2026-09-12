@@ -16,6 +16,246 @@ const UPLOADED_ASSET = "14000000-0000-0000-0000-000000000002";
 const ARCHIVED_ASSET = "14000000-0000-0000-0000-000000000003";
 const INITIAL_PUBLISHED_VERSION = 1;
 
+for (const width of [1280, 390]) test(`edits and publishes the English translation independently (${width}px)`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 844 });
+  let english = contentPageDocument({ draftContent: {}, draftVersion: 0, publishedVersion: 0, publishedMetadata: null,
+    draftMetadata: { slug: "story", path: "/en/brand/story", menuLabel: "", menuVisible: false, menuOrder: 0 } });
+  let review = translationReviewState();
+  const writes: { method: string; url: string; body: Record<string, unknown> }[] = [];
+  const translationPath = `/api/staff/website/pages/${STORY_PAGE}/translations/en`;
+  await page.route(`**${translationPath}`, async (route) => {
+    const method = route.request().method();
+    if (method !== "GET") {
+      const body = route.request().postDataJSON();
+      writes.push({ method, url: route.request().url(), body });
+      if (method === "POST") english = contentPageDocument({ draftVersion: 1, publishedVersion: 0, publishedMetadata: null,
+        draftMetadata: { slug: "story", path: "/en/brand/story", menuLabel: "브랜드 이야기", menuVisible: true, menuOrder: 10 } });
+      else english = { ...english, draftContent: body.content, draftVersion: 2, draftMetadata: { ...body.page, path: "/en/brand/story" } };
+    }
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(english) });
+  });
+  await page.route(`**${translationPath}/versions`, (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
+  await page.route(`**${translationPath}/review`, (route) => route.fulfill({ json: review }));
+  await page.route(`**${translationPath}/review/request`, (route) => {
+    writes.push({ method: "POST", url: route.request().url(), body: route.request().postDataJSON() });
+    review = translationReviewState({ status: "IN_REVIEW", reviewedDraftVersion: 2 });
+    return route.fulfill({ json: review });
+  });
+  await page.route(`**${translationPath}/review/approve`, (route) => {
+    writes.push({ method: "POST", url: route.request().url(), body: route.request().postDataJSON() });
+    review = translationReviewState({ status: "APPROVED", reviewedDraftVersion: 2 });
+    return route.fulfill({ json: review });
+  });
+  await page.route(`**${translationPath}/publish`, (route) => {
+    writes.push({ method: "POST", url: route.request().url(), body: route.request().postDataJSON() });
+    review = translationReviewState({ status: "PUBLISHED", reviewedDraftVersion: 2 });
+    english = { ...english, publishedVersion: 1, publishedContent: english.draftContent, publishedMetadata: english.draftMetadata };
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify(english) });
+  });
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: /브랜드 이야기/ }).click();
+  await expect(page.getByLabel("히어로 제목", { exact: true })).toHaveValue("브랜드 이야기");
+  await page.getByRole("button", { name: "영어", exact: true }).click();
+  await expect(page.getByText("영어 번역 초안이 없습니다.", { exact: true })).toBeVisible();
+  expect(writes).toHaveLength(0);
+  await page.getByRole("button", { name: "한국어 초안을 가져오기" }).click();
+  await page.getByLabel("히어로 제목", { exact: true }).fill("Our story");
+  await page.getByLabel("이미지 대체 텍스트").fill("English coast");
+  await expect(page.getByRole("button", { name: "검토 요청", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "발행", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "한국어", exact: true }).click();
+  const warning = page.getByRole("alertdialog");
+  await expect(warning).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(warning).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "한국어", exact: true })).toBeFocused();
+  await expect(page.getByLabel("히어로 제목", { exact: true })).toHaveValue("Our story");
+  if (process.env.CMS_LOCALE_SCREENSHOTS) {
+    await page.getByRole("heading", { name: "웹사이트 콘텐츠", exact: true }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `../.tmp/cms-locale-admin-${width}.png`, fullPage: true });
+  }
+  const overflow = await page.evaluate(() => [...document.querySelectorAll("body *")].filter((element) => element.getBoundingClientRect().right > window.innerWidth + 1).map((element) => ({ tag: element.tagName, className: element.className, text: element.textContent?.slice(0, 60) })).slice(-12));
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), JSON.stringify(overflow)).toBe(true);
+  await page.getByRole("button", { name: "초안 저장", exact: true }).click();
+  await page.getByRole("button", { name: "검토 요청", exact: true }).click();
+  await expect(page.getByText("검토 중", { exact: true })).toBeVisible();
+  await expect(page.getByText("검토 대상 초안 v2", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "승인", exact: true }).click();
+  await expect(page.getByText("승인됨", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "발행", exact: true }).click();
+  await expect(page.getByText("발행됨", { exact: true })).toBeVisible();
+  expect(writes.map((write) => write.method)).toEqual(["POST", "PUT", "POST", "POST", "POST"]);
+  expect(writes[1].body.content).toMatchObject({ blocks: [{ title: "Our story", imageAlt: "English coast" }] });
+  expect(writes[2].body).toEqual({ expectedDraftVersion: 2, comment: null });
+  expect(writes[3].body).toEqual({ expectedDraftVersion: 2, comment: null });
+  expect(writes[4].body).toEqual({ expectedDraftVersion: 2, expectedPublishedVersion: 0 });
+  expect(writes[4].url).toContain("/publish");
+  await page.getByRole("button", { name: "한국어", exact: true }).click();
+  await expect(page.getByLabel("히어로 제목", { exact: true })).toHaveValue("브랜드 이야기");
+});
+
+test("rejects an English translation with a required reason and restores focus", async ({ page }) => {
+  let review = translationReviewState({ status: "IN_REVIEW", reviewedDraftVersion: 1 });
+  let rejection: Record<string, unknown> | undefined;
+  let rejectAttempts = 0;
+  const translationPath = `/api/staff/website/pages/${STORY_PAGE}/translations/en`;
+  await page.route(`**${translationPath}`, route => route.fulfill({ json: contentPageDocument({ publishedVersion: 0, publishedMetadata: null }) }));
+  await page.route(`**${translationPath}/versions`, route => route.fulfill({ json: [] }));
+  await page.route(`**${translationPath}/review`, route => route.fulfill({ json: review }));
+  await page.route(`**${translationPath}/review/reject`, route => {
+    rejection = route.request().postDataJSON();
+    rejectAttempts += 1;
+    if (rejectAttempts === 1) return route.fulfill({ status: 409, json: { message: "다른 관리자가 검토 상태를 변경했습니다. 새로고침 후 다시 시도해 주세요." } });
+    review = translationReviewState({ status: "DRAFT", reviewedDraftVersion: null });
+    return route.fulfill({ json: review });
+  });
+
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: /브랜드 이야기/ }).click();
+  await page.getByRole("button", { name: "영어", exact: true }).click();
+  const rejectButton = page.getByRole("button", { name: "반려", exact: true });
+  await rejectButton.click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog.getByRole("heading", { name: "영어 번역을 반려할까요?", exact: true })).toBeVisible();
+  const submit = dialog.getByRole("button", { name: "반려하기", exact: true });
+  await expect(submit).toBeDisabled();
+  const rejectionField = dialog.getByLabel("반려 사유", { exact: true });
+  await expect(rejectionField).toHaveAttribute("maxlength", "2000");
+  await rejectionField.fill("이미지 설명을 영어로 보완해 주세요.");
+  await submit.click();
+  await expect(dialog.getByRole("alert")).toContainText("새로고침 후 다시 시도해 주세요.");
+  await expect(rejectionField).toHaveValue("이미지 설명을 영어로 보완해 주세요.");
+  await submit.click();
+  expect(rejection).toEqual({ expectedDraftVersion: 1, comment: "이미지 설명을 영어로 보완해 주세요." });
+  await expect(page.getByLabel("영어 번역 검토").getByText("초안", { exact: true })).toBeVisible();
+  await expect(page.getByRole("status").filter({ hasText: "영어 번역을 반려했습니다." })).toBeVisible();
+
+  review = translationReviewState({ status: "IN_REVIEW", reviewedDraftVersion: 1 });
+  await page.reload();
+  await page.getByRole("button", { name: /브랜드 이야기/ }).click();
+  await page.getByRole("button", { name: "영어", exact: true }).click();
+  const reopenedRejectButton = page.getByRole("button", { name: "반려", exact: true });
+  await reopenedRejectButton.click();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await expect(reopenedRejectButton).toBeFocused();
+});
+
+test("translates rich text paragraphs and gallery captions without changing the schema", async ({ page }) => {
+  const initial = contentPageDocument();
+  const blocks = [...(initial.draftContent as { blocks: unknown[] }).blocks,
+    { type: "RICH_TEXT", eyebrow: "Story", title: "About us", paragraphs: ["First paragraph", "Second paragraph"] },
+    { type: "IMAGE_GALLERY", title: "Gallery", items: [
+      { imageAssetId: BUNDLED_ASSET, imageSrc: "/images/sokcho-coast-hero.png", imageAlt: "Coast", caption: "First caption" },
+      { imageAssetId: BUNDLED_ASSET, imageSrc: "/images/sokcho-coast-hero.png", imageAlt: "Hotel", caption: "Second caption" },
+    ] },
+  ];
+  let english = contentPageDocument({ draftContent: { ...initial.draftContent, blocks }, publishedVersion: 0, publishedMetadata: null });
+  let saved: Record<string, unknown> | undefined;
+  await page.route(`**/api/staff/website/pages/${STORY_PAGE}/translations/en`, async (route) => {
+    if (route.request().method() === "PUT") {
+      saved = route.request().postDataJSON();
+      english = { ...english, draftContent: saved!.content as typeof initial.draftContent, draftVersion: 2 };
+    }
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(english) });
+  });
+  await page.route(`**/api/staff/website/pages/${STORY_PAGE}/translations/en/versions`, route => route.fulfill({ contentType: "application/json", body: "[]" }));
+  await page.route(`**/api/staff/website/pages/${STORY_PAGE}/translations/en/review`, route => route.fulfill({ json: translationReviewState() }));
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: /브랜드 이야기/ }).click();
+  await page.getByRole("button", { name: "영어", exact: true }).click();
+  await page.getByLabel("소개 문단 2", { exact: true }).fill("Translated second paragraph");
+  await page.getByLabel("갤러리 1 2 캡션", { exact: true }).fill("Translated caption");
+  await page.getByLabel("갤러리 1 설명", { exact: true }).fill("Translated gallery description", { timeout: 5000 });
+  await page.getByRole("button", { name: "초안 저장", exact: true }).click();
+  await expect(page.getByRole("button", { name: "검토 요청", exact: true })).toBeEnabled();
+  expect((saved!.content as { blocks: unknown[] }).blocks).toMatchObject([
+    { type: "HERO" }, { type: "RICH_TEXT", paragraphs: ["First paragraph", "Translated second paragraph"] },
+    { type: "IMAGE_GALLERY", description: "Translated gallery description", items: [{ caption: "First caption" }, { caption: "Translated caption" }] },
+  ]);
+  expect((saved!.content as { blocks: Record<string, unknown>[] }).blocks[1]).not.toHaveProperty("description");
+});
+
+test("discards late English page reads after selecting another page", async ({ page }) => {
+  let release: (() => Promise<void>) | undefined;
+  const path = `/api/staff/website/pages/${STORY_PAGE}/translations/en`;
+  await page.route(`**${path}`, async route => {
+    await new Promise<void>(resolve => { release = async () => { await route.fulfill({ json: contentPageDocument() }); resolve(); }; });
+  });
+  await page.route(`**${path}/versions`, route => route.fulfill({ json: [] }));
+  await page.route(`**${path}/review`, route => route.fulfill({ json: translationReviewState() }));
+  await page.route(`**/api/staff/website/pages/${HOME_PAGE}/translations/en`, route => route.fulfill({ json: homePageDocument() }));
+  await page.route(`**/api/staff/website/pages/${HOME_PAGE}/translations/en/versions`, route => route.fulfill({ json: [] }));
+  await page.route(`**/api/staff/website/pages/${HOME_PAGE}/translations/en/review`, route => route.fulfill({ json: translationReviewState() }));
+  await page.route(`**/api/staff/website/pages/${HOME_PAGE}`, route => route.fulfill({ json: homePageDocument() }));
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: /브랜드 이야기/ }).click();
+  await page.getByRole("button", { name: "영어", exact: true }).click();
+  await expect.poll(() => Boolean(release)).toBe(true);
+  await page.getByRole("button", { name: /^홈/ }).click();
+  await expect(page.getByRole("heading", { name: "홈페이지 콘텐츠", exact: true })).toBeVisible();
+  const lateResponse = page.waitForResponse(response => new URL(response.url()).pathname === path);
+  await release!();
+  await lateResponse;
+  await expect(page.getByLabel("히어로 제목", { exact: true })).toHaveValue("홈페이지 제목");
+});
+
+test("does not expose Korean lifecycle writes from the English archived editor", async ({ page }) => {
+  await page.route(`**/api/staff/website/pages/${STORY_PAGE}/translations/en`, route => route.fulfill({ json: contentPageDocument({ lifecycleStatus: "ARCHIVED" }) }));
+  await page.route(`**/api/staff/website/pages/${STORY_PAGE}/translations/en/versions`, route => route.fulfill({ json: [] }));
+  await page.route(`**/api/staff/website/pages/${STORY_PAGE}/translations/en/review`, route => route.fulfill({ json: translationReviewState() }));
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: /브랜드 이야기/ }).click();
+  await page.getByRole("button", { name: "영어", exact: true }).click();
+  await expect(page.getByText("한국어 화면에서 페이지를 복원한 뒤", { exact: false })).toBeVisible();
+  await expect(page.getByRole("button", { name: "초안으로 복원", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "영구 삭제", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "초안 저장", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "검토 요청", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "발행", exact: true })).toHaveCount(0);
+});
+
+test("saves English landing content, alt and SEO independently", async ({ page }) => {
+  const path = "/api/staff/website/pages/sokcho-page/translations/en";
+  let document = contentPageDocument({ id: "sokcho-page", pageType: "HOTEL_LANDING", hotelId: SOKCHO, contentKind: "LANDING", publishedVersion: 0, publishedMetadata: null,
+    draftMetadata: { slug: "sokcho", path: "/en/stays/sokcho", menuLabel: "Sokcho", menuVisible: true, menuOrder: 10 },
+    draftContent: { heroAssetId: BUNDLED_ASSET, heroImage: "/images/sokcho-coast-hero.png", heroAlt: "Coast", eyebrow: "SOKCHO", title: "English hotel", description: "By the sea", arrival: { address: "Coast road", checkInOut: "15:00 / 11:00", highlight: "Arrive slowly" }, experiences: [{ category: "ROOM", title: "Ocean room", description: "Ocean view" }], offers: [{ title: "Stay offer", detail: "Two nights", bookingPeriod: "September", stayPeriod: "October" }], seo: { title: "Sokcho", description: "Sokcho stay" } } });
+  const writes: Record<string, unknown>[] = [];
+  let review = translationReviewState();
+  await page.route("**/api/staff/website/pages/sokcho-page", route => route.fulfill({ json: document }));
+  await page.route(`**${path}/versions`, route => route.fulfill({ json: [] }));
+  await page.route(`**${path}`, async route => {
+    if (route.request().method() === "PUT") {
+      const body = route.request().postDataJSON(); writes.push(body);
+      document = { ...document, draftContent: body.content, draftVersion: 2 };
+    }
+    await route.fulfill({ json: document });
+  });
+  await page.route(`**${path}/review`, route => route.fulfill({ json: review }));
+  await page.route(`**${path}/review/request`, route => { writes.push(route.request().postDataJSON()); review = translationReviewState({ status: "IN_REVIEW", reviewedDraftVersion: 2 }); return route.fulfill({ json: review }); });
+  await page.route(`**${path}/review/approve`, route => { writes.push(route.request().postDataJSON()); review = translationReviewState({ status: "APPROVED", reviewedDraftVersion: 2 }); return route.fulfill({ json: review }); });
+  await page.route(`**${path}/publish`, route => { writes.push(route.request().postDataJSON()); document = { ...document, publishedVersion: 1, publishedContent: document.draftContent }; return route.fulfill({ json: document }); });
+  await page.goto("/dashboard/website");
+  await expect(page.getByLabel("히어로 제목", { exact: true })).toHaveValue("속초 제목");
+  await page.getByRole("button", { name: "영어", exact: true }).click();
+  await page.getByLabel("히어로 제목", { exact: true }).fill("Sokcho by the sea");
+  await page.getByLabel("이미지 대체 텍스트").fill("English coastal hotel");
+  await page.getByLabel("SEO 제목", { exact: true }).fill("Sokcho English SEO");
+  await page.getByLabel("경험 1 제목").fill("Ocean suite");
+  await expect(page.getByRole("button", { name: "검토 요청", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "초안 저장", exact: true }).click();
+  await page.getByRole("button", { name: "검토 요청", exact: true }).click();
+  await page.getByRole("button", { name: "승인", exact: true }).click();
+  await page.getByRole("button", { name: "발행", exact: true }).click();
+  await expect(page.getByText("발행본이 고객 웹에 적용되었습니다.", { exact: true })).toBeVisible();
+  expect(writes[0].content).toMatchObject({ title: "Sokcho by the sea", heroAlt: "English coastal hotel", seo: { title: "Sokcho English SEO" }, experiences: [{ title: "Ocean suite" }] });
+  expect(writes[1]).toEqual({ expectedDraftVersion: 2, comment: null });
+  expect(writes[2]).toEqual({ expectedDraftVersion: 2, comment: null });
+  expect(writes[3]).toEqual({ expectedDraftVersion: 2, expectedPublishedVersion: 0 });
+  await page.getByRole("button", { name: "한국어", exact: true }).click();
+  await expect(page.getByLabel("히어로 제목", { exact: true })).toHaveValue("속초 제목");
+});
+
 function mediaAsset(overrides: Record<string, unknown> = {}) {
   return {
     id: BUNDLED_ASSET,
@@ -29,6 +269,8 @@ function mediaAsset(overrides: Record<string, unknown> = {}) {
     usageCount: 4,
     status: "ACTIVE",
     version: 1,
+    archivedAt: null,
+    permanentDeleteAvailableAt: null,
     ...overrides,
   };
 }
@@ -53,6 +295,10 @@ function contentPageDocument(overrides: Record<string, unknown> = {}) {
     lifecycleVersion: 1,
     ...overrides,
   };
+}
+
+function translationReviewState(overrides: Record<string, unknown> = {}) {
+  return { status: "DRAFT", reviewedDraftVersion: null, events: [], ...overrides };
 }
 
 function typedPageDocument(overrides: Record<string, unknown> = {}) {
@@ -164,6 +410,8 @@ test.beforeEach(async ({ page }) => {
       usageCount: 0,
       status: "ARCHIVED",
       version: 2,
+      archivedAt: "2026-07-01T00:00:00Z",
+      permanentDeleteAvailableAt: "2026-07-31T00:00:00Z",
     }),
   ];
 
@@ -304,6 +552,8 @@ test.beforeEach(async ({ page }) => {
       usageCount: 0,
       status: "ARCHIVED",
       version: 2,
+      archivedAt: "2099-01-01T00:00:00Z",
+      permanentDeleteAvailableAt: "2099-01-31T00:00:00Z",
     });
     mediaCatalog = mediaCatalog.map((asset) => asset.id === archived.id ? archived : asset);
     return route.fulfill({ contentType: "application/json", body: JSON.stringify(archived) });
@@ -319,6 +569,12 @@ test.beforeEach(async ({ page }) => {
     });
     mediaCatalog = mediaCatalog.map((asset) => asset.id === restored.id ? restored : asset);
     return route.fulfill({ contentType: "application/json", body: JSON.stringify(restored) });
+  });
+  await page.route(`**/api/staff/website/media/${ARCHIVED_ASSET}/usages`, (route) => route.fulfill({ contentType: "application/json", body: "[]" }));
+  await page.route(`**/api/staff/website/media/${ARCHIVED_ASSET}`, (route) => {
+    if (route.request().method() !== "DELETE") return route.fallback();
+    mediaCatalog = mediaCatalog.filter((asset) => asset.id !== ARCHIVED_ASSET);
+    return route.fulfill({ status: 204 });
   });
   await page.route("**/api/staff/web-content/hotels/**", (route) => {
     const url = new URL(route.request().url());
@@ -880,6 +1136,145 @@ test("selects a catalog asset for a structured page and saves its identifier", a
   });
 });
 
+for (const mobile of [false, true]) {
+  test(`replaces only the current landing image after upload and confirmation${mobile ? " on mobile" : ""}`, async ({ page }) => {
+    if (mobile) await page.setViewportSize({ width: 390, height: 844 });
+    await page.route("**/api/website/media/*/content", (route) => route.fulfill({ contentType: "image/png", path: "../apps/web/public/images/sokcho-coast-hero.png" }));
+    await page.goto("/dashboard/website");
+    const writes: string[] = [];
+    page.on("request", (request) => {
+      if (/\/api\/staff\/(website|web-content)\//.test(request.url()) && !["GET", "OPTIONS"].includes(request.method())) {
+        writes.push(`${request.method()} ${new URL(request.url()).pathname}`);
+      }
+    });
+    await page.getByRole("button", { name: "파일 교체", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "미디어 파일 교체", exact: true });
+    await expect(dialog.getByRole("button", { name: "교체 확인" })).toBeDisabled();
+    await dialog.getByLabel("이미지 파일").setInputFiles({ name: "replacement.jpg", mimeType: "image/jpeg", buffer: Buffer.from("mock-jpeg") });
+    await dialog.getByLabel("자산명", { exact: true }).fill("새로운 제주 이미지");
+    await dialog.getByLabel("기본 대체 텍스트", { exact: true }).fill("새 자산의 기본 alt");
+    await dialog.getByRole("button", { name: "업로드", exact: true }).click();
+    await expect(dialog.getByRole("button", { name: "교체 확인" })).toBeEnabled();
+    await dialog.getByRole("button", { name: "교체 확인" }).click();
+    const confirmation = page.getByRole("alertdialog", { name: "현재 이미지 파일을 교체할까요?" });
+    await expect(confirmation.getByRole("img", { name: "기존 이미지" })).toHaveAttribute("src", /sokcho-coast-hero\.png$/);
+    await expect(confirmation.getByRole("img", { name: "새 이미지" })).toHaveAttribute("src", `/api/website/media/${UPLOADED_ASSET}/content`);
+    await expect(confirmation).toContainText("다른 사용 위치와 발행본은 바뀌지 않습니다");
+    await expect(confirmation).toHaveCSS("opacity", "1");
+    await expect(confirmation.getByRole("img", { name: "새 이미지" })).toHaveJSProperty("naturalWidth", 1672);
+    if (process.env.MEDIA_REPLACEMENT_SCREENSHOTS) await page.screenshot({ path: `../.tmp/media-replacement-${mobile ? "mobile" : "desktop"}.png` });
+    await confirmation.getByRole("button", { name: "교체하기" }).click();
+    await expect(dialog).not.toBeVisible();
+    await expect(page.getByLabel("대표 이미지 대체 텍스트")).toHaveValue("속초 해안");
+    expect(writes).toEqual(["POST /api/staff/website/media"]);
+    await expect(page.getByRole("button", { name: "발행", exact: true })).toBeDisabled();
+    const save = page.waitForRequest((request) => request.method() === "PUT" && request.url().includes(SOKCHO));
+    await page.getByRole("button", { name: "초안 저장" }).click();
+    expect((await save).postDataJSON().content).toMatchObject({ heroAssetId: UPLOADED_ASSET, heroImage: `/api/website/media/${UPLOADED_ASSET}/content`, heroAlt: "속초 해안" });
+    expect(writes).toEqual(["POST /api/staff/website/media", `PUT /api/staff/web-content/hotels/${SOKCHO}`]);
+  });
+}
+
+test("cancels file replacement without applying an uploaded asset and resets the next attempt", async ({ page }) => {
+  await page.goto("/dashboard/website");
+  const trigger = page.getByRole("button", { name: "파일 교체", exact: true });
+  await trigger.click();
+  const dialog = page.getByRole("dialog", { name: "미디어 파일 교체", exact: true });
+  await dialog.getByLabel("이미지 파일").setInputFiles({ name: "replacement.jpg", mimeType: "image/jpeg", buffer: Buffer.from("mock-jpeg") });
+  await dialog.getByLabel("자산명", { exact: true }).fill("새로운 제주 이미지");
+  await dialog.getByLabel("기본 대체 텍스트", { exact: true }).fill("새 자산의 기본 alt");
+  await dialog.getByRole("button", { name: "업로드", exact: true }).click();
+  await dialog.getByRole("button", { name: "교체 확인" }).click();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "취소", exact: true }).click();
+  await expect(trigger).toBeFocused();
+  await expect(page.getByLabel("대표 이미지 대체 텍스트")).toHaveValue("속초 해안");
+  await expect(page.getByRole("button", { name: "발행", exact: true })).toBeEnabled();
+  await trigger.click();
+  await expect(dialog.getByRole("button", { name: "교체 확인" })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await expect(trigger).toBeFocused();
+});
+
+test("rejects invalid replacement uploads without enabling confirmation or changing the page", async ({ page }) => {
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "파일 교체", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "미디어 파일 교체", exact: true });
+  await dialog.getByLabel("이미지 파일").setInputFiles({ name: "invalid.svg", mimeType: "image/svg+xml", buffer: Buffer.from("invalid") });
+  await dialog.getByLabel("자산명", { exact: true }).fill("실패 이미지");
+  await dialog.getByLabel("기본 대체 텍스트", { exact: true }).fill("실패 alt");
+  await dialog.getByRole("button", { name: "업로드", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toContainText("PNG 또는 JPEG");
+  await expect(dialog.getByRole("button", { name: "교체 확인" })).toBeDisabled();
+  await dialog.getByRole("button", { name: "취소", exact: true }).click();
+  await expect(page.getByLabel("대표 이미지 대체 텍스트")).toHaveValue("속초 해안");
+  await expect(page.getByRole("button", { name: "발행", exact: true })).toBeEnabled();
+});
+
+for (const gallery of [false, true]) {
+  test(`file replacement preserves other structured image positions in ${gallery ? "a gallery" : "the homepage"}`, async ({ page }) => {
+    await page.goto("/dashboard/website");
+    await page.getByRole("button", { name: gallery ? "브랜드 이야기" : "홈", exact: true }).click();
+    if (gallery) await page.getByRole("button", { name: "갤러리 추가" }).click();
+    const fields = page.getByLabel("대표 이미지 대체 텍스트");
+    const target = gallery ? 1 : 0;
+    await fields.nth(target).fill("현재 위치의 문맥 alt");
+    await page.getByRole("button", { name: "파일 교체", exact: true }).nth(target).click();
+    const dialog = page.getByRole("dialog", { name: "미디어 파일 교체", exact: true });
+    await dialog.getByLabel("이미지 파일").setInputFiles({ name: "replacement.jpg", mimeType: "image/jpeg", buffer: Buffer.from("mock-jpeg") });
+    await dialog.getByLabel("자산명", { exact: true }).fill("새로운 제주 이미지");
+    await dialog.getByLabel("기본 대체 텍스트", { exact: true }).fill("카탈로그 기본 alt");
+    await dialog.getByRole("button", { name: "업로드", exact: true }).click();
+    await dialog.getByRole("button", { name: "교체 확인" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "교체하기" }).click();
+    await expect(fields.nth(target)).toHaveValue("현재 위치의 문맥 alt");
+    const save = page.waitForRequest((request) => request.method() === "PUT" && request.url().endsWith(gallery ? `/api/staff/website/pages/${STORY_PAGE}` : "/api/staff/website/home"));
+    await page.getByRole("button", { name: "초안 저장" }).click();
+    const blocks = (await save).postDataJSON().content.blocks;
+    const expected = { imageAssetId: UPLOADED_ASSET, imageSrc: `/api/website/media/${UPLOADED_ASSET}/content`, imageAlt: "현재 위치의 문맥 alt" };
+    if (gallery) {
+      expect(blocks[0]).toMatchObject({ imageAssetId: BUNDLED_ASSET, imageAlt: "브랜드 이야기" });
+      expect(blocks[1].items[0]).toMatchObject(expected);
+      expect(blocks[1].items[1]).toMatchObject({ imageAssetId: BUNDLED_ASSET, imageSrc: "/images/sokcho-coast-hero.png", imageAlt: "속초 해안" });
+    } else {
+      expect(blocks[0]).toMatchObject(expected);
+      expect(blocks).toHaveLength(1);
+      expect(blocks[0]).toMatchObject({ title: "홈페이지 제목", cta: { label: "객실 예약", href: "/#booking" } });
+    }
+  });
+}
+
+test("does not apply a late replacement upload after cancel and reopen", async ({ page }) => {
+  let releaseUpload!: () => void;
+  const uploadGate = new Promise<void>((resolve) => { releaseUpload = resolve; });
+  await page.route("**/api/staff/website/media", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    await uploadGate;
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(mediaAsset({ id: UPLOADED_ASSET, deliveryUrl: `/api/website/media/${UPLOADED_ASSET}/content`, usageCount: 0 })) });
+  });
+  await page.goto("/dashboard/website");
+  const trigger = page.getByRole("button", { name: "파일 교체", exact: true });
+  await trigger.click();
+  const dialog = page.getByRole("dialog", { name: "미디어 파일 교체", exact: true });
+  await dialog.getByLabel("이미지 파일").setInputFiles({ name: "replacement.jpg", mimeType: "image/jpeg", buffer: Buffer.from("mock-jpeg") });
+  await dialog.getByLabel("자산명", { exact: true }).fill("지연 업로드");
+  await dialog.getByLabel("기본 대체 텍스트", { exact: true }).fill("지연 alt");
+  const request = page.waitForRequest((item) => item.method() === "POST" && item.url().endsWith("/api/staff/website/media"));
+  await dialog.getByRole("button", { name: "업로드", exact: true }).click();
+  await request;
+  await dialog.getByRole("button", { name: "취소", exact: true }).click();
+  await trigger.click();
+  const response = page.waitForResponse((item) => item.request().method() === "POST" && item.url().endsWith("/api/staff/website/media"));
+  releaseUpload();
+  await response;
+  await expect(dialog.getByRole("button", { name: "교체 확인" })).toBeDisabled();
+  await expect(dialog.getByRole("button", { name: "업로드", exact: true })).toBeEnabled();
+  await dialog.getByRole("button", { name: "취소", exact: true }).click();
+  await expect(page.getByLabel("대표 이미지 대체 텍스트")).toHaveValue("속초 해안");
+  await expect(page.getByRole("button", { name: "발행", exact: true })).toBeEnabled();
+});
+
 test("uploads an asset for a landing page and keeps its page-specific alt text", async ({ page }) => {
   await page.goto("/dashboard/website");
   await page.getByRole("button", { name: "미디어 선택" }).click();
@@ -962,6 +1357,36 @@ test("archives an unused catalog asset only after confirmation and restores it",
   await expect(dialog.getByText("활성 · 버전 3 · 사용 위치 0곳", { exact: true })).toBeVisible();
 });
 
+test("permanently deletes an eligible archived upload after explicit confirmation", async ({ page }) => {
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "미디어 선택" }).click();
+  const dialog = page.getByRole("dialog", { name: "미디어 선택" });
+  await dialog.getByRole("button", { name: "보관된 설악 이미지 선택" }).click();
+
+  await expect(dialog.getByText("영구 삭제 가능", { exact: true })).toBeVisible();
+  const deleteRequest = page.waitForRequest((item) => item.method() === "DELETE" && item.url().endsWith(`/api/staff/website/media/${ARCHIVED_ASSET}`));
+  await dialog.getByRole("button", { name: "영구 삭제" }).click();
+  const confirmation = page.getByRole("alertdialog", { name: "보관 자산을 영구 삭제할까요?" });
+  await expect(confirmation).toContainText("되돌릴 수 없습니다");
+  await confirmation.getByRole("button", { name: "영구 삭제" }).click();
+
+  expect((await deleteRequest).postDataJSON()).toEqual({ expectedVersion: 2 });
+  await expect(dialog.getByRole("button", { name: "보관된 설악 이미지 선택" })).toHaveCount(0);
+  await expect(dialog.getByRole("status")).toContainText("자산을 영구 삭제했습니다");
+});
+
+test("keeps permanent deletion disabled during the archive grace period", async ({ page }) => {
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "미디어 선택" }).click();
+  const dialog = page.getByRole("dialog", { name: "미디어 선택" });
+  await dialog.getByRole("button", { name: "보관 대상 제주 이미지 선택" }).click();
+  await dialog.getByRole("button", { name: "보관", exact: true }).click();
+  await page.getByRole("alertdialog", { name: "미디어를 보관할까요?" }).getByRole("button", { name: "보관하기" }).click();
+
+  await expect(dialog.getByRole("button", { name: "영구 삭제" })).toBeDisabled();
+  await expect(dialog.getByText(/영구 삭제 가능일/)).toBeVisible();
+});
+
 test("discards unsaved catalog metadata when the picker closes", async ({ page }) => {
   await page.goto("/dashboard/website");
   await page.getByRole("button", { name: "미디어 선택" }).click();
@@ -1029,4 +1454,61 @@ test("reloads the current catalog after a media version conflict", async ({ page
   await expect(dialog.getByLabel("선택한 자산 기본 대체 텍스트")).toHaveValue("다른 관리자가 저장한 대체 텍스트");
   await expect(dialog.getByText("최신 자산 정보를 불러왔습니다. 변경 내용을 확인한 뒤 다시 저장해 주세요.")).toBeVisible();
   await expect(dialog.getByRole("button", { name: "보관", exact: true })).toBeDisabled();
+});
+
+test("moves an unpublished content page only after inspecting its impact", async ({ page }) => {
+  let moveRequested = false;
+  await page.route(`**/api/staff/website/pages/${STORY_PAGE}/move-impact?*`, (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ pageId: STORY_PAGE, newParentId: BRAND_SECTION, newRootDraftPath: "/brand/autumn", items: [{ pageId: STORY_PAGE, currentDraftPath: "/brand/story", nextDraftPath: "/brand/autumn", depth: 2, published: false }] }),
+  }));
+  await page.route(`**/api/staff/website/pages/${STORY_PAGE}/move`, (route) => {
+    moveRequested = true;
+    expect(route.request().postDataJSON()).toEqual({ parentId: BRAND_SECTION, slug: "autumn", expectedDraftVersion: 1, expectedLifecycleVersion: 1, expectedPublishedVersion: 0 });
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify(contentPageDocument({ draftMetadata: { slug: "autumn", path: "/brand/autumn", menuLabel: "브랜드 이야기", menuVisible: true, menuOrder: 10 }, draftVersion: 2 })) });
+  });
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "브랜드 이야기" }).click();
+  await page.getByRole("button", { name: "페이지 이동" }).click();
+  const dialog = page.getByRole("dialog", { name: "페이지 이동" });
+  await dialog.getByLabel("새 상위").selectOption(BRAND_SECTION);
+  await dialog.getByLabel("주소 슬러그").fill("autumn");
+  expect(moveRequested).toBe(false);
+  await dialog.getByRole("button", { name: "영향 확인" }).click();
+  await expect(dialog.getByText("/brand/story → /brand/autumn")).toBeVisible();
+  await dialog.getByRole("button", { name: "이동", exact: true }).click();
+  await expect(dialog).toBeHidden();
+  expect(moveRequested).toBe(true);
+});
+
+test("shows permanent redirects and sends the published version when moving a published page", async ({ page }) => {
+  const publishedDocument = contentPageDocument({
+    publishedContent: contentPageDocument().draftContent,
+    publishedVersion: 2,
+    publishedMetadata: { slug: "story", path: "/brand/story", menuLabel: "브랜드 이야기", menuVisible: true, menuOrder: 10 },
+  });
+  await page.unroute(`**/api/staff/website/pages/${STORY_PAGE}`);
+  await page.route(`**/api/staff/website/pages/${STORY_PAGE}`, (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify(publishedDocument),
+  }));
+  await page.route(`**/api/staff/website/pages/${STORY_PAGE}/move-impact?*`, (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ pageId: STORY_PAGE, newParentId: BRAND_SECTION, newRootDraftPath: "/brand/autumn-draft", items: [{ pageId: STORY_PAGE, currentDraftPath: "/brand/story-draft", nextDraftPath: "/brand/autumn-draft", currentPublishedPath: "/brand/story", nextPublishedPath: "/brand/autumn", depth: 2, published: true }] }),
+  }));
+  await page.route(`**/api/staff/website/pages/${STORY_PAGE}/move`, (route) => {
+    expect(route.request().postDataJSON()).toEqual({ parentId: BRAND_SECTION, slug: "autumn", expectedDraftVersion: 1, expectedLifecycleVersion: 1, expectedPublishedVersion: 2 });
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify(publishedDocument) });
+  });
+
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "브랜드 이야기" }).click();
+  await page.getByRole("button", { name: "페이지 이동" }).click();
+  const dialog = page.getByRole("dialog", { name: "페이지 이동" });
+  await dialog.getByLabel("새 상위").selectOption(BRAND_SECTION);
+  await dialog.getByLabel("주소 슬러그").fill("autumn");
+  await dialog.getByRole("button", { name: "영향 확인" }).click();
+  await expect(dialog.getByText("301 리디렉션", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("/brand/story → /brand/autumn")).toBeVisible();
+  await dialog.getByRole("button", { name: "이동", exact: true }).click();
 });
