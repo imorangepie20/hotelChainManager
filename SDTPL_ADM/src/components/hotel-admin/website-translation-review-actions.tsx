@@ -35,23 +35,27 @@ export function WebsiteTranslationReviewActions({
   pageId,
   draftVersion,
   state,
+  reviewReady,
   dirty,
   busy,
   archived,
   onStateChange,
   onPublish,
   onBusyChange,
+  onHistoryRefresh,
 }: {
   token: string;
   pageId: string;
   draftVersion: number;
   state: WebsiteTranslationReviewState;
+  reviewReady: boolean;
   dirty: boolean;
   busy: boolean;
   archived: boolean;
   onStateChange: (state: WebsiteTranslationReviewState) => void;
   onPublish: () => Promise<void>;
   onBusyChange: (busy: boolean) => void;
+  onHistoryRefresh: () => Promise<void>;
 }) {
   const [activeAction, setActiveAction] = useState<ReviewAction | null>(null);
   const [error, setError] = useState("");
@@ -62,7 +66,7 @@ export function WebsiteTranslationReviewActions({
   const inFlight = useRef(false);
   const rejectButtonRef = useRef<HTMLButtonElement>(null);
   const requestButtonRef = useRef<HTMLButtonElement>(null);
-  const blocked = dirty || busy || archived || activeAction !== null;
+  const blocked = !reviewReady || dirty || busy || archived || activeAction !== null;
 
   function restoreRejectFocus() {
     window.setTimeout(() => rejectButtonRef.current?.focus(), 0);
@@ -93,6 +97,7 @@ export function WebsiteTranslationReviewActions({
       const next = await work();
       if (next) onStateChange(next);
       setNotice(successMessage);
+      void onHistoryRefresh().catch(() => undefined);
       return true;
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "검토 상태를 변경하지 못했습니다. 새로고침 후 다시 시도해 주세요.";
@@ -122,8 +127,10 @@ export function WebsiteTranslationReviewActions({
   }
 
   async function publish() {
-    const succeeded = await runAction("publish", onPublish, "발행본이 고객 웹에 적용되었습니다.");
-    if (succeeded) onStateChange({ ...state, status: "PUBLISHED", reviewedDraftVersion: draftVersion });
+    await runAction("publish", async () => {
+      await onPublish();
+      onStateChange({ ...state, status: "PUBLISHED", reviewedDraftVersion: draftVersion });
+    }, "발행본이 고객 웹에 적용되었습니다.");
   }
 
   const actionLabel = activeAction === "request" ? "검토 요청 중"
@@ -140,6 +147,7 @@ export function WebsiteTranslationReviewActions({
         </div>
         {dirty && <p className="text-sm text-muted-foreground">검토 작업 전에 변경사항을 초안으로 저장해 주세요.</p>}
         {archived && <p className="text-sm text-muted-foreground">보관된 페이지에서는 검토 작업을 진행할 수 없습니다.</p>}
+        {!reviewReady && <p className="text-sm text-muted-foreground">검토 상태와 이력을 확인한 뒤 작업할 수 있습니다.</p>}
       </div>
       <div className="flex flex-wrap gap-2">
         {state.status === "DRAFT" && <Button ref={requestButtonRef} type="button" disabled={blocked || draftVersion === 0} onClick={() => void requestReview()}>{activeAction === "request" ? actionLabel : "검토 요청"}</Button>}

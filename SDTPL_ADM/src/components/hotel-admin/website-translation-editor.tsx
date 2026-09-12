@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -13,12 +13,24 @@ import {
   getWebsitePage, getWebsiteTranslation, getWebsiteTranslationReview, getWebsiteTranslationVersions, initializeWebsiteTranslation,
   publishWebsiteTranslation, saveWebsiteTranslation,
   type ContentReferenceCatalog, type WebContentVersion, type WebsitePageDocument, type WebsitePageDraftMetadata,
-  type WebsiteTranslationReviewState,
+  type WebsiteTranslationReviewEvent, type WebsiteTranslationReviewState,
 } from "@/lib/staff-api";
 
 type RecordValue = Record<string, unknown>;
 const record = (value: unknown): RecordValue => value && typeof value === "object" && !Array.isArray(value) ? value as RecordValue : {};
 const text = (value: unknown) => typeof value === "string" ? value : "";
+const reviewActionLabels: Record<WebsiteTranslationReviewEvent["action"], string> = {
+  REVIEW_REQUESTED: "검토 요청",
+  APPROVED: "승인",
+  REJECTED: "반려",
+  APPROVAL_INVALIDATED: "승인 무효화",
+  PUBLISHED: "발행",
+};
+
+function localizedReviewTime(createdAt: string) {
+  const date = new Date(createdAt);
+  return Number.isNaN(date.getTime()) ? "시각 정보 없음" : date.toLocaleString("ko-KR");
+}
 
 function TranslationField({ label, value, onChange }: { label: string; value: unknown; onChange: (value: string) => void }) {
   return <label className="grid gap-1 text-sm font-medium">{label}<Textarea aria-label={label} value={text(value)} maxLength={1000} onChange={(event) => onChange(event.target.value)} /></label>;
@@ -26,7 +38,7 @@ function TranslationField({ label, value, onChange }: { label: string; value: un
 
 function LandingTranslationEditor({ token, document, onDirtyChange, onBusyChange, onApplied }: {
   token: string; document: WebsitePageDocument; onDirtyChange: (dirty: boolean) => void; onBusyChange: (busy: boolean) => void;
-  onApplied: (document: WebsitePageDocument, history: WebContentVersion[]) => void;
+  onApplied: (document: WebsitePageDocument) => void;
 }) {
   const [content, setContent] = useState(document.draftContent);
   const [metadata, setMetadata] = useState<WebsitePageDraftMetadata>(document.draftMetadata);
@@ -42,9 +54,7 @@ function LandingTranslationEditor({ token, document, onDirtyChange, onBusyChange
     setBusy(true); onBusyChange(true); setError(""); setNotice("");
     try {
       const result = await saveWebsiteTranslation(token, document.id, { expectedDraftVersion: document.draftVersion, page: metadata, content, connections: document.draftConnections });
-      // A history read failure must not disguise an already successful write as a failed write.
-      const history = await getWebsiteTranslationVersions(token, document.id).catch(() => []);
-      setContent(result.draftContent); setMetadata(result.draftMetadata); setDirty(false); onDirtyChange(false); onApplied(result, history);
+      setContent(result.draftContent); setMetadata(result.draftMetadata); setDirty(false); onDirtyChange(false); onApplied(result);
       setNotice("영어 초안을 저장했습니다. 검토를 요청해 주세요.");
     } catch (cause) { setError(cause instanceof Error ? cause.message : "번역을 저장하지 못했습니다. 새로고침 후 다시 시도해 주세요."); }
     finally { setBusy(false); onBusyChange(false); }
@@ -90,50 +100,96 @@ export function WebsiteTranslationEditor({ token, pageId, catalog, onDirtyChange
   const [source, setSource] = useState<WebsitePageDocument | null>(null);
   const [history, setHistory] = useState<WebContentVersion[]>([]);
   const [reviewState, setReviewState] = useState<WebsiteTranslationReviewState>({ status: "DRAFT", reviewedDraftVersion: null, events: [] });
+  const [reviewReady, setReviewReady] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [historyError, setHistoryError] = useState("");
   const [editorDirty, setEditorDirty] = useState(false);
   const [editorBusy, setEditorBusy] = useState(false);
   const [error, setError] = useState("");
   const [initializing, setInitializing] = useState(false);
   const [reload, setReload] = useState(0);
+  const historyRequestId = useRef(0);
   const changeDirty = useCallback((dirty: boolean) => { setEditorDirty(dirty); onDirtyChange(dirty); }, [onDirtyChange]);
   const changeBusy = useCallback((busy: boolean) => { setEditorBusy(busy); onBusyChange(busy); }, [onBusyChange]);
+  const refreshHistory = useCallback(async () => {
+    const requestId = ++historyRequestId.current;
+    setHistoryLoading(true);
+    setHistoryError("");
+    const [reviewResult, versionsResult] = await Promise.allSettled([
+      getWebsiteTranslationReview(token, pageId),
+      getWebsiteTranslationVersions(token, pageId),
+    ]);
+    if (requestId !== historyRequestId.current) return;
+    if (reviewResult.status === "fulfilled") {
+      setReviewState(reviewResult.value);
+      setReviewReady(true);
+    }
+    if (versionsResult.status === "fulfilled") setHistory(versionsResult.value);
+    if (reviewResult.status === "rejected" || versionsResult.status === "rejected") {
+      setHistoryError("검토·발행 이력을 새로고치지 못했습니다. 완료된 상태 변경은 유지되며 이력만 다시 불러올 수 있습니다.");
+    }
+    setHistoryLoading(false);
+  }, [token, pageId]);
   useEffect(() => {
     let active = true;
     setDocument(null); setSource(null); setHistory([]); setReviewState({ status: "DRAFT", reviewedDraftVersion: null, events: [] });
+    setReviewReady(false); setHistoryLoading(true); setHistoryError(""); setError("");
     setEditorDirty(false); setEditorBusy(false); onDirtyChange(false); onBusyChange(false);
-    Promise.all([getWebsiteTranslation(token, pageId), getWebsitePage(token, pageId), getWebsiteTranslationVersions(token, pageId), getWebsiteTranslationReview(token, pageId)])
-      .then(([translation, original, versions, review]) => { if (active) { setDocument(translation); setSource(original); setHistory(versions); setReviewState(review); } })
+    void refreshHistory();
+    Promise.all([getWebsiteTranslation(token, pageId), getWebsitePage(token, pageId)])
+      .then(([translation, original]) => { if (active) { setDocument(translation); setSource(original); } })
       .catch((cause) => { if (active) setError(cause instanceof Error ? cause.message : "영어 번역을 불러오지 못했습니다."); });
-    return () => { active = false; };
-  }, [token, pageId, reload, onDirtyChange, onBusyChange]);
+    return () => { active = false; historyRequestId.current += 1; };
+  }, [token, pageId, reload, onDirtyChange, onBusyChange, refreshHistory]);
   function retry() { setDocument(null); setError(""); changeDirty(false); changeBusy(false); setReload((value) => value + 1); }
   async function initialize() {
     if (!source || initializing || source.lifecycleStatus !== "ACTIVE") return;
     setInitializing(true); changeBusy(true); setError("");
-    try { setDocument(await initializeWebsiteTranslation(token, pageId, source.draftVersion, source.lifecycleVersion)); setReviewState({ status: "DRAFT", reviewedDraftVersion: null, events: [] }); }
+    try {
+      setDocument(await initializeWebsiteTranslation(token, pageId, source.draftVersion, source.lifecycleVersion));
+      setReviewState({ status: "DRAFT", reviewedDraftVersion: null, events: [] });
+      setReviewReady(true);
+      void refreshHistory();
+    }
     catch (cause) { setError(cause instanceof Error ? cause.message : "영어 초안을 가져오지 못했습니다."); }
     finally { setInitializing(false); changeBusy(false); }
   }
-  const saved = (next: WebsitePageDocument, versions: WebContentVersion[]) => {
+  const saved = (next: WebsitePageDocument, versions: WebContentVersion[] = []) => {
     setDocument(next); setHistory(versions); setReviewState((current) => ({ status: "DRAFT", reviewedDraftVersion: null, events: current.events }));
+    setReviewReady(true);
+    void refreshHistory();
   };
+  const applyReviewState = (next: WebsiteTranslationReviewState) => { setReviewState(next); setReviewReady(true); };
   async function publish() {
     if (!document || editorDirty || editorBusy || document.lifecycleStatus === "ARCHIVED") return;
     const published = await publishWebsiteTranslation(token, document.id, document.draftVersion, document.publishedVersion);
     setDocument(published);
-    const versions = await getWebsiteTranslationVersions(token, document.id).catch(() => null);
-    if (versions) setHistory(versions);
   }
   if (!document) return <Card><CardContent className="p-6 text-sm"><p role="status">{error || "영어 번역을 불러오는 중입니다."}</p>{error && <Button className="mt-3" variant="outline" onClick={retry}>다시 불러오기</Button>}</CardContent></Card>;
   return <div className="grid min-w-0 gap-5 lg:grid-cols-[minmax(0,1fr)_240px]">
     <div className="grid min-w-0 content-start gap-4">
       <p role="status" className="rounded-lg border bg-muted/20 p-3 text-sm">영어 · {document.publishedVersion ? (Object.keys(document.publishedContent).length ? `발행본 v${document.publishedVersion}` : '공개 중단') : '미발행'} · 초안 v{document.draftVersion} — 한국어를 가져온 내용은 직접 번역하고 검토한 뒤 발행해 주세요.</p>
       {document.draftVersion === 0 ? <Card><CardHeader><CardTitle>영어 번역 초안이 없습니다.</CardTitle><CardDescription>한국어 초안을 가져와 제목·본문·SEO·이미지 설명을 번역합니다. 고객 웹에는 자동으로 공개되지 않습니다.</CardDescription></CardHeader><CardContent><Button disabled={initializing || document.lifecycleStatus !== "ACTIVE"} onClick={() => void initialize()}>한국어 초안을 가져오기</Button>{error && <p role="alert" className="mt-3 text-sm text-destructive">{error} <Button variant="link" onClick={retry}>다시 불러오기</Button></p>}</CardContent></Card>
-        : <><WebsiteTranslationReviewActions token={token} pageId={document.id} draftVersion={document.draftVersion} state={reviewState} dirty={editorDirty} busy={editorBusy} archived={document.lifecycleStatus === "ARCHIVED"} onStateChange={setReviewState} onPublish={publish} onBusyChange={changeBusy} />
+        : <><WebsiteTranslationReviewActions token={token} pageId={document.id} draftVersion={document.draftVersion} state={reviewState} reviewReady={reviewReady} dirty={editorDirty} busy={editorBusy} archived={document.lifecycleStatus === "ARCHIVED"} onStateChange={applyReviewState} onPublish={publish} onBusyChange={changeBusy} onHistoryRefresh={refreshHistory} />
           {document.pageType === "HOTEL_LANDING" ? <LandingTranslationEditor token={token} document={document} onDirtyChange={changeDirty} onBusyChange={changeBusy} onApplied={saved} />
             : <ContentPageEditor token={token} document={document} catalog={catalog} locale="en" showPublishAction={false} onDirtyChange={changeDirty} onBusyChange={changeBusy} onSaved={saved} onPublished={saved} onLifecycleChanged={saved} onDeleted={() => undefined} />}</>}
       {document.lifecycleStatus === "ARCHIVED" && <p className="text-sm text-muted-foreground">페이지가 보관되어 두 언어 모두 공개되지 않습니다. 한국어 화면에서 페이지를 복원한 뒤 언어별로 다시 발행해 주세요.</p>}
     </div>
-    <Card className="min-w-0 self-start"><CardHeader><CardTitle className="text-base">영어 발행 이력</CardTitle></CardHeader><CardContent className="space-y-3 text-sm">{history.length ? history.map((version) => <div key={version.version} className="rounded-lg border p-3"><p>발행본 v{version.version}</p><p className="mt-1 text-xs text-muted-foreground">{new Date(version.publishedAt).toLocaleString('ko-KR')}</p></div>) : <p className="text-muted-foreground">아직 영어 발행 이력이 없습니다.</p>}</CardContent></Card>
+    <Card className="min-w-0 self-start"><CardHeader><CardTitle className="text-base">검토·발행 이력</CardTitle><CardDescription>서버의 최근 기록 최대 50건을 최신순으로 표시합니다.</CardDescription></CardHeader><CardContent className="space-y-5 text-sm">
+      {historyLoading && <p role="status" className="text-muted-foreground">검토·발행 이력을 새로고치는 중입니다.</p>}
+      {historyError && <div role="alert" className="space-y-2 rounded-lg border p-3"><p className="break-words text-destructive">{historyError}</p><Button type="button" size="sm" variant="outline" onClick={() => void refreshHistory()}>이력 다시 불러오기</Button></div>}
+      <section aria-label="영어 번역 활동 이력" className="min-w-0 space-y-3">
+        <h2 className="font-semibold">검토 이력</h2>
+        {reviewState.events.length ? <ol className="space-y-3">{reviewState.events.map((event) => <li key={event.id} className="min-w-0 rounded-lg border p-3">
+          <div className="flex flex-wrap items-baseline justify-between gap-1"><p className="font-medium">{reviewActionLabels[event.action]}</p><span className="text-xs text-muted-foreground">초안 v{event.draftVersion}</span></div>
+          <p className="mt-1 break-words text-xs text-muted-foreground">{event.actorDisplayName?.trim() || "알 수 없는 담당자"} · <time dateTime={event.createdAt}>{localizedReviewTime(event.createdAt)}</time></p>
+          {event.comment && <p className="mt-2 break-words">{event.comment}</p>}
+        </li>)}</ol> : !historyLoading && <p className="text-muted-foreground">아직 검토 이력이 없습니다.</p>}
+      </section>
+      <section aria-label="영어 발행 이력" className="min-w-0 space-y-3">
+        <h2 className="font-semibold">발행 이력</h2>
+        {history.length ? history.map((version) => <div key={version.version} className="rounded-lg border p-3"><p>발행본 v{version.version}</p><p className="mt-1 text-xs text-muted-foreground">{new Date(version.publishedAt).toLocaleString("ko-KR")}</p></div>) : !historyLoading && <p className="text-muted-foreground">아직 영어 발행 이력이 없습니다.</p>}
+      </section>
+    </CardContent></Card>
   </div>;
 }

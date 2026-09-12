@@ -70,21 +70,22 @@ for (const width of [1280, 390]) test(`edits and publishes the English translati
   await expect(warning).toHaveCount(0);
   await expect(page.getByRole("button", { name: "한국어", exact: true })).toBeFocused();
   await expect(page.getByLabel("히어로 제목", { exact: true })).toHaveValue("Our story");
-  if (process.env.CMS_LOCALE_SCREENSHOTS) {
-    await page.getByRole("heading", { name: "웹사이트 콘텐츠", exact: true }).scrollIntoViewIfNeeded();
-    await page.screenshot({ path: `../.tmp/cms-locale-admin-${width}.png`, fullPage: true });
-  }
   await expectNoHorizontalOverflow(page);
   await page.getByRole("button", { name: "초안 저장", exact: true }).click();
   await page.getByRole("button", { name: "검토 요청", exact: true }).click();
   await expect(page.getByText("검토 중", { exact: true })).toBeVisible();
   await expect(page.getByText("검토 대상 초안 v2", { exact: true })).toBeVisible();
+  if (process.env.CMS_LOCALE_SCREENSHOTS && width === 1280) {
+    await page.getByRole("heading", { name: "웹사이트 콘텐츠", exact: true }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `../.tmp/cms-locale-admin-${width}.png`, fullPage: true });
+  }
   if (width === 390) {
     await expectNoHorizontalOverflow(page);
     const mobileRejectButton = page.getByRole("button", { name: "반려", exact: true });
     await mobileRejectButton.click();
     await expect(page.getByRole("alertdialog")).toBeVisible();
     await expectNoHorizontalOverflow(page);
+    if (process.env.CMS_LOCALE_SCREENSHOTS) await page.screenshot({ path: `../.tmp/cms-locale-admin-${width}.png`, fullPage: true });
     await page.keyboard.press("Escape");
     await expect(mobileRejectButton).toBeFocused();
   }
@@ -299,7 +300,7 @@ test("does not expose Korean lifecycle writes from the English archived editor",
   await expect(page.getByRole("button", { name: "발행", exact: true })).toHaveCount(0);
 });
 
-test("saves English landing content, alt and SEO independently", async ({ page }) => {
+test("saves, reviews, approves and publishes English landing content with one draft version", async ({ page }) => {
   const path = "/api/staff/website/pages/sokcho-page/translations/en";
   let document = contentPageDocument({ id: "sokcho-page", pageType: "HOTEL_LANDING", hotelId: SOKCHO, contentKind: "LANDING", publishedVersion: 0, publishedMetadata: null,
     draftMetadata: { slug: "sokcho", path: "/en/stays/sokcho", menuLabel: "Sokcho", menuVisible: true, menuOrder: 10 },
@@ -338,6 +339,90 @@ test("saves English landing content, alt and SEO independently", async ({ page }
   expect(writes[3]).toEqual({ expectedDraftVersion: 2, expectedPublishedVersion: 0 });
   await page.getByRole("button", { name: "한국어", exact: true }).click();
   await expect(page.getByLabel("히어로 제목", { exact: true })).toHaveValue("속초 제목");
+});
+
+test("keeps the approved state when review history refresh fails and retries reads only", async ({ page }) => {
+  const path = `/api/staff/website/pages/${HOME_PAGE}/translations/en`;
+  const approvedEvents = [
+    { id: 2, action: "APPROVED", draftVersion: 1, actorId: "hq-test", actorDisplayName: "본사 관리자", createdAt: "2026-09-12T09:30:00Z", comment: "영문 표현을 확인했습니다." },
+    { id: 1, action: "REVIEW_REQUESTED", draftVersion: 1, actorId: null, actorDisplayName: null, createdAt: "2026-09-12T09:00:00Z", comment: null },
+  ];
+  let review = translationReviewState();
+  let approvalCount = 0;
+  let reviewReadCount = 0;
+  let versionReadCount = 0;
+  let failApprovedRefresh = false;
+  let releaseReviewRefresh: (() => Promise<void>) | undefined;
+  let releaseVersionRefresh: (() => Promise<void>) | undefined;
+
+  await page.route(`**/api/staff/website/pages/${HOME_PAGE}`, route => route.fulfill({ json: homePageDocument() }));
+  await page.route(`**${path}`, route => route.fulfill({ json: homePageDocument() }));
+  await page.route(`**${path}/versions`, async route => {
+    versionReadCount += 1;
+    if (!failApprovedRefresh) return route.fulfill({ json: [] });
+    await new Promise<void>(resolve => {
+      releaseVersionRefresh = async () => {
+        await route.fulfill({ status: 500, json: { message: "발행 이력을 불러오지 못했습니다." } });
+        resolve();
+      };
+    });
+  });
+  await page.route(`**${path}/review`, async route => {
+    reviewReadCount += 1;
+    if (!failApprovedRefresh) return route.fulfill({ json: review });
+    await new Promise<void>(resolve => {
+      releaseReviewRefresh = async () => {
+        await route.fulfill({ status: 500, json: { message: "검토 이력을 불러오지 못했습니다." } });
+        resolve();
+      };
+    });
+  });
+  await page.route(`**${path}/review/request`, route => {
+    review = translationReviewState({ status: "IN_REVIEW", reviewedDraftVersion: 1 });
+    return route.fulfill({ json: review });
+  });
+  await page.route(`**${path}/review/approve`, route => {
+    approvalCount += 1;
+    review = translationReviewState({ status: "APPROVED", reviewedDraftVersion: 1, events: approvedEvents });
+    failApprovedRefresh = true;
+    return route.fulfill({ json: review });
+  });
+
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: /^홈/ }).click();
+  await page.getByRole("button", { name: "영어", exact: true }).click();
+  await expect(page.getByText("아직 검토 이력이 없습니다.", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "검토 요청", exact: true }).click();
+  await page.getByRole("button", { name: "승인", exact: true }).click();
+  await expect.poll(() => Boolean(releaseReviewRefresh && releaseVersionRefresh)).toBe(true);
+
+  await expect(page.getByLabel("영어 번역 검토").getByText("승인됨", { exact: true })).toBeVisible();
+  await expect(page.getByText("검토·발행 이력을 새로고치는 중입니다.", { exact: true })).toBeVisible();
+  await releaseReviewRefresh!();
+  await releaseVersionRefresh!();
+  await expect(page.getByRole("alert").filter({ hasText: "검토·발행 이력을 새로고치지 못했습니다." })).toBeVisible();
+  await expect(page.getByLabel("영어 번역 검토").getByText("승인됨", { exact: true })).toBeVisible();
+
+  const timeline = page.getByLabel("영어 번역 활동 이력");
+  const events = timeline.getByRole("listitem");
+  await expect(events).toHaveCount(2);
+  await expect(events.nth(0)).toContainText("승인");
+  await expect(events.nth(0)).toContainText("초안 v1");
+  await expect(events.nth(0)).toContainText("본사 관리자");
+  await expect(events.nth(0)).toContainText("영문 표현을 확인했습니다.");
+  await expect(events.nth(0).locator("time")).toHaveAttribute("datetime", "2026-09-12T09:30:00Z");
+  await expect(events.nth(1)).toContainText("검토 요청");
+  await expect(events.nth(1)).toContainText("알 수 없는 담당자");
+
+  failApprovedRefresh = false;
+  const reviewReadsBeforeRetry = reviewReadCount;
+  const versionReadsBeforeRetry = versionReadCount;
+  await page.getByRole("button", { name: "이력 다시 불러오기", exact: true }).click();
+  await expect(page.getByText("검토·발행 이력을 새로고치는 중입니다.", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("alert").filter({ hasText: "검토·발행 이력을 새로고치지 못했습니다." })).toHaveCount(0);
+  expect(approvalCount).toBe(1);
+  expect(reviewReadCount).toBe(reviewReadsBeforeRetry + 1);
+  expect(versionReadCount).toBe(versionReadsBeforeRetry + 1);
 });
 
 function mediaAsset(overrides: Record<string, unknown> = {}) {
@@ -1215,7 +1300,7 @@ test("selects a catalog asset for a structured page and saves its identifier", a
   await expect(dialog.getByText("속초 해안 대표 이미지", { exact: true })).toBeVisible();
   await dialog.getByRole("button", { name: "속초 해안 대표 이미지 선택" }).click();
   await expect(dialog.getByText("사용 위치", { exact: true })).toBeVisible();
-  await expect(dialog.getByText("홈 · 발행", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("홈 · 한국어 · 발행", { exact: true })).toBeVisible();
   await dialog.getByRole("button", { name: "선택", exact: true }).click();
   await expect(page.getByLabel("대표 이미지 대체 텍스트")).toHaveValue("동해와 설악산을 바라보는 속초 해안");
 
