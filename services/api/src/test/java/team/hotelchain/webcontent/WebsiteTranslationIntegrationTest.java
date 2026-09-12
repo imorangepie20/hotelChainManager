@@ -132,6 +132,69 @@ class WebsiteTranslationIntegrationTest {
     }
 
     @Test
+    void requiresCurrentApprovalAndInvalidatesItOnSaveWithoutChangingPublishedContent() throws Exception {
+        String token = headquarters();
+        var created = pages.createContentPage(token, UUID.fromString("12000000-0000-0000-0000-000000000005"),
+                new WebsitePageDraftMetadata("locale-story", "Published page", true, 10),
+                content("Published title", "Published alt"));
+        var ko = pages.publishPage(token, created.id(), created.draftVersion(), created.publishedVersion());
+        translations.initialize(token, ko.id(), ko.draftVersion(), ko.lifecycleVersion());
+
+        var mvc = MockMvcBuilders.webAppContextSetup(context).build();
+        String path = "/api/staff/website/pages/" + ko.id() + "/translations/en";
+        String directPublish = mvc.perform(post(path + "/publish").header("X-Staff-Session", token)
+                        .contentType("application/json")
+                        .content("{\"expectedDraftVersion\":1,\"expectedPublishedVersion\":0}"))
+                .andExpect(status().isConflict())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(read(directPublish).get("code")).isEqualTo("WEBSITE_TRANSLATION_NOT_APPROVED");
+
+        approveEnglish(token, ko.id(), 1);
+        translations.publish(token, ko.id(), new PublishWebsitePageRequest(1, 0));
+        assertThat(translations.review(token, ko.id()))
+                .extracting(WebsiteTranslationReviewState::status,
+                        WebsiteTranslationReviewState::reviewedDraftVersion)
+                .containsExactly(WebsiteTranslationReviewStatus.PUBLISHED, 1);
+        assertThat(translations.review(token, ko.id()).events()).first()
+                .satisfies(event -> {
+                    assertThat(event.action()).isEqualTo("PUBLISHED");
+                    assertThat(event.draftVersion()).isEqualTo(1);
+                });
+        translations.save(token, ko.id(), new SaveWebsitePageRequest(1,
+                new WebsitePageDraftMetadata("locale-story", "Draft page", true, 10),
+                content("Draft title", "Draft alt"), null));
+
+        var saved = translations.draft(token, ko.id());
+        assertThat(translations.review(token, ko.id()))
+                .extracting(WebsiteTranslationReviewState::status,
+                        WebsiteTranslationReviewState::reviewedDraftVersion)
+                .containsExactly(WebsiteTranslationReviewStatus.DRAFT, null);
+        assertThat(saved.publishedVersion()).isEqualTo(1);
+        assertThat(saved.publishedMetadata().path()).isEqualTo("/en/brand/locale-story");
+        assertThat(saved.publishedConnections()).isEqualTo(WebsitePageConnections.empty());
+        assertThat(json.writeValueAsString(translations.resolve("/en/brand/locale-story").content()))
+                .contains("\"title\":\"Published title\"")
+                .doesNotContain("Draft title");
+        assertThat(jdbc.queryForObject("""
+                select count(*) from website_media_usage
+                where page_id = ? and locale = 'en' and document_state = 'PUBLISHED'
+                """, Integer.class, ko.id())).isPositive();
+        assertThat(translations.review(token, ko.id()).events())
+                .anySatisfy(event -> assertThat(event.action()).isEqualTo("APPROVAL_INVALIDATED"));
+
+        jdbc.update("""
+                update website_page_translation
+                set review_status = 'APPROVED', reviewed_draft_version = 1
+                where page_id = ? and locale = 'en'
+                """, ko.id());
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                        translations.publish(token, ko.id(), new PublishWebsitePageRequest(2, 1)))
+                .isInstanceOfSatisfying(team.hotelchain.reservation.BusinessConflictException.class,
+                        exception -> assertThat(exception.code()).isEqualTo("WEBSITE_TRANSLATION_REVIEW_STALE"));
+        assertThat(translations.draft(token, ko.id()).publishedVersion()).isEqualTo(1);
+    }
+
+    @Test
     void requiresAReasonAndAuditsRejectedReviews() throws Exception {
         String token = headquarters();
         UUID actor = access.requireHeadquarters(token).id();
@@ -228,6 +291,7 @@ class WebsiteTranslationIntegrationTest {
         String token = headquarters();
         var ko = story(token);
         translations.initialize(token, ko.id(), ko.draftVersion(), ko.lifecycleVersion());
+        approveEnglish(token, ko.id(), 1);
         translations.publish(token, ko.id(), new PublishWebsitePageRequest(1, 0));
         var archived = pages.archiveContentPage(token, ko.id(), new WebsitePageLifecycleRequest(ko.lifecycleVersion(), ko.draftVersion(), ko.publishedVersion()));
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> translations.resolve("/en/brand/locale-story"))
@@ -239,7 +303,12 @@ class WebsiteTranslationIntegrationTest {
         var restored = pages.restoreContentPage(token, ko.id(), new WebsitePageLifecycleRequest(archived.lifecycleVersion(), archived.draftVersion(), archived.publishedVersion()));
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> translations.resolve("/en/brand/locale-story"))
                 .isInstanceOf(WebsitePageNotFoundException.class);
-        translations.publish(token, ko.id(), new PublishWebsitePageRequest(1, 1));
+        var english = translations.draft(token, ko.id());
+        translations.save(token, ko.id(), new SaveWebsitePageRequest(1,
+                new WebsitePageDraftMetadata("locale-story", "Our story", true, 10),
+                english.draftContent(), english.draftConnections()));
+        approveEnglish(token, ko.id(), 2);
+        translations.publish(token, ko.id(), new PublishWebsitePageRequest(2, 1));
         assertThat(translations.resolve("/en/brand/locale-story").path()).isEqualTo("/en/brand/locale-story");
         archived = pages.archiveContentPage(token, ko.id(), new WebsitePageLifecycleRequest(restored.lifecycleVersion(), restored.draftVersion(), restored.publishedVersion()));
         pages.deleteArchivedContentPage(token, ko.id(), new WebsitePageLifecycleRequest(archived.lifecycleVersion(), archived.draftVersion(), archived.publishedVersion()));
@@ -301,6 +370,7 @@ class WebsiteTranslationIntegrationTest {
         translations.save(token, ko.id(), new SaveWebsitePageRequest(1,
                 new WebsitePageDraftMetadata("locale-story", "Our story", true, 10), content("English title", "English alt"), null));
         assertThat(translations.navigation()).isEmpty();
+        approveEnglish(token, ko.id(), 2);
         translations.publish(token, ko.id(), new PublishWebsitePageRequest(2, 0));
         assertThat(translations.navigation()).anySatisfy(item -> {
             assertThat(item.path()).isEqualTo("/en/brand/locale-story");
@@ -317,12 +387,14 @@ class WebsiteTranslationIntegrationTest {
         String token = headquarters();
         var ko = story(token);
         translations.initialize(token, ko.id(), ko.draftVersion(), ko.lifecycleVersion());
+        approveEnglish(token, ko.id(), 1);
         translations.publish(token, ko.id(), new PublishWebsitePageRequest(1, 0));
         var moved = pages.movePublishedContentPage(token, ko.id(), new MoveWebsitePageRequest(
                 UUID.fromString("12000000-0000-0000-0000-000000000005"), "locale-next", ko.draftVersion(), ko.lifecycleVersion(), ko.publishedVersion()));
         assertThat(translations.resolve("/en/brand/locale-story").content()).containsKey("blocks");
         translations.save(token, ko.id(), new SaveWebsitePageRequest(1,
                 new WebsitePageDraftMetadata("locale-next", "Our story", true, 10), content("English title", "English alt"), null));
+        approveEnglish(token, ko.id(), 2);
         translations.publish(token, ko.id(), new PublishWebsitePageRequest(2, 1));
         assertThat(translations.resolve("/en/brand/locale-next").path()).isEqualTo("/en/brand/locale-next");
         assertThat(translations.redirectTarget("/en/brand/locale-story")).isEqualTo("/en/brand/locale-next");
@@ -335,6 +407,7 @@ class WebsiteTranslationIntegrationTest {
         String token = headquarters();
         var home = pages.homeDraft(token);
         translations.initialize(token, home.id(), home.draftVersion(), home.lifecycleVersion());
+        approveEnglish(token, home.id(), 1);
         translations.publish(token, home.id(), new PublishWebsitePageRequest(1, 0));
         assertThat(translations.resolve("/en").type()).isEqualTo("HOME_PAGE");
         assertThat(pages.homeDraft(token)).isEqualTo(home);
@@ -351,6 +424,7 @@ class WebsiteTranslationIntegrationTest {
         englishLandingContent.put("title", "English hotel");
         englishLandingContent.put("heroAlt", "English coast");
         translations.save(token, landing.id(), new SaveWebsitePageRequest(1, new WebsitePageDraftMetadata("locale-hotel", "English hotel", true, 10), englishLandingContent, WebsitePageConnections.empty()));
+        approveEnglish(token, landing.id(), 2);
         translations.publish(token, landing.id(), new PublishWebsitePageRequest(2, 0));
         assertThat(translations.resolve("/en/stays/locale-hotel").type()).isEqualTo("HOTEL_LANDING");
         assertThat(translations.resolve("/en/stays/locale-hotel").content()).containsEntry("title", "English hotel").containsEntry("heroAlt", "English coast");
@@ -378,6 +452,10 @@ class WebsiteTranslationIntegrationTest {
         mvc.perform(get("/api/website/pages/resolve").param("path", "/en/brand/locale-story")).andExpect(status().isNotFound());
         Map<?, ?> saved = saveEnglish(mvc, path, token, 1, "English title", "English alt");
         assertThat(saved.get("draftVersion")).isEqualTo(2);
+        mvc.perform(post(path + "/review/request").header("X-Staff-Session", token).contentType("application/json")
+                .content("{\"expectedDraftVersion\":2,\"comment\":null}")).andExpect(status().isOk());
+        mvc.perform(post(path + "/review/approve").header("X-Staff-Session", token).contentType("application/json")
+                .content("{\"expectedDraftVersion\":2,\"comment\":null}")).andExpect(status().isOk());
         mvc.perform(post(path + "/publish").header("X-Staff-Session", token).contentType("application/json")
                 .content("{\"expectedDraftVersion\":2,\"expectedPublishedVersion\":0}")).andExpect(status().isOk());
         String publicJson = mvc.perform(get("/api/website/pages/resolve").param("path", "/en/brand/locale-story"))
@@ -411,9 +489,11 @@ class WebsiteTranslationIntegrationTest {
         translations.initialize(token, a.id(), a.draftVersion(), a.lifecycleVersion());
         translations.initialize(token, b.id(), b.draftVersion(), b.lifecycleVersion());
         translations.save(token, b.id(), new SaveWebsitePageRequest(1, new WebsitePageDraftMetadata("second-story", "Second", true, 20), b.draftContent(), WebsitePageConnections.empty()));
+        approveEnglish(token, b.id(), 2);
         translations.publish(token, b.id(), new PublishWebsitePageRequest(2, 0));
         var aToB = new WebsitePageConnections(List.of(), List.of(), List.of(new WebsitePageRelation(b.id(), "RELATED", 0)));
         translations.save(token, a.id(), new SaveWebsitePageRequest(1, new WebsitePageDraftMetadata("locale-story", "First", true, 10), a.draftContent(), aToB));
+        approveEnglish(token, a.id(), 2);
         translations.publish(token, a.id(), new PublishWebsitePageRequest(2, 0));
         assertThat(pages.pageDraft(token, b.id()).draftConnections()).isEqualTo(bToA);
         UUID bId = b.id();
@@ -457,6 +537,13 @@ class WebsiteTranslationIntegrationTest {
                         "page", Map.of("slug", "locale-story", "menuLabel", "Our story", "menuVisible", true, "menuOrder", 10),
                         "content", content(title, alt)))))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+    }
+
+    private void approveEnglish(String token, UUID pageId, int draftVersion) {
+        translations.requestReview(token, pageId,
+                new WebsiteTranslationReviewActionRequest(draftVersion, null));
+        translations.approveReview(token, pageId,
+                new WebsiteTranslationReviewActionRequest(draftVersion, null));
     }
 
     private Map<?, ?> read(String value) throws Exception { return json.readValue(value, Map.class); }

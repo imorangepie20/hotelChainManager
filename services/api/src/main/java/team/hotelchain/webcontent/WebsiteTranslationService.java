@@ -169,7 +169,7 @@ public class WebsiteTranslationService {
     public WebsitePageDocument save(String token, UUID pageId, SaveWebsitePageRequest request) {
         UUID actor = access.requireHeadquarters(token).id();
         WebsitePageDocument source = lockedSource(token, pageId);
-        Translation current = requiredTranslation(pageId);
+        Translation current = requiredLockedTranslation(pageId);
         if (request.expectedDraftVersion() <= 0) throw new IllegalArgumentException("초안 버전은 1 이상이어야 합니다.");
         if (request.expectedDraftVersion() != current.draftVersion()) throw stale();
         WebsitePageDraftMetadata metadata = request.page();
@@ -186,10 +186,15 @@ public class WebsiteTranslationService {
         jdbc.update("""
                 update website_page_translation set draft_content = ?::jsonb, draft_connections = ?::jsonb,
                     draft_path = ?, draft_menu_label = ?, draft_menu_visible = ?, draft_menu_order = ?,
-                    draft_version = draft_version + 1, updated_at = current_timestamp, updated_by = ?
+                    draft_version = draft_version + 1, review_status = 'DRAFT', reviewed_draft_version = null,
+                    updated_at = current_timestamp, updated_by = ?
                 where page_id = ? and locale = 'en'
                 """, stringify(content), stringify(connections), path, metadata.menuLabel(),
                 !"HOME_PAGE".equals(source.pageType()) && metadata.menuVisible(), metadata.menuOrder(), actor, pageId);
+        if (List.of(WebsiteTranslationReviewStatus.IN_REVIEW, WebsiteTranslationReviewStatus.APPROVED,
+                WebsiteTranslationReviewStatus.PUBLISHED).contains(current.reviewStatus())) {
+            reviewEvent(pageId, actor, "APPROVAL_INVALIDATED", current.draftVersion() + 1, null);
+        }
         media.synchronize(pageId, source.pageType(), "en", "DRAFT", content);
         audit(pageId, actor, "DRAFT_SAVED", Map.of("locale", "en", "path", path));
         return document(source, translation(pageId));
@@ -199,9 +204,17 @@ public class WebsiteTranslationService {
     public WebsitePageDocument publish(String token, UUID pageId, PublishWebsitePageRequest request) {
         UUID actor = access.requireHeadquarters(token).id();
         WebsitePageDocument source = lockedSource(token, pageId);
-        Translation current = requiredTranslation(pageId);
+        Translation current = requiredLockedTranslation(pageId);
         if (request.expectedDraftVersion() <= 0 || request.expectedPublishedVersion() < 0) throw new IllegalArgumentException("언어별 초안·발행 버전이 올바르지 않습니다.");
         if (request.expectedDraftVersion() != current.draftVersion() || request.expectedPublishedVersion() != current.publishedVersion()) throw stale();
+        if (current.reviewStatus() != WebsiteTranslationReviewStatus.APPROVED) {
+            throw new BusinessConflictException("WEBSITE_TRANSLATION_NOT_APPROVED",
+                    "현재 영어 초안을 승인한 뒤 발행해 주세요.");
+        }
+        if (!Integer.valueOf(current.draftVersion()).equals(current.reviewedDraftVersion())) {
+            throw new BusinessConflictException("WEBSITE_TRANSLATION_REVIEW_STALE",
+                    "승인된 초안이 변경되었습니다. 다시 검토를 요청해 주세요.");
+        }
         normalize(source, current.draftContent(), current.draftConnections(), true);
         rejectCollision(pageId, current.draftMetadata().path());
         if (current.publishedMetadata() != null && !current.publishedMetadata().path().equals(current.draftMetadata().path())) {
@@ -212,6 +225,7 @@ public class WebsiteTranslationService {
                     published_path = draft_path, published_menu_label = draft_menu_label,
                     published_menu_visible = draft_menu_visible, published_menu_order = draft_menu_order,
                     published_version = published_version + 1, published_from_draft_version = draft_version,
+                    review_status = 'PUBLISHED',
                     updated_at = current_timestamp, updated_by = ? where page_id = ? and locale = 'en'
                 """, actor, pageId);
         Translation published = translation(pageId);
@@ -219,6 +233,7 @@ public class WebsiteTranslationService {
         WebsitePageDocument result = document(source, published);
         jdbc.update("insert into website_page_translation_version (page_id, locale, version, page_snapshot, published_by) values (?, 'en', ?, ?::jsonb, ?)",
                 pageId, published.publishedVersion(), stringify(result), actor);
+        reviewEvent(pageId, actor, "PUBLISHED", current.draftVersion(), null);
         audit(pageId, actor, "PUBLISHED", Map.of("locale", "en", "path", published.publishedMetadata().path()));
         return result;
     }
@@ -382,12 +397,6 @@ public class WebsiteTranslationService {
                 translation.draftContent(), translation.draftConnections(), translation.draftVersion(),
                 new WebsitePageMetadata(source.draftMetadata().slug(), translation.draftMetadata().path(), translation.draftMetadata().menuLabel(), translation.draftMetadata().menuVisible(), translation.draftMetadata().menuOrder()),
                 translation.publishedContent(), translation.publishedConnections(), translation.publishedVersion(), translation.publishedMetadata(), source.lifecycleStatus(), source.lifecycleVersion());
-    }
-
-    private Translation requiredTranslation(UUID id) {
-        Translation current = translation(id);
-        if (current == null) throw new BusinessConflictException("WEBSITE_TRANSLATION_MISSING", "먼저 영어 번역 초안을 가져와 주세요.");
-        return current;
     }
 
     private Translation requiredLockedTranslation(UUID id) {
