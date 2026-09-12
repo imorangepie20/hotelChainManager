@@ -6,14 +6,20 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import javax.sql.DataSource;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.flywaydb.core.Flyway;
+import org.flywaydb.core.api.MigrationVersion;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.SingleConnectionDataSource;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.test.web.servlet.MockMvc;
@@ -33,6 +39,7 @@ class WebsiteTranslationIntegrationTest {
     @Autowired ObjectMapper json;
     @Autowired WebsiteTranslationService translations;
     @Autowired WebsiteMediaService media;
+    @Autowired DataSource dataSource;
 
     @Test
     void startsNewEnglishTranslationsAsDraftWithNoReviewEvents() {
@@ -43,7 +50,109 @@ class WebsiteTranslationIntegrationTest {
                         WebsiteTranslationReviewState::reviewedDraftVersion)
                 .containsExactly(WebsiteTranslationReviewStatus.DRAFT, null);
         translations.initialize(token, ko.id(), ko.draftVersion(), ko.lifecycleVersion());
-        assertThat(translations.review(token, ko.id()).events()).isEmpty();
+        var persisted = translations.review(token, ko.id());
+        assertThat(persisted)
+                .extracting(WebsiteTranslationReviewState::status,
+                        WebsiteTranslationReviewState::reviewedDraftVersion)
+                .containsExactly(WebsiteTranslationReviewStatus.DRAFT, null);
+        assertThat(persisted.events()).isEmpty();
+    }
+
+    @Test
+    void returnsLatestFiftyReviewEventsWithDeterministicActorMapping() {
+        String token = headquarters();
+        var ko = story(token);
+        translations.initialize(token, ko.id(), ko.draftVersion(), ko.lifecycleVersion());
+        UUID liveActor = access.requireHeadquarters(token).id();
+        UUID deletedActor = UUID.randomUUID();
+        jdbc.update("insert into staff_member (id, email, display_name, password_hash, role) values (?, ?, ?, ?, 'HQ_ADMIN')",
+                deletedActor, "deleted-reviewer@example.com", "삭제된 검토자", new BCryptPasswordEncoder().encode("review-test"));
+        Instant tiedAt = Instant.parse("2026-09-12T12:00:00Z");
+        long approvedId = jdbc.queryForObject("""
+                insert into website_translation_review_event
+                    (page_id, action, draft_version, actor_id, comment, created_at)
+                values (?, 'APPROVED', 1, ?, 'approved comment', ?)
+                returning id
+                """, Long.class, ko.id(), liveActor, Timestamp.from(tiedAt));
+        long rejectedId = jdbc.queryForObject("""
+                insert into website_translation_review_event
+                    (page_id, action, draft_version, actor_id, comment, created_at)
+                values (?, 'REJECTED', 1, ?, null, ?)
+                returning id
+                """, Long.class, ko.id(), deletedActor, Timestamp.from(tiedAt));
+        for (int index = 0; index < 50; index++) {
+            jdbc.update("""
+                    insert into website_translation_review_event
+                        (page_id, action, draft_version, comment, created_at)
+                    values (?, 'REVIEW_REQUESTED', 1, ?, ?)
+                    """, ko.id(), "filler-" + index, Timestamp.from(tiedAt.minusSeconds(index + 1L)));
+        }
+        jdbc.update("delete from staff_member where id = ?", deletedActor);
+
+        var events = translations.review(token, ko.id()).events();
+
+        assertThat(events).hasSize(50);
+        assertThat(events.get(0)).isEqualTo(new WebsiteTranslationReviewEvent(
+                rejectedId, "REJECTED", 1, null, null, tiedAt, null));
+        assertThat(events.get(1)).isEqualTo(new WebsiteTranslationReviewEvent(
+                approvedId, "APPROVED", 1, liveActor, "다국어 본사", tiedAt, "approved comment"));
+        assertThat(events)
+                .extracting(WebsiteTranslationReviewEvent::comment)
+                .doesNotContain("filler-48", "filler-49");
+    }
+
+    @Test
+    void migratesOnlyCurrentV20PublicationsToPublishedReviewState() {
+        String schema = "translation_review_" + UUID.randomUUID().toString().replace("-", "");
+        String translationTable = "\"" + schema + "\".website_page_translation";
+        Flyway v20 = isolatedFlyway(schema, MigrationVersion.fromVersion("20"));
+        try {
+            v20.migrate();
+            try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+                statement.executeUpdate("""
+                        insert into %s
+                            (page_id, locale, draft_content, published_content, draft_path, published_path,
+                             draft_menu_label, published_menu_label, draft_version, published_version,
+                             published_from_draft_version)
+                        values
+                            ('12000000-0000-0000-0000-000000000001', 'en', '{"draft":"current"}'::jsonb,
+                             '{"marker":"current-publication"}'::jsonb, '/en/current', '/en/current',
+                             'Current', 'Current', 3, 2, 3),
+                            ('12000000-0000-0000-0000-000000000005', 'en', '{"draft":"diverged"}'::jsonb,
+                             '{"marker":"diverged-publication"}'::jsonb, '/en/diverged', '/en/diverged',
+                             'Diverged', 'Diverged', 4, 2, 3)
+                        """.formatted(translationTable));
+            }
+
+            isolatedFlyway(schema, MigrationVersion.fromVersion("21")).migrate();
+
+            try (var connection = dataSource.getConnection()) {
+                var isolatedJdbc = new JdbcTemplate(new SingleConnectionDataSource(connection, true));
+                var migrated = isolatedJdbc.query("""
+                        select page_id, review_status, reviewed_draft_version, draft_version, published_version,
+                            published_from_draft_version, published_content ->> 'marker' as marker
+                        from %s
+                        order by page_id
+                        """.formatted(translationTable), (rs, rowNumber) -> new ReviewMigrationRow(
+                                rs.getObject("page_id", UUID.class), rs.getString("review_status"),
+                                rs.getObject("reviewed_draft_version", Integer.class), rs.getInt("draft_version"),
+                                rs.getInt("published_version"), rs.getObject("published_from_draft_version", Integer.class),
+                                rs.getString("marker")));
+                assertThat(migrated).containsExactly(
+                        new ReviewMigrationRow(UUID.fromString("12000000-0000-0000-0000-000000000001"),
+                                "PUBLISHED", 3, 3, 2, 3, "current-publication"),
+                        new ReviewMigrationRow(UUID.fromString("12000000-0000-0000-0000-000000000005"),
+                                "DRAFT", null, 4, 2, 3, "diverged-publication"));
+            }
+        } catch (Exception exception) {
+            throw new IllegalStateException("V20에서 V21 검토 상태로 이관할 수 없습니다.", exception);
+        } finally {
+            try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+                statement.execute("drop schema if exists \"" + schema + "\" cascade");
+            } catch (Exception exception) {
+                throw new IllegalStateException("격리된 migration test schema를 정리할 수 없습니다.", exception);
+            }
+        }
     }
 
     @Test
@@ -308,5 +417,25 @@ class WebsiteTranslationIntegrationTest {
                 Map.of("type", "HERO", "imageAssetId", WebsiteMediaService.BUNDLED_ASSET_ID.toString(),
                         "imageSrc", "/images/sokcho-coast-hero.png", "imageAlt", alt,
                         "eyebrow", "STAY HANEUL", "title", title, "description", title + " introduction")));
+    }
+
+    private Flyway isolatedFlyway(String schema, MigrationVersion target) {
+        return Flyway.configure()
+                .dataSource(dataSource)
+                .schemas(schema)
+                .defaultSchema(schema)
+                .locations("classpath:db/migration")
+                .target(target)
+                .load();
+    }
+
+    private record ReviewMigrationRow(
+            UUID pageId,
+            String status,
+            Integer reviewedDraftVersion,
+            int draftVersion,
+            int publishedVersion,
+            Integer publishedFromDraftVersion,
+            String publicationMarker) {
     }
 }
