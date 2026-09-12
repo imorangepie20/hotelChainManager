@@ -253,19 +253,32 @@ function validBookingCta(block: Extract<ContentPageBlock, { type: 'BOOKING_CTA' 
   return contentKind === 'ROOM' ? Boolean(block.roomTypeId) : true
 }
 
-function legacyDocument(value: Record<string, unknown>): ContentPageDocument | null {
+function legacyDocument(value: Record<string, unknown>, typed = false): ContentPageDocument | null {
   if (!isRecord(value.seo) || !Array.isArray(value.blocks)) return null
   const title = text(value.seo.title); const description = text(value.seo.description)
   if (!title || !description || value.blocks.length < 1 || value.blocks.length > 20) return null
-  const blocks = value.blocks.map(block => parseBlock(block))
+  const blocks = value.blocks.map(block => parseBlock(block, typed))
   if (blocks.some(block => block === null)) return null
   const validBlocks = blocks as ContentPageBlock[]
   return validBlocks[0]?.type === 'HERO' && validBlocks.filter(block => block.type === 'HERO').length === 1 ? { seo: { title, description }, blocks: validBlocks } : null
 }
 
-export function parseContentPage(value: unknown): ContentPageDocument | null {
+export function parseContentPage(value: unknown, locale: 'ko' | 'en' = 'ko'): ContentPageDocument | null {
+  const parsed = parseDocument(value)
+  if (!parsed || locale === 'ko') return parsed
+  return { ...parsed, blocks: parsed.blocks.map(block => {
+    if (!block.cta) return block
+    const href = block.cta.href
+    // Booking remains an explicit hand-off to the Korean booking application.
+    if (href === '/en' || href.startsWith('/en/') || href.startsWith('/booking') || href.includes('#booking') || href.includes('#reservation-management')) return block
+    return { ...block, cta: { ...block.cta, href: href === '/' ? '/en' : '/en' + href } }
+  }) }
+}
+
+function parseDocument(value: unknown): ContentPageDocument | null {
   if (!isRecord(value)) return null
   if (isRecord(value.content)) {
+    if (value.contentKind === 'HOME') return legacyDocument(value.content, true)
     return typedDocument({ contentKind: value.contentKind, hotelId: value.hotelId, connections: value.connections, ...value.content })
   }
   return 'contentKind' in value ? typedDocument(value) : legacyDocument(value)

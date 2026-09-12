@@ -3,6 +3,8 @@ package team.hotelchain.webcontent;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.MediaType;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -12,15 +14,20 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/api/staff/website/media")
 public class WebsiteMediaManagementController {
     private final WebsiteMediaService media;
+    private final WebsiteMediaDraftReplacementService replacements;
 
-    public WebsiteMediaManagementController(WebsiteMediaService media) {
+    public WebsiteMediaManagementController(
+            WebsiteMediaService media,
+            WebsiteMediaDraftReplacementService replacements) {
         this.media = media;
+        this.replacements = replacements;
     }
 
     @GetMapping
@@ -42,6 +49,22 @@ public class WebsiteMediaManagementController {
     @GetMapping("/{mediaId}/usages")
     public List<WebsiteMediaUsage> usages(@PathVariable UUID mediaId, @RequestHeader("X-Staff-Session") String token) {
         return media.usages(token, mediaId);
+    }
+
+    @GetMapping("/{mediaId}/draft-replacement-impact")
+    public WebsiteMediaDraftReplacementImpact replacementImpact(
+            @PathVariable UUID mediaId,
+            @RequestParam UUID targetMediaId,
+            @RequestHeader("X-Staff-Session") String token) {
+        return replacements.impact(token, mediaId, targetMediaId);
+    }
+
+    @PostMapping("/{mediaId}/draft-replacements")
+    public WebsiteMediaDraftReplacementResult replaceDraftUsages(
+            @PathVariable UUID mediaId,
+            @RequestBody WebsiteMediaDraftReplacementRequest request,
+            @RequestHeader("X-Staff-Session") String token) {
+        return replacements.replace(token, mediaId, request);
     }
 
     @PatchMapping("/{mediaId}")
@@ -66,5 +89,14 @@ public class WebsiteMediaManagementController {
             @RequestBody WebsiteMediaVersionRequest request,
             @RequestHeader("X-Staff-Session") String token) {
         return media.restore(token, mediaId, request);
+    }
+
+    @DeleteMapping("/{mediaId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void permanentlyDelete(
+            @PathVariable UUID mediaId,
+            @RequestBody WebsiteMediaVersionRequest request,
+            @RequestHeader("X-Staff-Session") String token) {
+        media.permanentlyDelete(token, mediaId, request);
     }
 }

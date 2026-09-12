@@ -83,7 +83,7 @@
 
 한국어 초안은 `website_page.draft_version`을 올리고 `DRAFT` usage를 다시 동기화한다. 영어 초안은 `website_page_translation.draft_version`을 올린다. `IN_REVIEW`, `APPROVED`, `PUBLISHED` 상태였다면 기존 저장 규칙과 같은 승인 무효화 event를 남기고 `DRAFT`로 되돌린다. 이미 공개된 영어 snapshot과 `PUBLISHED` usage는 유지한다.
 
-각 page·locale에는 `MEDIA_DRAFT_USAGES_REPLACED` audit을 남긴다. 세부 정보는 원본·대상 자산 ID와 변경 위치 수만 기록한다. 원본 파일 경로나 사용자 입력 파일명은 기록하지 않는다.
+각 page·locale에는 기존 `DRAFT_SAVED` audit을 남기고 `details.operation`을 `MEDIA_DRAFT_USAGES_REPLACED`로 기록한다. 세부 정보는 원본·대상 자산 ID와 변경 위치 수만 기록한다. 원본 파일 경로나 사용자 입력 파일명은 기록하지 않는다.
 
 ## 관리자 흐름
 

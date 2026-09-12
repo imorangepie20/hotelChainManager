@@ -1,6 +1,7 @@
 package team.hotelchain.webcontent;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -26,6 +27,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.web.context.WebApplicationContext;
 import org.springframework.transaction.annotation.Transactional;
 import team.hotelchain.staff.StaffAccessService;
+import team.hotelchain.staff.StaffAccessDeniedException;
 import team.hotelchain.web.ApiExceptionHandler;
 
 @SpringBootTest
@@ -113,6 +115,7 @@ class WebsiteTranslationIntegrationTest {
     @Test
     void requestsAndApprovesTheCurrentEnglishDraft() throws Exception {
         String token = headquarters();
+        String publisherToken = publisher();
         var ko = story(token);
         translations.initialize(token, ko.id(), ko.draftVersion(), ko.lifecycleVersion());
         var mvc = MockMvcBuilders.webAppContextSetup(context).build();
@@ -122,13 +125,52 @@ class WebsiteTranslationIntegrationTest {
                         .contentType("application/json")
                         .content("{\"expectedDraftVersion\":1,\"comment\":\"Please review\"}"))
                 .andExpect(status().isOk());
-        mvc.perform(post(path + "/approve").header("X-Staff-Session", token)
+        mvc.perform(post(path + "/approve").header("X-Staff-Session", publisherToken)
                         .contentType("application/json")
                         .content("{\"expectedDraftVersion\":1,\"comment\":\"Approved\"}"))
                 .andExpect(status().isOk());
 
         assertThat(translations.review(token, ko.id()).status())
                 .isEqualTo(WebsiteTranslationReviewStatus.APPROVED);
+    }
+
+    @Test
+    void editorRequestsAndPublisherApprovesAndPublishesTheEnglishDraft() {
+        String adminToken = headquarters();
+        String editorToken = headquartersRole("HQ_EDITOR", "translation-editor@example.com", "영문 편집자");
+        String publisherToken = headquartersRole("HQ_PUBLISHER", "translation-publisher@example.com", "영문 승인자");
+        var ko = story(adminToken);
+        translations.initialize(editorToken, ko.id(), ko.draftVersion(), ko.lifecycleVersion());
+
+        assertThat(pages.staffTree(editorToken)).isNotEmpty();
+        assertThat(pages.staffTree(publisherToken)).isNotEmpty();
+
+        translations.requestReview(editorToken, ko.id(), new WebsiteTranslationReviewActionRequest(1, null));
+        assertThatThrownBy(() -> translations.approveReview(editorToken, ko.id(),
+                new WebsiteTranslationReviewActionRequest(1, null)))
+                .isInstanceOf(StaffAccessDeniedException.class);
+
+        translations.approveReview(publisherToken, ko.id(), new WebsiteTranslationReviewActionRequest(1, null));
+        assertThatThrownBy(() -> translations.publish(editorToken, ko.id(),
+                new PublishWebsitePageRequest(1, 0)))
+                .isInstanceOf(StaffAccessDeniedException.class);
+
+        translations.publish(publisherToken, ko.id(), new PublishWebsitePageRequest(1, 0));
+        assertThat(translations.review(editorToken, ko.id()).status())
+                .isEqualTo(WebsiteTranslationReviewStatus.PUBLISHED);
+    }
+
+    @Test
+    void reviewRequesterCannotApproveOwnEnglishDraft() {
+        String token = headquarters();
+        var ko = story(token);
+        translations.initialize(token, ko.id(), ko.draftVersion(), ko.lifecycleVersion());
+        translations.requestReview(token, ko.id(), new WebsiteTranslationReviewActionRequest(1, null));
+
+        assertThatThrownBy(() -> translations.approveReview(token, ko.id(),
+                new WebsiteTranslationReviewActionRequest(1, null)))
+                .isInstanceOfSatisfying(team.hotelchain.reservation.BusinessConflictException.class,
+                        exception -> assertThat(exception.code()).isEqualTo("WEBSITE_TRANSLATION_SELF_APPROVAL_FORBIDDEN"));
     }
 
     @Test
@@ -455,6 +497,7 @@ class WebsiteTranslationIntegrationTest {
     @Test
     void savesAndPublishesEnglishWithoutChangingKoreanOrItsMediaUsages() throws Exception {
         String token = headquarters();
+        String publisherToken = publisher();
         WebsitePageDocument ko = story(token);
         var mvc = MockMvcBuilders.webAppContextSetup(context).build();
         String path = "/api/staff/website/pages/" + ko.id() + "/translations/en";
@@ -471,9 +514,9 @@ class WebsiteTranslationIntegrationTest {
         assertThat(saved.get("draftVersion")).isEqualTo(2);
         mvc.perform(post(path + "/review/request").header("X-Staff-Session", token).contentType("application/json")
                 .content("{\"expectedDraftVersion\":2,\"comment\":null}")).andExpect(status().isOk());
-        mvc.perform(post(path + "/review/approve").header("X-Staff-Session", token).contentType("application/json")
+        mvc.perform(post(path + "/review/approve").header("X-Staff-Session", publisherToken).contentType("application/json")
                 .content("{\"expectedDraftVersion\":2,\"comment\":null}")).andExpect(status().isOk());
-        mvc.perform(post(path + "/publish").header("X-Staff-Session", token).contentType("application/json")
+        mvc.perform(post(path + "/publish").header("X-Staff-Session", publisherToken).contentType("application/json")
                 .content("{\"expectedDraftVersion\":2,\"expectedPublishedVersion\":0}")).andExpect(status().isOk());
         String publicJson = mvc.perform(get("/api/website/pages/resolve").param("path", "/en/brand/locale-story"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
@@ -559,7 +602,7 @@ class WebsiteTranslationIntegrationTest {
     private void approveEnglish(String token, UUID pageId, int draftVersion) {
         translations.requestReview(token, pageId,
                 new WebsiteTranslationReviewActionRequest(draftVersion, null));
-        translations.approveReview(token, pageId,
+        translations.approveReview(publisher(), pageId,
                 new WebsiteTranslationReviewActionRequest(draftVersion, null));
     }
 
@@ -582,6 +625,21 @@ class WebsiteTranslationIntegrationTest {
         jdbc.update("insert into staff_member (id, email, display_name, password_hash, role) values (?, ?, ?, ?, 'HQ_ADMIN')",
                 UUID.randomUUID(), "locales-hq@example.com", "다국어 본사", new BCryptPasswordEncoder().encode("locale-test"));
         return access.login("locales-hq@example.com", "locale-test").token();
+    }
+
+    private String headquartersRole(String role, String email, String displayName) {
+        jdbc.update("insert into staff_member (id, email, display_name, password_hash, role) values (?, ?, ?, ?, ?)",
+                UUID.randomUUID(), email, displayName, new BCryptPasswordEncoder().encode("locale-test"), role);
+        return access.login(email, "locale-test").token();
+    }
+
+    private String publisher() {
+        jdbc.update("""
+                insert into staff_member (id, email, display_name, password_hash, role)
+                values (?, 'locale-publisher@example.com', '다국어 승인자', ?, 'HQ_PUBLISHER')
+                on conflict (email) do nothing
+                """, UUID.randomUUID(), new BCryptPasswordEncoder().encode("locale-test"));
+        return access.login("locale-publisher@example.com", "locale-test").token();
     }
 
     private Map<String, Object> content(String title, String alt) {

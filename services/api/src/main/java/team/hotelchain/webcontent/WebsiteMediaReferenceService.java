@@ -2,6 +2,7 @@ package team.hotelchain.webcontent;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -46,18 +47,18 @@ public class WebsiteMediaReferenceService {
     }
 
     public void synchronizeDraft(UUID pageId, String pageType, Map<String, Object> content) {
-        synchronize(pageId, pageType, "DRAFT", content);
+        synchronize(pageId, pageType, "ko", "DRAFT", content);
     }
 
     public void synchronizePublished(UUID pageId, String pageType, Map<String, Object> content) {
-        synchronize(pageId, pageType, "PUBLISHED", content);
+        synchronize(pageId, pageType, "ko", "PUBLISHED", content);
     }
 
-    private void synchronize(UUID pageId, String pageType, String state, Map<String, Object> content) {
-        jdbc.update("delete from website_media_usage where page_id = ? and document_state = ?", pageId, state);
+    public void synchronize(UUID pageId, String pageType, String locale, String state, Map<String, Object> content) {
+        jdbc.update("delete from website_media_usage where page_id = ? and locale = ? and document_state = ?", pageId, locale, state);
         if (content == null || content.isEmpty()) return;
         if ("HOTEL_LANDING".equals(pageType)) {
-            insertUsage(pageId, state, "heroAssetId", assetId(content.get("heroAssetId"), "heroAssetId"),
+            insertUsage(pageId, locale, state, "heroAssetId", assetId(content.get("heroAssetId"), "heroAssetId"),
                     text(content.get("heroAlt"), "heroAlt"));
             return;
         }
@@ -67,13 +68,48 @@ public class WebsiteMediaReferenceService {
         for (int index = 0; index < blocks.size(); index++) {
             if (!(blocks.get(index) instanceof Map<?, ?> block)) continue;
             if ("HERO".equals(block.get("type"))) {
-                insertUsage(pageId, state, "blocks[" + index + "].imageAssetId",
+                insertUsage(pageId, locale, state, "blocks[" + index + "].imageAssetId",
                         assetId(block.get("imageAssetId"), "blocks[" + index + "].imageAssetId"),
                         text(block.get("imageAlt"), "blocks[" + index + "].imageAlt"));
             } else if ("IMAGE_GALLERY".equals(block.get("type"))) {
-                synchronizeGalleryUsages(pageId, state, block, index);
+                synchronizeGalleryUsages(pageId, locale, state, block, index);
             }
         }
+    }
+
+    MediaReferenceReplacement replaceAssetReferences(
+            String pageType,
+            Map<String, Object> content,
+            WebsiteMediaService.MediaAssetRow source,
+            WebsiteMediaService.MediaAssetRow target) {
+        Map<String, Object> replaced = copy(content);
+        List<String> fieldPaths = new ArrayList<>();
+        if ("HOTEL_LANDING".equals(pageType)) {
+            replacePair(replaced, "heroAssetId", "heroImage", "heroAssetId", source, target, fieldPaths);
+            return new MediaReferenceReplacement(normalizeLandingContent(replaced), List.copyOf(fieldPaths));
+        }
+        if (!"HOME_PAGE".equals(pageType) && !"CONTENT_PAGE".equals(pageType)) {
+            return new MediaReferenceReplacement(replaced, List.of());
+        }
+        Object blocksValue = replaced.get("blocks");
+        if (blocksValue instanceof List<?> blocks) {
+            for (int blockIndex = 0; blockIndex < blocks.size(); blockIndex++) {
+                if (!(blocks.get(blockIndex) instanceof Map<?, ?> rawBlock)) continue;
+                Map<String, Object> block = asWritableMap(rawBlock);
+                if ("HERO".equals(block.get("type"))) {
+                    replacePair(block, "imageAssetId", "imageSrc", "blocks[" + blockIndex + "].imageAssetId",
+                            source, target, fieldPaths);
+                } else if ("IMAGE_GALLERY".equals(block.get("type")) && block.get("items") instanceof List<?> items) {
+                    for (int itemIndex = 0; itemIndex < items.size(); itemIndex++) {
+                        if (!(items.get(itemIndex) instanceof Map<?, ?> rawItem)) continue;
+                        replacePair(asWritableMap(rawItem), "imageAssetId", "imageSrc",
+                                "blocks[" + blockIndex + "].items[" + itemIndex + "].imageAssetId",
+                                source, target, fieldPaths);
+                    }
+                }
+            }
+        }
+        return new MediaReferenceReplacement(normalizeStructuredContent(replaced), List.copyOf(fieldPaths));
     }
 
     private void normalizeGallery(Map<String, Object> block, int blockIndex) {
@@ -86,22 +122,22 @@ public class WebsiteMediaReferenceService {
         }
     }
 
-    private void synchronizeGalleryUsages(UUID pageId, String state, Map<?, ?> block, int blockIndex) {
+    private void synchronizeGalleryUsages(UUID pageId, String locale, String state, Map<?, ?> block, int blockIndex) {
         Object value = block.get("items");
         if (!(value instanceof List<?> items)) return;
         for (int itemIndex = 0; itemIndex < items.size(); itemIndex++) {
             if (!(items.get(itemIndex) instanceof Map<?, ?> item)) continue;
             String path = "blocks[" + blockIndex + "].items[" + itemIndex + "]";
-            insertUsage(pageId, state, path + ".imageAssetId", assetId(item.get("imageAssetId"), path + ".imageAssetId"),
+            insertUsage(pageId, locale, state, path + ".imageAssetId", assetId(item.get("imageAssetId"), path + ".imageAssetId"),
                     text(item.get("imageAlt"), path + ".imageAlt"));
         }
     }
 
-    private void insertUsage(UUID pageId, String state, String fieldPath, UUID assetId, String altText) {
+    private void insertUsage(UUID pageId, String locale, String state, String fieldPath, UUID assetId, String altText) {
         jdbc.update("""
-                insert into website_media_usage (asset_id, page_id, document_state, field_path, alt_text)
-                values (?, ?, ?, ?, ?)
-                """, assetId, pageId, state, fieldPath, altText);
+                insert into website_media_usage (asset_id, page_id, locale, document_state, field_path, alt_text)
+                values (?, ?, ?, ?, ?, ?)
+                """, assetId, pageId, locale, state, fieldPath, altText);
     }
 
     private void normalizeHero(Map<String, Object> target, String assetKey, String pathKey, String path) {
@@ -113,6 +149,21 @@ public class WebsiteMediaReferenceService {
         }
         target.put(assetKey, asset.id().toString());
         target.put(pathKey, asset.deliveryPath());
+    }
+
+    private void replacePair(
+            Map<String, Object> content,
+            String assetKey,
+            String deliveryKey,
+            String fieldPath,
+            WebsiteMediaService.MediaAssetRow source,
+            WebsiteMediaService.MediaAssetRow target,
+            List<String> fieldPaths) {
+        if (!source.id().toString().equals(content.get(assetKey))) return;
+        if (!source.deliveryPath().equals(content.get(deliveryKey))) return;
+        content.put(assetKey, target.id().toString());
+        content.put(deliveryKey, target.deliveryPath());
+        fieldPaths.add(fieldPath);
     }
 
     @SuppressWarnings("unchecked")
@@ -144,5 +195,8 @@ public class WebsiteMediaReferenceService {
 
     private IllegalArgumentException invalid(String message) {
         return new IllegalArgumentException("미디어 참조 오류: " + message);
+    }
+
+    record MediaReferenceReplacement(Map<String, Object> content, List<String> fieldPaths) {
     }
 }

@@ -27,10 +27,11 @@ export function MediaField({ token, assetId, deliveryUrl, altText, protectedAsse
   deliveryUrl: string;
   altText: string;
   protectedAssetIds?: readonly string[];
-  onAssetSelect: (asset: WebsiteMediaAsset) => void;
+  onAssetSelect: (asset: WebsiteMediaAsset, altText: string) => void;
   onAltTextChange: (value: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [replacing, setReplacing] = useState(false);
   const [asset, setAsset] = useState<WebsiteMediaAsset | null>(null);
 
   useEffect(() => {
@@ -60,7 +61,10 @@ export function MediaField({ token, assetId, deliveryUrl, altText, protectedAsse
             <p className="text-sm font-medium">대표 이미지</p>
             {asset ? <><p className="mt-1 truncate text-sm text-muted-foreground">{asset.displayName}</p><p className="mt-1 text-xs text-muted-foreground">{assetDetails(asset)} · 사용 {asset.usageCount}곳</p></> : <p className="mt-1 text-xs text-muted-foreground">선택된 자산 정보를 불러오는 중이거나 카탈로그에 없습니다.</p>}
           </div>
-          <Button type="button" variant="outline" onClick={() => setOpen(true)}>미디어 선택</Button>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" onClick={() => { setReplacing(false); setOpen(true); }}>미디어 선택</Button>
+            <Button type="button" variant="outline" disabled={!assetId || !deliveryUrl} onClick={() => { setReplacing(true); setOpen(true); }}>파일 교체</Button>
+          </div>
         </div>
       </div>
       <label className="grid gap-1 text-sm font-medium">대표 이미지 대체 텍스트
@@ -73,9 +77,10 @@ export function MediaField({ token, assetId, deliveryUrl, altText, protectedAsse
         onOpenChange={setOpen}
         initialAssetId={assetId}
         protectedAssetIds={protectedAssetIds}
+        replacement={replacing ? { deliveryUrl, altText } : undefined}
         onSelect={(selected) => {
           setAsset(selected);
-          onAssetSelect(selected);
+          onAssetSelect(selected, replacing ? altText : selected.defaultAltText);
         }}
       />
     </section>

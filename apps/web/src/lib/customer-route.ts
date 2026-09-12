@@ -1,7 +1,7 @@
-export type CustomerRoute =
-  | { kind: 'home'; pathname: '/' }
+export type CustomerRoute = (
+  | { kind: 'home'; pathname: '/' | '/en' }
   | { kind: 'collection'; pathname: string; hotelSlug?: string; contentKind: 'ROOM' | 'DINING' | 'FACILITY' | 'EXPERIENCE' | 'PROMOTION' | 'GUIDE' | 'BRAND' }
-  | { kind: 'page'; pathname: string; segments: string[] }
+  | { kind: 'page'; pathname: string; segments: string[] }) & { locale?: 'ko' | 'en' }
 
 const segmentPattern = /^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/
 const encodedSeparator = /%(?:2f|5c)/i
@@ -15,12 +15,25 @@ export function normalizeCustomerPathname(pathname: string): string | null {
   const rawSegments = path.split('/')
   if (rawSegments.shift() !== '' || rawSegments.length === 0) return null
   if (hasTrailingSlash) rawSegments.pop()
-  if (rawSegments.length < 1 || rawSegments.length > 4 || rawSegments.some(segment => !segmentPattern.test(segment))) return null
+  const maximumSegments = rawSegments[0]?.toLowerCase() === 'en' ? 5 : 4
+  if (rawSegments.length < 1 || rawSegments.length > maximumSegments || rawSegments.some(segment => !segmentPattern.test(segment))) return null
 
   return `/${rawSegments.map(segment => segment.toLowerCase()).join('/')}`
 }
 
 export function resolveCustomerRoute(pathname: string): CustomerRoute | null {
+  const normalized = normalizeCustomerPathname(pathname)
+  if (!normalized) return null
+  if (normalized === '/en' || normalized.startsWith('/en/')) {
+    const base = normalized === '/en' ? '/' : normalized.slice(3)
+    if (base === '/en' || base.startsWith('/en/')) return null
+    const route = resolveBaseRoute(base)
+    return route ? { ...route, pathname: normalized, locale: 'en' } as CustomerRoute : null
+  }
+  return resolveBaseRoute(normalized)
+}
+
+function resolveBaseRoute(pathname: string): CustomerRoute | null {
   const normalizedPathname = normalizeCustomerPathname(pathname)
   if (!normalizedPathname) return null
   if (normalizedPathname === '/') return { kind: 'home', pathname: '/' }

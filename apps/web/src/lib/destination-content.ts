@@ -53,7 +53,21 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const isText = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0
 
-export function destinationContentFromPublished(region: string, published: unknown): DestinationContent {
+export function destinationContentFromPublished(region: string, published: unknown): DestinationContent
+export function destinationContentFromPublished(region: string, published: unknown, locale: 'en'): DestinationContent | null
+export function destinationContentFromPublished(region: string, published: unknown, locale?: 'en'): DestinationContent | null {
+  if (locale === 'en') {
+    if (!isRecord(published) || !['title', 'description', 'eyebrow', 'heroAlt'].every(key => isText(published[key]))
+      || !safeMediaDeliveryPath(published.heroAssetId, published.heroImage) || !isRecord(published.arrival)
+      || !['address', 'checkInOut', 'highlight'].every(key => isText((published.arrival as Record<string, unknown>)[key]))
+      || !Array.isArray(published.experiences) || !published.experiences.every(item => isRecord(item) && ['category', 'title', 'description'].every(key => isText(item[key])))
+      || !Array.isArray(published.offers) || !published.offers.every(item => isRecord(item) && ['title', 'detail', 'bookingPeriod', 'stayPeriod'].every(key => isText(item[key])))) return null
+    const englishSeo = isRecord(published.seo) ? published.seo : {}
+    return destinationContentFromPublished(region, { ...published, seo: {
+      title: isText(englishSeo.title) ? englishSeo.title : published.title,
+      description: isText(englishSeo.description) ? englishSeo.description : published.description,
+    } })
+  }
   const fallback = destinationContentByRegion(region)
   if (!isRecord(published) || !isText(published.title)) return fallback
 

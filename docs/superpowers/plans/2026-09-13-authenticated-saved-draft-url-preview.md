@@ -333,7 +333,7 @@ mvc.perform(get("/api/website/pages/preview")
 
 Expected: 해당 클래스 전체 통과, failures 0, errors 0. SQL query logger나 application logger에 `X-Website-Preview` 값이 전달되는 코드가 없어야 한다.
 
-- [ ] **Step 8: 커밋**
+- [x] **Step 8: 커밋**
 
 ```powershell
 git add -- src/main/java/team/hotelchain/webcontent/WebsitePreviewResult.java src/main/java/team/hotelchain/webcontent/PublicWebsitePreviewController.java src/main/java/team/hotelchain/webcontent/WebsitePreviewGrantService.java src/main/java/team/hotelchain/webcontent/WebsitePageService.java src/main/java/team/hotelchain/webcontent/WebsiteTranslationService.java src/main/java/team/hotelchain/web/ApiExceptionHandler.java src/test/java/team/hotelchain/webcontent/WebsitePreviewGrantIntegrationTest.java
@@ -448,7 +448,7 @@ pnpm exec eslint src/lib/staff-api.ts src/components/hotel-admin/website-saved-d
 
 Expected: preview E2E 전체 통과, TypeScript exit 0, ESLint error 0. 390px에서 `scrollWidth <= innerWidth`, Escape/닫기 후 trigger focus를 확인한다.
 
-- [ ] **Step 7: 커밋**
+- [x] **Step 7: 커밋**
 
 ```powershell
 git add -- src/lib/staff-api.ts src/components/hotel-admin/website-saved-draft-preview-action.tsx src/components/hotel-admin/content-page-editor.tsx src/components/hotel-admin/website-content-editor.tsx e2e/website-saved-draft-preview.spec.ts
@@ -547,7 +547,7 @@ pnpm exec tsc -b
 
 Expected: 순수 test exit 0, TypeScript exit 0.
 
-- [ ] **Step 6: 커밋**
+- [x] **Step 6: 커밋**
 
 ```powershell
 git add -- src/lib/website-preview.ts src/lib/website-preview.test.ts src/lib/api.ts
@@ -644,7 +644,7 @@ pnpm build
 
 Expected: customer preview E2E 전체 통과, pure test exit 0, Vite production build exit 0. 404/410 test의 `publicResolveCount`는 공개 전환 버튼을 누르기 전 0이다.
 
-- [ ] **Step 8: 커밋**
+- [x] **Step 8: 커밋**
 
 ```powershell
 git add -- ../apps/web/src/components/website-preview-banner.tsx ../apps/web/src/components/content-page.tsx ../apps/web/src/components/concierge-panel.tsx ../apps/web/src/App.tsx ../apps/web/src/styles.css playwright.customer.config.ts e2e/customer-saved-draft-preview.spec.ts
@@ -734,7 +734,7 @@ git status --short
 
 Expected: raw token을 log/analytics/localStorage에 보내는 코드 0건, 공백 오류 0. 기존 dirty 파일은 사용자 변경과 이번 hunk를 구분해 검토하며 unrelated 파일을 stage하지 않는다.
 
-- [ ] **Step 6: 문서 커밋**
+- [x] **Step 6: 문서 커밋**
 
 ```powershell
 git add -- docs/architecture/cms-functional-specification.md docs/overview/current-development-context.md docs/changes/2026-09-13-authenticated-saved-draft-url-preview.md
@@ -750,6 +750,11 @@ git commit -m "docs: record authenticated saved draft previews"
 - 별도 읽기 전용 검토에서 깊은 영어 경로, 호텔 의존성 실패, 지도 CTA, 예약 입력, HTTPS와 clipboard 응답 경쟁을 보완하고 재검토했다. 저장소 getter 차단도 실패 재현 후 수정했다. 추가한 HTTPS guard는 승인 설계의 운영 전송 제한을 구현한 것이며 로컬 `dev`만 예외다.
 - 기존 계획 외 연결은 별도 지점 영어 editor에 같은 action을 적용한 범위와 위 안전장치뿐이다. 전체 suite·실제 사용자 저장/발행/예약/결제·운영 배포는 실행하지 않았다.
 - 상세 결과와 운영 설정은 [변경 기록](../../changes/2026-09-13-authenticated-saved-draft-url-preview.md)을 따른다. 남은 것은 배포 HTTPS/proxy 확인과 사용자 변경을 분리한 통합 커밋이며, 기능 범위를 확대하지 않는다.
+
+### 후속 커밋·푸시 승인
+
+- 사용자의 커밋·푸시 요청과 기존 CMS·다국어 변경 포함 승인을 받았다. 보류했던 개별 커밋 단계 대신 의존하는 기존 구현과 미리보기를 하나의 통합 커밋으로 기록한다.
+- 푸시 대상은 새 `codex/saved-draft-url-preview` 브랜치다. main·기존 원격 브랜치를 덮어쓰거나 force push하지 않는다. `.tmp` 검토 이미지, 비밀값과 빌드 결과물은 제외하고 로컬에 보존한다.
 
 - grant 발급·폐기, 한국어·영어 세 page type 응답, 404/410 격리, GET 무변경, 관리자 UI, 고객 안전 렌더링이 모두 직접 검증되면 중단한다.
 - 전체 suite, 영구 공유, 댓글, PDF, draft navigation tree, CDN 변경, 실제 사용자 CMS·예약·결제 mutation으로 범위를 넓히지 않는다.

@@ -6,7 +6,7 @@ export type StaffPrincipal = {
 
   displayName: string;
 
-  role: "HQ_ADMIN" | "BRANCH_STAFF";
+  role: "HQ_ADMIN" | "HQ_EDITOR" | "HQ_PUBLISHER" | "BRANCH_STAFF";
 
   hotelId: string | null;
 
@@ -285,6 +285,34 @@ export type WebsiteMediaMetadataInput = {
   expectedVersion: number;
 };
 export type WebsiteMediaVersionInput = { expectedVersion: number };
+export type WebsiteMediaDraftReplacementUsage = {
+  pageId: string;
+  pageLabel: string;
+  pagePath: string;
+  pageType: string;
+  locale: "ko" | "en";
+  fieldPath: string;
+  expectedDraftVersion: number;
+};
+export type WebsiteMediaDraftReplacementImpact = {
+  sourceAsset: WebsiteMediaAsset;
+  targetAsset: WebsiteMediaAsset;
+  replaceableUsages: WebsiteMediaDraftReplacementUsage[];
+  publishedUsageCount: number;
+  archivedDraftUsageCount: number;
+};
+export type ReplaceWebsiteMediaDraftUsagesInput = {
+  targetMediaId: string;
+  expectedSourceVersion: number;
+  expectedTargetVersion: number;
+  targets: Pick<WebsiteMediaDraftReplacementUsage, "pageId" | "locale" | "fieldPath" | "expectedDraftVersion">[];
+};
+export type WebsiteMediaDraftReplacementResult = {
+  sourceMediaId: string;
+  targetMediaId: string;
+  replacedUsageCount: number;
+  changedDraftCount: number;
+};
 
 async function contentRequest<T>(path: string, token: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, { ...init, headers: { "X-Staff-Session": token, "Content-Type": "application/json", ...init?.headers } });
@@ -302,6 +330,19 @@ async function mediaRequest<T>(path: string, token: string, init?: RequestInit):
     throw new StaffApiError(error.message ?? "미디어 요청을 처리하지 못했습니다.", response.status, error.code);
   }
   return response.json() as Promise<T>;
+}
+
+export type WebsitePreviewGrantResponse = { grantId: string; previewToken: string; previewPath: string; expiresAt: string };
+export function issueWebsitePreviewGrant(token: string, pageId: string, input: { locale: "ko" | "en"; expectedDraftVersion: number }) {
+  return contentRequest<WebsitePreviewGrantResponse>(`/api/staff/website/pages/${pageId}/preview-grants`, token,
+    { method: "POST", body: JSON.stringify(input) });
+}
+export async function revokeWebsitePreviewGrant(token: string, grantId: string): Promise<void> {
+  const response = await fetch(`/api/staff/website/preview-grants/${grantId}`, { method: "DELETE", headers: { "X-Staff-Session": token } });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(error.message ?? "미리보기 링크를 폐기하지 못했습니다.", response.status, error.code);
+  }
 }
 
 export function getWebContent(token: string, hotelId: string) { return contentRequest<WebContentDocument>(`/api/staff/web-content/hotels/${hotelId}`, token); }
@@ -339,6 +380,15 @@ export function uploadWebsiteMedia(token: string, input: UploadWebsiteMediaInput
 }
 export function getWebsiteMediaUsages(token: string, mediaId: string) {
   return mediaRequest<WebsiteMediaUsage[]>(`/api/staff/website/media/${mediaId}/usages`, token);
+}
+export function getWebsiteMediaDraftReplacementImpact(token: string, sourceMediaId: string, targetMediaId: string) {
+  const query = new URLSearchParams({ targetMediaId });
+  return mediaRequest<WebsiteMediaDraftReplacementImpact>(`/api/staff/website/media/${sourceMediaId}/draft-replacement-impact?${query}`, token);
+}
+export function replaceWebsiteMediaDraftUsages(token: string, sourceMediaId: string, input: ReplaceWebsiteMediaDraftUsagesInput) {
+  return mediaRequest<WebsiteMediaDraftReplacementResult>(`/api/staff/website/media/${sourceMediaId}/draft-replacements`, token, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+  });
 }
 export function updateWebsiteMedia(token: string, mediaId: string, input: WebsiteMediaMetadataInput) {
   return mediaRequest<WebsiteMediaAsset>(`/api/staff/website/media/${mediaId}`, token, {

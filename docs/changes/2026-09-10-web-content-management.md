@@ -100,7 +100,7 @@
 검증: `WebsitePageIntegrationTest` 14건 통과. 보관된 페이지의 parent/version/audit/media usage 정리, 자산 유지, 활성 page·오래된 lifecycle request·SECTION·지점 권한 거부를 확인했다. 관리자 `pnpm.cmd exec playwright test e2e/website-content-editor.spec.ts --project=chromium --grep "permanently deletes"` 1건과 `pnpm.cmd exec tsc --noEmit`를 통과했다. Docker API 재빌드와 4080 health `UP`, 기존 `/brand/story` 공개 resolve를 확인했고 유효하지 않은 세션의 DELETE가 401 `STAFF_AUTHENTICATION_REQUIRED`로 거부되는 것을 읽기 전용으로 확인했다. 실제 사용자 페이지에는 보관·삭제 요청을 보내지 않았다.
 
 ## 남은 작업과 완료 기준
-1. 페이지 부모 이동·깊은 트리와 자산 영구 삭제·파일 교체 정책을 단계적으로 구현한다.
+1. 자산 파일 교체는 기존 자산을 덮어쓰지 않고 새 자산을 만든 뒤 사용 위치를 명시적으로 이동하는 방식으로 구현한다.
 2. 한국어·영어 콘텐츠, 번역 승인 흐름, 인증된 초안 미리보기, canonical·OG·robots를 구현한다.
 3. 예약된 발행(스케줄 발행), 블록 이동 감지, 정적 배포 history fallback을 후속 단계로 구현한다.
 
@@ -126,3 +126,7 @@
 2026-09-11: V13으로 자산 이름·기본 alt 편집과 안전한 보관·복원을 추가했다. 보관은 초안·발행 사용 위치가 없는 자산만 허용하며, `FOR KEY SHARE`와 `FOR UPDATE`로 페이지 저장과 보관의 경합을 막는다. 대상 서버 테스트 20건, 관리자 타입 검사와 CMS Playwright 9건, Docker Flyway V13·readiness를 확인했다. 실제 본사 CMS에서는 사용 중인 내장 자산이 보관 불가 안내와 함께 비활성인 것만 확인했고, 사용자 자산을 저장·보관·삭제하지 않았다.
 
 2026-09-11: V13 보완으로 캐시된 공개 업로드가 보관 뒤에도 장기간 재사용되는 문제를 `max-age=0, must-revalidate`로 줄였고, 선택기 닫기·미저장 페이지 자산·보관 preview·409 최신 데이터 재조회 경합을 E2E로 고정했다. V14는 `CONTENT_PAGE`만 `ACTIVE`/`ARCHIVED` 수명주기로 전환한다. 보관은 공개본과 공개 usage를 비우되 초안·이력·URL을 남기며, 복원은 공개를 자동으로 되살리지 않는다. 서버 22건과 CMS 15건, Docker Flyway V14·readiness를 확인했다. 실제 개발 콘텐츠는 보관하지 않았다.
+
+## V19 미디어 자산 영구 삭제
+
+2026-09-12: 참조 없는 `ARCHIVED UPLOADED` 자산만 보관 30일 뒤 영구 삭제하는 본사 전용 DELETE API를 추가했다. V19는 보관 시각을 기록하고 기존 보관 자산을 `updated_at`으로 보정한다. 파일을 같은 볼륨의 격리 경로로 이동한 뒤 DB 삭제를 수행하며, 롤백 시 원복하고 커밋 시 제거한다. 관리자 선택기는 삭제 가능일과 명시적 복구 불가 확인을 제공한다. 상세 검증은 [변경 기록](2026-09-12-media-permanent-delete.md)을 따른다.

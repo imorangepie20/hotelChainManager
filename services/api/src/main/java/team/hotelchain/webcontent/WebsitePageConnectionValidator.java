@@ -37,6 +37,17 @@ public class WebsitePageConnectionValidator {
         if (pageId == null || !List.of("DRAFT", "PUBLISHED").contains(documentState)) {
             throw invalid("관련 페이지 상태가 올바르지 않습니다.");
         }
+        validateRelatedPageTargets(pageId, connections, requirePublishedTarget);
+        WebsitePageConnections next = connections == null ? WebsitePageConnections.empty() : connections;
+        for (WebsitePageRelation relation : next.relatedPages()) {
+            if (hasPathTo(pageId, relation.targetPageId(), documentState, new HashSet<>())) {
+                throw invalid("관련 페이지 연결은 순환할 수 없습니다.");
+            }
+        }
+    }
+
+    public void validateRelatedPageTargets(UUID pageId, WebsitePageConnections connections, boolean requirePublishedTarget) {
+        if (pageId == null) throw invalid("관련 페이지가 필요합니다.");
         WebsitePageConnections next = connections == null ? WebsitePageConnections.empty() : connections;
         HashSet<UUID> targets = new HashSet<>();
         HashSet<String> displayOrders = new HashSet<>();
@@ -51,9 +62,6 @@ public class WebsitePageConnectionValidator {
                 throw invalid("관련 페이지 연결이 중복되었습니다.");
             }
             requireRelatedPage(relation.targetPageId(), requirePublishedTarget);
-            if (hasPathTo(pageId, relation.targetPageId(), documentState, new HashSet<>())) {
-                throw invalid("관련 페이지 연결은 순환할 수 없습니다.");
-            }
         }
     }
 

@@ -42,7 +42,12 @@
 - `NEXT_PUBLIC_CUSTOMER_WEB_ORIGIN`은 운영 고객 HTTPS origin으로 설정한다. 링크/토큰 header를 proxy access log·분석·오류 수집·브라우저 trace에 추가하지 않는다. 신규 고객 테스트의 trace는 껐다.
 - 전체 서버 suite·전체 브라우저 회귀·실제 운영 배포·실제 사용자 CMS 저장/발행·실제 예약/결제 mutation은 실행하지 않았다. 대상 서버 테스트는 실제 PostgreSQL/Flyway V24를 사용했고 사용자 데이터 transaction은 테스트 종료 시 rollback한다.
 - V24는 별도 grant 테이블만 추가한다. 배포 rollback은 이전 애플리케이션을 먼저 복구하고 grant 테이블 정리는 별도 승인된 DB 작업으로 처리한다. 기존 초안·공개본·예약 테이블을 되돌리지 않는다.
-- 작업 시작부터 존재한 사용자 변경과 이번 구현이 겹치는 파일은 통째로 stage/commit하지 않았다. Task 1의 독립 파일 커밋 이후 나머지 구현은 현재 작업 트리에 보존한다. 변경 범위 검토 후 통합 커밋은 별도 작업이다.
+- 작업 시작부터 존재한 사용자 변경과 이번 구현이 겹치는 파일은 처음에는 stage/commit하지 않았다. 이후 사용자가 기존 CMS·다국어 변경을 포함한 통합 커밋과 `codex/saved-draft-url-preview` 새 브랜치 푸시를 승인했다. 승인 범위의 소스·테스트·migration·문서를 함께 기록하고 임시 이미지·비밀값·빌드 결과물은 제외한다. 기존 main 브랜치는 변경하지 않는다.
+
+## 통합 커밋 전 재검증
+
+- 사용자 승인 범위의 통합 커밋 전 서버 grant/전송/page/translation/media 대상 74개(failures 0·errors 0·skipped 0), 관리자 미리보기/내비게이션 Playwright 8개, 고객 미리보기 Playwright 14개를 재실행해 통과했다.
+- 관리자 TypeScript, 고객 session 25개 assertion, preview API 계약 검사와 고객 production build도 다시 통과했다. staged 공백 검사에 오류가 없고 비밀값 주요 패턴 검사에 일치 항목이 없었다.
 
 ## 다음 작업
 

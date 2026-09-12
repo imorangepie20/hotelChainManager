@@ -33,6 +33,8 @@ public class StaffDevAccountInitializer {
         this.enabled = enabled;
         this.accounts = List.of(
                 new DevAccount("hq@hotel-chain.local", "본사 관리자", "HQ_ADMIN", null, hqPassword),
+                new DevAccount("editor@hotel-chain.local", "영문 편집자", "HQ_EDITOR", null, hqPassword),
+                new DevAccount("publisher@hotel-chain.local", "영문 승인자", "HQ_PUBLISHER", null, hqPassword),
                 new DevAccount("sokcho@hotel-chain.local", "속초 지점 직원", "BRANCH_STAFF", SOKCHO, sokchoPassword),
                 new DevAccount("seoraksan@hotel-chain.local", "설악산 지점 직원", "BRANCH_STAFF", SEORAKSAN, seoraksanPassword),
                 new DevAccount("jeju@hotel-chain.local", "제주 지점 직원", "BRANCH_STAFF", JEJU, jejuPassword));

@@ -33,11 +33,17 @@ export class ApiFailure extends Error {
   constructor(public code: string, message: string, public status: number) { super(message) }
 }
 
+export type WebsitePreviewPageResponse = { page: PublishedWebsitePage; expiresAt: string }
+
+async function apiFailure(response: Response) {
+  const error = await response.json().catch(() => ({ code: 'NETWORK_ERROR', message: '요청을 처리하지 못했습니다.' }))
+  return new ApiFailure(error.code, error.message, response.status)
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ code: 'NETWORK_ERROR', message: '요청을 처리하지 못했습니다.' }))
-    throw new ApiFailure(error.code, error.message, response.status)
+    throw await apiFailure(response)
   }
   return response.json() as Promise<T>
 }
@@ -51,9 +57,21 @@ const headers = (token: string, key?: string) => ({
 export const api = {
   hotels: () => request<Hotel[]>('/api/hotels'),
   hotelContent: (hotelId: string) => request<Record<string, unknown>>(`/api/hotels/${hotelId}/content`),
-  websiteNavigation: () => request<WebsiteNavigationItem[]>('/api/website/navigation'),
-  websitePage: (path: string) => request<PublishedWebsitePage>(`/api/website/pages/resolve?${new URLSearchParams({ path })}`),
-  websiteCollection: (contentKind: string, hotelSlug?: string) => request<unknown[]>(`/api/website/collections?${new URLSearchParams({ kind: contentKind, ...(hotelSlug ? { hotelSlug } : {}) })}`),
+  websiteNavigation: (locale: 'ko' | 'en' = 'ko') => request<WebsiteNavigationItem[]>(`/api/website/navigation?${new URLSearchParams({ locale })}`),
+  websitePage: (path: string, locale: 'ko' | 'en' = 'ko') => request<PublishedWebsitePage>(`/api/website/pages/resolve?${new URLSearchParams({ path, locale })}`),
+  websitePreviewPage: async (path: string, locale: 'ko' | 'en', token: string): Promise<WebsitePreviewPageResponse> => {
+    if (typeof window !== 'undefined' && window.location.protocol !== 'https:' && !['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname)) {
+      throw new ApiFailure('WEBSITE_PREVIEW_HTTPS_REQUIRED', '초안 미리보기는 HTTPS에서만 사용할 수 있습니다.', 403)
+    }
+    const response = await fetch(`/api/website/pages/preview?${new URLSearchParams({ path, locale })}`, {
+      headers: { 'X-Website-Preview': token }, cache: 'no-store', credentials: 'omit',
+    })
+    if (!response.ok) throw await apiFailure(response)
+    const expiresAt = response.headers.get('X-Website-Preview-Expires-At')
+    if (!expiresAt || !Number.isFinite(Date.parse(expiresAt))) throw new ApiFailure('WEBSITE_PREVIEW_UNAVAILABLE', '미리보기 만료 정보를 확인할 수 없습니다.', 410)
+    return { page: await response.json() as PublishedWebsitePage, expiresAt }
+  },
+  websiteCollection: (contentKind: string, hotelSlug?: string, locale: 'ko' | 'en' = 'ko') => request<unknown[]>(`/api/website/collections?${new URLSearchParams({ kind: contentKind, locale, ...(hotelSlug ? { hotelSlug } : {}) })}`),
   availability: (query: URLSearchParams) => request<{ offers: Offer[] }>(`/api/availability?${query}`),
   reserve: (body: object, token: string, key: string) => request<Reservation>('/api/reservations', {
     method: 'POST', headers: headers(token, key), body: JSON.stringify(body),

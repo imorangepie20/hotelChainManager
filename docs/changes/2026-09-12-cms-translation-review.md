@@ -67,7 +67,15 @@ V21은 기존 테이블·공개 콘텐츠를 삭제하지 않는 additive migrat
 ## 미검증과 제외 범위
 
 - 실제 물리 장치와 실기기 브라우저 검증은 수행하지 않았다. Playwright의 1280px·390px viewport만 자동 검증했다.
-- 작성자와 승인자의 역할 분리, `HQ_EDITOR`·`HQ_PUBLISHER` 같은 새 권한은 구현·검증하지 않았다. 현재는 `HQ_ADMIN` 단일 역할이다.
+- 영어 번역에는 `HQ_EDITOR`·`HQ_PUBLISHER` 역할 분리와 자가 승인 금지를 후속 적용했다. 한국어와 페이지 구조·미디어 수명주기 등 나머지 CMS 권한 분리는 구현하지 않았다.
 - 예약 발행과 scheduled publishing, notification·alert는 구현·검증하지 않았다.
 - 한국어 승인 workflow와 전체 예약·결제·AI UI 영어화는 범위 밖이다.
 - 전체 backend suite, 전체 관리자 E2E, 실제 rollback 훈련과 운영 배포는 실행하지 않았다. 이번 확인은 지정된 번역 통합 suite, 관리자 편집기 E2E 전체 파일, 두 production build와 로컬 API·DB read-only 검증에 한정한다.
+
+## V23 영어 번역 역할 분리
+
+- `HQ_EDITOR`는 영어 초안 가져오기·저장·검토 요청만, `HQ_PUBLISHER`는 승인·반려·발행만 수행한다. `HQ_ADMIN`은 두 권한을 가지지만 자신이 검토 요청한 초안은 승인할 수 없다.
+- 서버는 현재 초안 version의 최근 `REVIEW_REQUESTED` 행위자를 기준으로 자가 승인을 거부한다. 역할 검사는 UI가 아니라 API에서 강제하며 지점 직원은 계속 접근할 수 없다.
+- 관리자는 편집자에게 승인·반려·발행을 숨기고 승인자에게 입력 필드를 읽기 전용으로 제공한다. 자가 승인 상황에는 다른 승인자가 필요하다는 안내를 표시한다.
+- 로컬 개발에는 `editor@hotel-chain.local`, `publisher@hotel-chain.local` 계정을 추가했다. 두 계정은 기존 본사 개발 비밀번호 설정을 재사용하며 운영 계정 생성 방식은 포함하지 않는다.
+- `WebsiteTranslationIntegrationTest` 18건, 역할 UI Chromium 1건과 `npx.cmd tsc --noEmit`이 통과했다. Docker API 재빌드 후 health `UP`, V23 적용, 두 개발 계정 로그인과 CMS 트리 조회를 확인했다. 전체 backend·관리자 E2E와 production build는 반복하지 않았다.

@@ -1,5 +1,8 @@
 "use client";
 
+import { WebsiteTranslationEditor } from "@/components/hotel-admin/website-translation-editor";
+import { WebsiteSavedDraftPreviewAction } from "@/components/hotel-admin/website-saved-draft-preview-action";
+
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, Eye, FilePenLine, GitCompareArrows, History, Plus, RotateCcw, Send, Trash2 } from "lucide-react";
 import {
@@ -26,7 +29,7 @@ import {
   getWebContentVersions,
   getWebsiteHome,
   getWebsiteHomeVersions,
-  getWebsitePage,
+  getWebsitePage, getWebsitePageMoveImpact, moveWebsitePage,
   getWebsitePageVersions,
   getWebsitePageTree,
   getContentReferenceCatalog,
@@ -45,6 +48,7 @@ import { WebsitePageTree } from "@/components/hotel-admin/website-page-tree";
 import { ContentPageEditor } from "@/components/hotel-admin/content-page-editor";
 import { ContentPageCreateDialog } from "@/components/hotel-admin/content-page-create-dialog";
 import { ContentPageVersionCompareDialog } from "@/components/hotel-admin/content-page-version-compare-dialog";
+import { ContentPageMoveDialog } from "@/components/hotel-admin/content-page-move-dialog";
 import { MediaField } from "@/components/hotel-admin/media-field";
 
 const hotels = [
@@ -90,6 +94,7 @@ function treePageById(pages: readonly WebsitePageTreeItem[], pageId: string | nu
     ?? pages.flatMap((section) => section.children).find((page) => page.id === pageId)
     ?? null;
 }
+function flattenTree(pages: readonly WebsitePageTreeItem[]): WebsitePageTreeItem[] { return pages.flatMap((page) => [page, ...flattenTree(page.children)]); }
 
 function defaultDraftPage(hotelId: string): WebsitePageDraftMetadata {
   const hotel = hotels.find((item) => item.id === hotelId) ?? hotels[0];
@@ -116,6 +121,11 @@ function EditorField({ label, value, onChange, multiline = false, maxLength }: {
 }
 
 export function WebsiteContentEditor() {
+  const [locale, setLocale] = useState<"ko" | "en">("ko");
+  const [pendingLocale, setPendingLocale] = useState<"ko" | "en" | null>(null);
+  const [translationDirty, setTranslationDirty] = useState(false);
+  const [translationBusy, setTranslationBusy] = useState(false);
+  const [previewBusy, setPreviewBusy] = useState(false);
   const [staff, setStaff] = useState<StaffPrincipal | null>(null);
   const [hotelId, setHotelId] = useState(hotels[0].id);
   const [selectedPageId, setSelectedPageId] = useState<string | null>(null);
@@ -127,6 +137,7 @@ export function WebsiteContentEditor() {
   const [contentDirty, setContentDirty] = useState(false);
   const [newContentPage, setNewContentPage] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [moveOpen, setMoveOpen] = useState(false);
   const [value, setValue] = useState("{}");
   const [dirty, setDirty] = useState(false);
   const [draftVersion, setDraftVersion] = useState(1);
@@ -156,6 +167,7 @@ export function WebsiteContentEditor() {
   const draftPath = `/stays/${draftPage.slug}`;
   const pageStatus = !publishedPage ? "초안" : publishedPage.path === draftPath && draftVersion === publishedVersion ? "발행됨" : "발행 후 초안 변경";
   const selectedTreePage = treePageById(pageTree, selectedPageId);
+  const moveParents = flattenTree(pageTree).filter((page) => page.pageType === "SECTION" && page.lifecycleStatus === "ACTIVE");
   const isStructuredPage = selectedTreePage?.pageType === "CONTENT_PAGE" || selectedTreePage?.pageType === "HOME_PAGE" || contentPage?.id === selectedPageId;
   const canRestorePageVersion = contentPage?.pageType === "CONTENT_PAGE"
     && contentPage.lifecycleStatus === "ACTIVE"
@@ -273,7 +285,11 @@ export function WebsiteContentEditor() {
 
   useEffect(() => {
     const saved = window.localStorage.getItem("hotel-chain-staff");
-    if (saved) setStaff(JSON.parse(saved) as StaffPrincipal);
+    if (saved) {
+      const principal = JSON.parse(saved) as StaffPrincipal;
+      setStaff(principal);
+      if (principal.role === "HQ_EDITOR" || principal.role === "HQ_PUBLISHER") setLocale("en");
+    }
   }, []);
 
   useEffect(() => {
@@ -312,12 +328,37 @@ export function WebsiteContentEditor() {
 
   function selectPage(nextPageId: string) {
     if (nextPageId === selectedPageId) return;
-    if (dirty || contentDirty) {
+    if (translationBusy || previewBusy) return;
+    if (dirty || contentDirty || translationDirty) {
       setPendingPageId(nextPageId);
       return;
     }
     activatePage(nextPageId);
   }
+
+  function applyLocale(next: "ko" | "en") {
+    landingLoadRequest.current += 1;
+    setLocale(next); setDirty(false); setContentDirty(false); setTranslationDirty(false); setNewContentPage(false);
+    if (next === "ko" && selectedPageId) {
+      const page = treePageById(pageTree, selectedPageId);
+      if (page?.pageType === "HOTEL_LANDING") void load();
+      else activatePage(selectedPageId);
+    }
+  }
+  function selectLocale(next: "ko" | "en") {
+    if (next === locale || busy || translationBusy || previewBusy) return;
+    if (dirty || contentDirty || translationDirty) { setPendingLocale(next); return; }
+    applyLocale(next);
+  }
+  const localeControls = <div role="group" aria-label="콘텐츠 언어" className="flex shrink-0 gap-2">
+    <Button type="button" variant={locale === "ko" ? "default" : "outline"} aria-pressed={locale === "ko"} disabled={busy || translationBusy} onClick={() => selectLocale("ko")}>한국어</Button>
+    <Button type="button" variant={locale === "en" ? "default" : "outline"} aria-pressed={locale === "en"} disabled={busy || translationBusy || !selectedPageId} onClick={() => selectLocale("en")}>영어</Button>
+  </div>;
+  const localeConfirmation = <AlertDialog open={pendingLocale !== null} onOpenChange={(open) => { if (!open) setPendingLocale(null); }}>
+    <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>저장하지 않고 언어를 전환할까요?</AlertDialogTitle><AlertDialogDescription>현재 언어의 저장되지 않은 변경사항은 사라집니다. 다른 언어의 저장된 초안·발행본은 바뀌지 않습니다.</AlertDialogDescription></AlertDialogHeader>
+      <AlertDialogFooter><AlertDialogCancel>계속 편집</AlertDialogCancel><AlertDialogAction variant="destructive" onClick={() => { if (pendingLocale) applyLocale(pendingLocale); setPendingLocale(null); }}>변경 버리고 전환</AlertDialogAction></AlertDialogFooter>
+    </AlertDialogContent>
+  </AlertDialog>;
 
   async function restoreVersionDraft() {
     const page = contentPage;
@@ -426,6 +467,16 @@ export function WebsiteContentEditor() {
     );
   }
 
+  if (locale === "en") return <div className="flex flex-col gap-5">
+    <section className="flex flex-col justify-between gap-4 rounded-xl border bg-card p-5 sm:flex-row sm:items-center"><div><h1 className="text-2xl font-semibold tracking-tight">웹사이트 콘텐츠</h1><p className="mt-2 text-sm text-muted-foreground">영어 초안과 발행본은 한국어와 독립적으로 관리합니다. 페이지 구조·보관·복원은 한국어 화면에서 관리합니다.</p></div>{localeControls}</section>
+    <div className="grid min-w-0 gap-5 xl:grid-cols-[220px_minmax(0,1fr)]">
+      <WebsitePageTree pages={pageTree} selectedPageId={selectedPageId} onSelectPage={selectPage} />
+      {selectedPageId && staff && <WebsiteTranslationEditor key={selectedPageId} token={token ?? ""} pageId={selectedPageId} catalog={referenceCatalog} staff={staff} onDirtyChange={setTranslationDirty} onBusyChange={setTranslationBusy} />}
+    </div>
+    {localeConfirmation}
+    <AlertDialog open={pendingPageId !== null} onOpenChange={(open) => { if (!open) setPendingPageId(null); }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>저장하지 않고 페이지를 이동할까요?</AlertDialogTitle><AlertDialogDescription>현재 영어 초안의 저장되지 않은 변경사항은 사라집니다.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>계속 편집</AlertDialogCancel><AlertDialogAction variant="destructive" onClick={() => { if (pendingPageId) { setSelectedPageId(pendingPageId); setTranslationDirty(false); } setPendingPageId(null); }}>변경 버리고 이동</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+  </div>;
+
   return (
     <div className="flex flex-col gap-5">
       <section className="flex flex-col justify-between gap-4 rounded-xl border bg-card p-5 shadow-sm lg:flex-row lg:items-end">
@@ -438,7 +489,8 @@ export function WebsiteContentEditor() {
           {dirty && <p className="mt-2 text-sm font-medium text-amber-700">저장되지 않은 변경사항이 있습니다.</p>}
           {referenceError && <p role="status" className="mt-2 text-sm text-destructive">{referenceError} <Button type="button" variant="link" className="h-auto px-0" onClick={() => void getContentReferenceCatalog(token ?? "").then((catalog) => { setReferenceCatalog(catalog); setReferenceError(""); }).catch(() => setReferenceError("콘텐츠 선택 정보를 불러오지 못했습니다. 다시 시도해 주세요."))}>다시 시도</Button></p>}
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          {localeControls}
           <ContentPageCreateDialog
             token={token ?? ""}
             sections={pageTree}
@@ -448,19 +500,37 @@ export function WebsiteContentEditor() {
               void getWebsitePageTree(token ?? "").then(setPageTree).catch(() => undefined);
             }}
           />
+          {selectedTreePage?.pageType === "CONTENT_PAGE" && selectedTreePage.lifecycleStatus === "ACTIVE" && !contentDirty && <Button variant="outline" onClick={() => setMoveOpen(true)} disabled={busy}>페이지 이동</Button>}
           {!isStructuredPage && <>
+            {selectedTreePage && <WebsiteSavedDraftPreviewAction token={token ?? ""} pageId={selectedTreePage.id} locale="ko"
+              draftVersion={draftVersion} draftPath={draftPath} dirty={dirty} disabled={busy || selectedTreePage.lifecycleStatus === "ARCHIVED"} onBusyChange={setPreviewBusy} />}
             <Button variant="outline" onClick={() => setPreviewOpen(true)} disabled={busy}>
               <Eye /> 미리보기
             </Button>
-            <Button variant="outline" onClick={save} disabled={busy || !dirty}>
+            <Button variant="outline" onClick={save} disabled={busy || previewBusy || !dirty}>
               <FilePenLine /> 초안 저장
             </Button>
-            <Button onClick={publish} disabled={busy || dirty} title={dirty ? "변경사항을 먼저 초안으로 저장해 주세요." : undefined}>
+            <Button onClick={publish} disabled={busy || previewBusy || dirty} title={dirty ? "변경사항을 먼저 초안으로 저장해 주세요." : undefined}>
               <Send /> 발행
             </Button>
           </>}
         </div>
       </section>
+
+      {localeConfirmation}
+
+      <ContentPageMoveDialog open={moveOpen} page={selectedTreePage} parents={moveParents} busy={busy} onOpenChange={setMoveOpen}
+        onImpact={(parentId, slug) => getWebsitePageMoveImpact(token ?? "", selectedTreePage?.id ?? "", parentId, slug)}
+        onMove={async (parentId, slug) => {
+          if (!token || !contentPage) return;
+          setBusy(true);
+          try {
+            const expectedPublishedVersion = Object.keys(contentPage.publishedContent).length > 0 ? contentPage.publishedVersion : 0;
+            const moved = await moveWebsitePage(token, contentPage.id, { parentId, slug, expectedDraftVersion: contentPage.draftVersion, expectedLifecycleVersion: contentPage.lifecycleVersion, expectedPublishedVersion });
+            setContentPage(moved); setNotice(expectedPublishedVersion > 0 ? "페이지를 이동하고 기존 공개 경로에 301 리디렉션을 만들었습니다." : "페이지 초안 경로를 이동했습니다.");
+            setPageTree(await getWebsitePageTree(token));
+          } finally { setBusy(false); }
+        }} />
 
       <div className="grid gap-5 xl:grid-cols-[220px_1fr_260px]">
         <WebsitePageTree
@@ -475,6 +545,8 @@ export function WebsiteContentEditor() {
           document={contentPage}
           catalog={referenceCatalog}
           initialDirty={newContentPage}
+          externalBusy={busy}
+          onBusyChange={setPreviewBusy}
           onDirtyChange={setContentDirty}
           onSaved={(document, history) => { setContentPage(document); setVersions(history); setPublishedVersion(document.publishedVersion); setNewContentPage(false); void getWebsitePageTree(token ?? "").then(setPageTree).catch(() => undefined); }}
           onPublished={(document, history) => { setContentPage(document); setVersions(history); setPublishedVersion(document.publishedVersion); void getWebsitePageTree(token ?? "").then(setPageTree).catch(() => undefined); }}
@@ -523,7 +595,7 @@ export function WebsiteContentEditor() {
                 <EditorField label="영문 지점 표기" value={textValue(content, "eyebrow")} onChange={(next) => changeText("eyebrow", next)} />
                 <EditorField label="히어로 제목" value={textValue(content, "title")} onChange={(next) => changeText("title", next)} />
                 <div className="md:col-span-2"><EditorField multiline label="히어로 설명" value={textValue(content, "description")} onChange={(next) => changeText("description", next)} /></div>
-                <MediaField token={token ?? ""} assetId={textValue(content, "heroAssetId")} deliveryUrl={textValue(content, "heroImage")} altText={textValue(content, "heroAlt")} onAssetSelect={(asset) => changeDocument((next) => { next.heroAssetId = asset.id; next.heroImage = asset.deliveryUrl; next.heroAlt = asset.defaultAltText; })} onAltTextChange={(heroAlt) => changeText("heroAlt", heroAlt)} />
+                <MediaField token={token ?? ""} assetId={textValue(content, "heroAssetId")} deliveryUrl={textValue(content, "heroImage")} altText={textValue(content, "heroAlt")} onAssetSelect={(asset, imageAlt) => changeDocument((next) => { next.heroAssetId = asset.id; next.heroImage = asset.deliveryUrl; next.heroAlt = imageAlt; })} onAltTextChange={(heroAlt) => changeText("heroAlt", heroAlt)} />
               </div>
             </section>
 

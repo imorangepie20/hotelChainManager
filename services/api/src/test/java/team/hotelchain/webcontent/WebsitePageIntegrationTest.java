@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -31,6 +32,8 @@ class WebsitePageIntegrationTest {
     @Autowired JdbcTemplate jdbc;
     @Autowired StaffAccessService staffAccess;
     @Autowired WebsitePageService pages;
+    @Autowired PublicWebsitePageController publicPages;
+    @Autowired WebsitePageManagementController pageManagement;
     @Autowired ContentPageValidator contentPages;
     @Autowired WebsitePageConnectionValidator connectionValidator;
 
@@ -111,6 +114,110 @@ class WebsitePageIntegrationTest {
             assertThat(section.label()).isEqualTo("브랜드");
             assertThat(section.children()).anySatisfy(child -> assertThat(child.path()).isEqualTo("/brand/story"));
         });
+    }
+
+    @Test
+    void movesUnpublishedPageAfterReadOnlyImpact() {
+        StaffSessionView headquarters = staffAccess.login("pages-hq@example.com", "hq-password");
+        UUID destination = brandSubsection("collections", "컬렉션");
+        WebsitePageDocument created = pages.createContentPage(headquarters.token(), BRAND_SECTION,
+                new WebsitePageDraftMetadata("autumn", "가을 이야기", true, 10), validContentPage("가을 이야기"));
+        WebsitePageDocument child = pages.createContentPage(headquarters.token(), created.id(),
+                new WebsitePageDraftMetadata("details", "가을 상세", true, 11), validContentPage("가을 상세"));
+        int auditCount = jdbc.queryForObject("select count(*) from website_page_audit where page_id = ?", Integer.class, created.id());
+
+        WebsitePageMoveImpact impact = pages.moveImpact(headquarters.token(), created.id(), destination, "autumn");
+
+        assertThat(impact.newRootDraftPath()).isEqualTo("/brand/collections/autumn");
+        assertThat(impact.items()).extracting(WebsitePageMoveImpactItem::nextDraftPath)
+                .containsExactly("/brand/collections/autumn", "/brand/collections/autumn/details");
+
+        WebsitePageDocument moved = pages.moveContentPage(headquarters.token(), created.id(),
+                new MoveWebsitePageRequest(destination, "autumn", created.draftVersion(), created.lifecycleVersion()));
+
+        assertThat(moved.draftMetadata().path()).isEqualTo("/brand/collections/autumn");
+        assertThat(moved.draftVersion()).isEqualTo(created.draftVersion() + 1);
+        assertThat(moved.publishedMetadata().path()).isEqualTo(created.publishedMetadata().path());
+        assertThat(pages.pageDraft(headquarters.token(), child.id()).draftMetadata().path())
+                .isEqualTo("/brand/collections/autumn/details");
+        assertThat(jdbc.queryForObject("select count(*) from website_page_audit where page_id = ?", Integer.class, created.id()))
+                .isEqualTo(auditCount + 1);
+        assertThat(jdbc.queryForObject("select count(*) from website_page_audit where page_id = ? and action = 'PAGE_MOVED'", Integer.class, created.id()))
+                .isEqualTo(1);
+    }
+
+    @Test
+    void movesPublishedTreeWithPermanentRedirects() {
+        StaffSessionView headquarters = staffAccess.login("pages-hq@example.com", "hq-password");
+        UUID destination = brandSubsection("offers", "오퍼");
+        WebsitePageDocument root = pages.createContentPage(headquarters.token(), BRAND_SECTION,
+                new WebsitePageDraftMetadata("published-story", "발행 이야기", true, 12), validContentPage("발행 이야기"));
+        WebsitePageDocument child = pages.createContentPage(headquarters.token(), root.id(),
+                new WebsitePageDraftMetadata("details", "발행 상세", true, 13), validContentPage("발행 상세"));
+        root = pages.publishPage(headquarters.token(), root.id(), root.draftVersion(), root.publishedVersion());
+        child = pages.publishPage(headquarters.token(), child.id(), child.draftVersion(), child.publishedVersion());
+
+        WebsitePageMoveImpact impact = pages.moveImpact(headquarters.token(), root.id(), destination, "published-story");
+
+        assertThat(impact.items()).extracting(WebsitePageMoveImpactItem::currentPublishedPath)
+                .containsExactly("/brand/published-story", "/brand/published-story/details");
+        assertThat(impact.items()).extracting(WebsitePageMoveImpactItem::nextPublishedPath)
+                .containsExactly("/brand/offers/published-story", "/brand/offers/published-story/details");
+
+        WebsitePageDocument moved = pageManagement.move(root.id(),
+                new MoveWebsitePageRequest(destination, "published-story", root.draftVersion(), root.lifecycleVersion(), root.publishedVersion()),
+                headquarters.token());
+
+        assertThat(moved.publishedMetadata().path()).isEqualTo("/brand/offers/published-story");
+        assertThat(pages.redirectTarget("/brand/published-story")).isEqualTo("/brand/offers/published-story");
+        assertThat(pages.redirectTarget("/brand/published-story/details")).isEqualTo("/brand/offers/published-story/details");
+        assertThat(jdbc.queryForObject("select page_snapshot ->> 'path' from website_page_version where page_id = ? and version = ?",
+                String.class, root.id(), root.publishedVersion())).isEqualTo("/brand/offers/published-story");
+        assertThat(jdbc.queryForObject("select page_snapshot ->> 'path' from website_page_version where page_id = ? and version = ?",
+                String.class, child.id(), child.publishedVersion())).isEqualTo("/brand/offers/published-story/details");
+        assertThat(publicPages.resolve("/brand/published-story").getStatusCode()).isEqualTo(HttpStatus.MOVED_PERMANENTLY);
+        assertThat(publicPages.resolve("/brand/published-story").getHeaders().getLocation())
+                .hasToString("/brand/offers/published-story");
+    }
+
+    @Test
+    void rejectsPublishedMoveThatWouldCreateARedirectChain() {
+        StaffSessionView headquarters = staffAccess.login("pages-hq@example.com", "hq-password");
+        UUID firstDestination = brandSubsection("offers", "오퍼");
+        UUID secondDestination = brandSubsection("collections", "컬렉션");
+        WebsitePageDocument root = pages.createContentPage(headquarters.token(), BRAND_SECTION,
+                new WebsitePageDraftMetadata("stable-story", "안정 경로", true, 14), validContentPage("안정 경로"));
+        WebsitePageDocument publishedRoot = pages.publishPage(headquarters.token(), root.id(), root.draftVersion(), root.publishedVersion());
+        WebsitePageDocument moved = pages.movePublishedContentPage(headquarters.token(), publishedRoot.id(),
+                new MoveWebsitePageRequest(firstDestination, "stable-story", publishedRoot.draftVersion(), publishedRoot.lifecycleVersion(), publishedRoot.publishedVersion()));
+
+        assertThatThrownBy(() -> pages.movePublishedContentPage(headquarters.token(), publishedRoot.id(),
+                new MoveWebsitePageRequest(secondDestination, "stable-story", moved.draftVersion(), moved.lifecycleVersion(), moved.publishedVersion())))
+                .isInstanceOf(BusinessConflictException.class)
+                .extracting(error -> ((BusinessConflictException) error).code())
+                .isEqualTo("WEBSITE_PAGE_PATH_CONFLICT");
+        assertThat(pages.resolvePublished("/brand/offers/stable-story").path())
+                .isEqualTo("/brand/offers/stable-story");
+        assertThat(pages.redirectTarget("/brand/stable-story")).isEqualTo("/brand/offers/stable-story");
+        assertThat(pages.redirectTarget("/brand/offers/stable-story")).isNull();
+    }
+
+    @Test
+    void rejectsStalePublishedMoveWithoutCreatingARedirect() {
+        StaffSessionView headquarters = staffAccess.login("pages-hq@example.com", "hq-password");
+        UUID destination = brandSubsection("offers", "오퍼");
+        WebsitePageDocument root = pages.createContentPage(headquarters.token(), BRAND_SECTION,
+                new WebsitePageDraftMetadata("stale-story", "오래된 이동", true, 15), validContentPage("오래된 이동"));
+        WebsitePageDocument publishedRoot = pages.publishPage(headquarters.token(), root.id(), root.draftVersion(), root.publishedVersion());
+
+        assertThatThrownBy(() -> pages.movePublishedContentPage(headquarters.token(), publishedRoot.id(),
+                new MoveWebsitePageRequest(destination, "stale-story", publishedRoot.draftVersion() + 1,
+                        publishedRoot.lifecycleVersion(), publishedRoot.publishedVersion())))
+                .isInstanceOf(BusinessConflictException.class)
+                .extracting(error -> ((BusinessConflictException) error).code())
+                .isEqualTo("WEB_CONTENT_VERSION_CONFLICT");
+        assertThat(pages.resolvePublished("/brand/stale-story").path()).isEqualTo("/brand/stale-story");
+        assertThat(pages.redirectTarget("/brand/stale-story")).isNull();
     }
 
     @Test
@@ -936,6 +1043,20 @@ class WebsitePageIntegrationTest {
                 ) values (?, ?, null, 'SECTION', null, 'page-test', 'page-test', '/stays/page-test', '/stays/page-test',
                           '테스트 상세', '테스트 상세', true, true, 1, 1, '{}'::jsonb, '{}'::jsonb, 1, 1, 1)
                 """, id, HOTEL);
+        return id;
+    }
+
+    private UUID brandSubsection(String slug, String label) {
+        UUID id = UUID.randomUUID();
+        jdbc.update("""
+                insert into website_page (
+                    id, hotel_id, parent_id, page_type, content_kind,
+                    draft_slug, published_slug, draft_path, published_path,
+                    draft_menu_label, published_menu_label, draft_menu_visible, published_menu_visible,
+                    draft_menu_order, published_menu_order, draft_content, published_content,
+                    draft_version, published_version, published_from_draft_version
+                ) values (?, null, ?, 'SECTION', null, ?, ?, ?, ?, ?, ?, true, false, 1, 0, '{}'::jsonb, '{}'::jsonb, 1, 1, null)
+                """, id, BRAND_SECTION, slug, slug, "/brand/" + slug, "/brand/" + slug, label, label);
         return id;
     }
 

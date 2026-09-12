@@ -71,6 +71,20 @@ public class WebsitePageManagementController {
         return pages.pageDraft(token, pageId);
     }
 
+    @GetMapping("/pages/{pageId}/move-impact")
+    public WebsitePageMoveImpact moveImpact(@PathVariable UUID pageId, @RequestParam UUID parentId, @RequestParam String slug,
+            @RequestHeader("X-Staff-Session") String token) {
+        return pages.moveImpact(token, pageId, parentId, slug);
+    }
+
+    @PostMapping("/pages/{pageId}/move")
+    public WebsitePageDocument move(@PathVariable UUID pageId, @RequestBody MoveWebsitePageRequest request,
+            @RequestHeader("X-Staff-Session") String token) {
+        return request.expectedPublishedVersion() > 0
+                ? pages.movePublishedContentPage(token, pageId, request)
+                : pages.moveContentPage(token, pageId, request);
+    }
+
     @PutMapping("/pages/{pageId}")
     public WebsitePageDocument save(@PathVariable UUID pageId, @RequestBody SaveWebsitePageRequest request,
             @RequestHeader("X-Staff-Session") String token) {

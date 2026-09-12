@@ -75,6 +75,24 @@ public class StaffAccessService {
         throw new StaffAccessDeniedException();
     }
 
+    public StaffPrincipal requireContentStaff(String token) {
+        StaffPrincipal principal = current(token);
+        if (java.util.Set.of("HQ_ADMIN", "HQ_EDITOR", "HQ_PUBLISHER").contains(principal.role())) return principal;
+        throw new StaffAccessDeniedException();
+    }
+
+    public StaffPrincipal requireContentEditor(String token) {
+        StaffPrincipal principal = current(token);
+        if (java.util.Set.of("HQ_ADMIN", "HQ_EDITOR").contains(principal.role())) return principal;
+        throw new StaffAccessDeniedException();
+    }
+
+    public StaffPrincipal requireContentPublisher(String token) {
+        StaffPrincipal principal = current(token);
+        if (java.util.Set.of("HQ_ADMIN", "HQ_PUBLISHER").contains(principal.role())) return principal;
+        throw new StaffAccessDeniedException();
+    }
+
     public StaffPrincipal requireHotel(String token, UUID hotelId) {
         StaffPrincipal principal = current(token);
         if ("HQ_ADMIN".equals(principal.role()) || hotelId.equals(principal.hotelId())) {

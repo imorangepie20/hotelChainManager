@@ -16,6 +16,7 @@ import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Isolation;
 
 import team.hotelchain.reservation.BusinessConflictException;
 import team.hotelchain.staff.StaffAccessDeniedException;
@@ -31,12 +32,17 @@ public class WebsitePreviewGrantService {
     private final JdbcTemplate jdbc;
     private final StaffAccessService access;
     private final Clock clock;
+    private final WebsitePageService pages;
+    private final WebsiteTranslationService translations;
     private final SecureRandom random = new SecureRandom();
 
-    public WebsitePreviewGrantService(JdbcTemplate jdbc, StaffAccessService access, Clock clock) {
+    public WebsitePreviewGrantService(JdbcTemplate jdbc, StaffAccessService access, Clock clock,
+            WebsitePageService pages, WebsiteTranslationService translations) {
         this.jdbc = jdbc;
         this.access = access;
         this.clock = clock;
+        this.pages = pages;
+        this.translations = translations;
     }
 
     @Transactional
@@ -111,6 +117,31 @@ public class WebsitePreviewGrantService {
                 """, timestamp(now), actor.id(), grantId, timestamp(now));
     }
 
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public WebsitePreviewResult resolve(String rawToken, String path, String locale) {
+        if (rawToken == null || !rawToken.matches("[A-Za-z0-9_-]{43}")
+                || locale == null || !Set.of("ko", "en").contains(locale)) {
+            throw new WebsitePreviewNotFoundException();
+        }
+        Grant grant = jdbc.query("""
+                select page_id, locale, draft_version, preview_path, expires_at, revoked_at
+                  from website_preview_grant where token_hash = ?
+                """, rs -> rs.next() ? new Grant(rs.getObject(1, UUID.class), rs.getString(2),
+                        rs.getInt(3), rs.getString(4), rs.getTimestamp(5).toInstant(),
+                        rs.getTimestamp(6) == null ? null : rs.getTimestamp(6).toInstant()) : null,
+                hash(rawToken));
+        if (grant == null || !grant.locale().equals(locale) || !grant.path().equals(path)) {
+            throw new WebsitePreviewNotFoundException();
+        }
+        if (grant.revokedAt() != null || !grant.expiresAt().isAfter(clock.instant())) {
+            throw new WebsitePreviewUnavailableException();
+        }
+        PublishedWebsitePage page = "en".equals(locale)
+                ? translations.previewDraft(grant.pageId(), grant.version(), grant.path())
+                : pages.previewDraft(grant.pageId(), grant.version(), grant.path());
+        return new WebsitePreviewResult(page, grant.expiresAt());
+    }
+
     private DraftTarget lockedTarget(UUID pageId, String locale) {
         if ("en".equals(locale)) {
             DraftTarget target = jdbc.query("""
@@ -176,4 +207,7 @@ public class WebsitePreviewGrantService {
 
     private record GrantOwner(UUID issuedBy, Instant expiresAt, Instant revokedAt) {
     }
+
+    private record Grant(UUID pageId, String locale, int version, String path,
+            Instant expiresAt, Instant revokedAt) {}
 }

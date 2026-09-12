@@ -103,6 +103,45 @@ for (const width of [1280, 390]) test(`edits and publishes the English translati
   await expect(page.getByLabel("히어로 제목", { exact: true })).toHaveValue("브랜드 이야기");
 });
 
+test("shows translation actions for the authenticated role and blocks self approval", async ({ page }) => {
+  const translationPath = `/api/staff/website/pages/${STORY_PAGE}/translations/en`;
+  let requesterId = "editor-test";
+  await page.route(`**${translationPath}`, route => route.fulfill({ json: contentPageDocument({ publishedVersion: 0, publishedMetadata: null }) }));
+  await page.route(`**${translationPath}/versions`, route => route.fulfill({ json: [] }));
+  await page.route(`**${translationPath}/review`, route => route.fulfill({ json: translationReviewState({
+    status: "IN_REVIEW",
+    reviewedDraftVersion: 1,
+    events: [{ id: 1, action: "REVIEW_REQUESTED", draftVersion: 1, actorId: requesterId, actorDisplayName: "영문 편집자", createdAt: "2026-09-13T00:00:00Z", comment: null }],
+  }) }));
+
+  async function openAs(id: string, role: "HQ_ADMIN" | "HQ_EDITOR" | "HQ_PUBLISHER") {
+    await page.goto("/dashboard/website");
+    await page.evaluate(({ id, role }) => localStorage.setItem("hotel-chain-staff", JSON.stringify({
+      id, email: `${id}@example.test`, displayName: id, role, hotelId: null,
+    })), { id, role });
+    await page.reload();
+    await page.getByRole("button", { name: /브랜드 이야기/ }).click();
+    await page.getByRole("button", { name: "영어", exact: true }).click();
+    await expect(page.getByLabel("영어 번역 검토")).toBeVisible();
+  }
+
+  await openAs("editor-test", "HQ_EDITOR");
+  await expect(page.getByLabel("히어로 제목", { exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "승인", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "반려", exact: true })).toHaveCount(0);
+
+  await openAs("publisher-test", "HQ_PUBLISHER");
+  await expect(page.getByLabel("히어로 제목", { exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "승인", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "반려", exact: true })).toBeVisible();
+
+  requesterId = "hq-test";
+  await openAs("hq-test", "HQ_ADMIN");
+  await expect(page.getByRole("button", { name: "승인", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "반려", exact: true })).toBeVisible();
+  await expect(page.getByText("본인이 요청한 초안은 다른 승인자가 승인해야 합니다.", { exact: true })).toBeVisible();
+});
+
 test("rejects an English translation and returns dialog focus on cancel, Escape, and success", async ({ page }) => {
   let review = translationReviewState({ status: "IN_REVIEW", reviewedDraftVersion: 1 });
   let rejection: Record<string, unknown> | undefined;
@@ -612,6 +651,43 @@ function mediaAsset(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function draftReplacementImpact() {
+  return {
+    sourceAsset: mediaAsset(),
+    targetAsset: mediaAsset({ id: UPLOADED_ASSET, displayName: "새로운 제주 이미지", deliveryUrl: `/api/website/media/${UPLOADED_ASSET}/content`, defaultAltText: "제주 해안의 오후", usageCount: 0 }),
+    replaceableUsages: [
+      { pageId: HOME_PAGE, pageLabel: "홈", pagePath: "/", pageType: "HOME_PAGE", locale: "ko", fieldPath: "blocks[0].imageAssetId", expectedDraftVersion: 1 },
+      { pageId: STORY_PAGE, pageLabel: "브랜드 이야기", pagePath: "/en/brand/story", pageType: "CONTENT_PAGE", locale: "en", fieldPath: "blocks[0].imageAssetId", expectedDraftVersion: 1 },
+    ],
+    publishedUsageCount: 1,
+    archivedDraftUsageCount: 1,
+  };
+}
+
+async function mockDraftReplacementImpact(page: Page) {
+  const impact = draftReplacementImpact();
+  await page.route(`**/api/staff/website/media/${BUNDLED_ASSET}/usages`, (route) => route.fulfill({
+    json: impact.replaceableUsages.map((usage) => ({ ...usage, documentState: "DRAFT", altText: usage.locale === "en" ? "English coast" : "속초 해안" })),
+  }));
+  await page.route(`**/api/staff/website/media/${BUNDLED_ASSET}/draft-replacement-impact?*`, (route) => route.fulfill({ json: impact }));
+}
+
+async function openBulkReplacementImpact(page: Page) {
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "홈", exact: true }).click();
+  await page.getByRole("button", { name: "미디어 선택" }).click();
+  const picker = page.getByRole("dialog", { name: "미디어 선택" });
+  await picker.getByRole("button", { name: "속초 해안 대표 이미지 선택" }).click();
+  await picker.getByRole("button", { name: "초안 사용 위치 일괄 교체" }).click();
+  const dialog = page.getByRole("dialog", { name: "초안 사용 위치 일괄 교체" });
+  await dialog.getByLabel("새 이미지 파일").setInputFiles({ name: "replacement.jpg", mimeType: "image/jpeg", buffer: Buffer.from("mock-jpeg") });
+  await dialog.getByLabel("새 자산명").fill("새로운 제주 이미지");
+  await dialog.getByLabel("새 기본 대체 텍스트").fill("제주 해안의 오후");
+  await dialog.getByRole("button", { name: "업로드하고 영향 확인" }).click();
+  await expect(dialog.getByText("한국어 초안 1곳 · 영어 초안 1곳")).toBeVisible();
+  return { picker, dialog };
+}
+
 function contentPageDocument(overrides: Record<string, unknown> = {}) {
   return {
     id: STORY_PAGE,
@@ -762,13 +838,15 @@ test.beforeEach(async ({ page }) => {
 
   await page.addInitScript(() => {
     localStorage.setItem("hotel-chain-staff-session", "test-session-token");
-    localStorage.setItem("hotel-chain-staff", JSON.stringify({
-      id: "hq-test",
-      email: "hq@example.test",
-      displayName: "본사 관리자",
-      role: "HQ_ADMIN",
-      hotelId: null,
-    }));
+    if (!localStorage.getItem("hotel-chain-staff")) {
+      localStorage.setItem("hotel-chain-staff", JSON.stringify({
+        id: "hq-test",
+        email: "hq@example.test",
+        displayName: "본사 관리자",
+        role: "HQ_ADMIN",
+        hotelId: null,
+      }));
+    }
   });
   await page.route("**/api/staff/me", (route) => route.fulfill({ status: 200, contentType: "application/json", body: "{}" }));
   await page.route("**/api/staff/website/content-reference", (route) => route.fulfill({
@@ -1479,6 +1557,113 @@ test("selects a catalog asset for a structured page and saves its identifier", a
     imageSrc: "/images/sokcho-coast-hero.png",
     imageAlt: "동해와 설악산을 바라보는 속초 해안",
   });
+});
+
+test("previews and replaces every active draft usage of a media asset", async ({ page }) => {
+  const targets = [
+    { pageId: HOME_PAGE, pageLabel: "홈", pagePath: "/", pageType: "HOME_PAGE", locale: "ko", fieldPath: "blocks[0].imageAssetId", expectedDraftVersion: 1 },
+    { pageId: STORY_PAGE, pageLabel: "브랜드 이야기", pagePath: "/en/brand/story", pageType: "CONTENT_PAGE", locale: "en", fieldPath: "blocks[0].imageAssetId", expectedDraftVersion: 1 },
+  ];
+  let replacementBody: Record<string, unknown> | null = null;
+  await page.route(`**/api/staff/website/media/${BUNDLED_ASSET}/usages`, (route) => route.fulfill({
+    json: [
+      { ...targets[0], documentState: "DRAFT", altText: "속초 해안" },
+      { ...targets[1], documentState: "DRAFT", altText: "English coast" },
+      { pageId: HOME_PAGE, pageLabel: "홈", pagePath: "/", pageType: "HOME_PAGE", locale: "ko", documentState: "PUBLISHED", fieldPath: "blocks[0].imageAssetId", altText: "공개 속초 해안" },
+    ],
+  }));
+  await page.route(`**/api/staff/website/media/${BUNDLED_ASSET}/draft-replacement-impact?*`, (route) => route.fulfill({
+    json: {
+      sourceAsset: mediaAsset(),
+      targetAsset: mediaAsset({ id: UPLOADED_ASSET, displayName: "새로운 제주 이미지", deliveryUrl: `/api/website/media/${UPLOADED_ASSET}/content`, defaultAltText: "제주 해안의 오후", usageCount: 0 }),
+      replaceableUsages: targets,
+      publishedUsageCount: 1,
+      archivedDraftUsageCount: 1,
+    },
+  }));
+  await page.route(`**/api/staff/website/media/${BUNDLED_ASSET}/draft-replacements`, (route) => {
+    replacementBody = route.request().postDataJSON();
+    return route.fulfill({
+      json: { sourceMediaId: BUNDLED_ASSET, targetMediaId: UPLOADED_ASSET, replacedUsageCount: 2, changedDraftCount: 2 },
+    });
+  });
+
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "홈", exact: true }).click();
+  await page.getByRole("button", { name: "미디어 선택" }).click();
+  const picker = page.getByRole("dialog", { name: "미디어 선택" });
+  await picker.getByRole("button", { name: "속초 해안 대표 이미지 선택" }).click();
+  await picker.getByRole("button", { name: "초안 사용 위치 일괄 교체" }).click();
+
+  const dialog = page.getByRole("dialog", { name: "초안 사용 위치 일괄 교체" });
+  await dialog.getByLabel("새 이미지 파일").setInputFiles({ name: "replacement.jpg", mimeType: "image/jpeg", buffer: Buffer.from("mock-jpeg") });
+  await dialog.getByLabel("새 자산명").fill("새로운 제주 이미지");
+  await dialog.getByLabel("새 기본 대체 텍스트").fill("제주 해안의 오후");
+  await dialog.getByRole("button", { name: "업로드하고 영향 확인" }).click();
+
+  await expect(dialog).toContainText("한국어 초안 1곳 · 영어 초안 1곳");
+  await expect(dialog).toContainText("발행 사용 위치 1곳은 바뀌지 않습니다.");
+  await expect(dialog).toContainText("보관 페이지 초안 1곳은 바뀌지 않습니다.");
+  expect(replacementBody).toBeNull();
+  await dialog.getByRole("button", { name: "초안 위치 교체하기" }).click();
+
+  expect(replacementBody).toEqual({
+    targetMediaId: UPLOADED_ASSET,
+    expectedSourceVersion: 1,
+    expectedTargetVersion: 1,
+    targets: targets.map(({ pageId, locale, fieldPath, expectedDraftVersion }) => ({ pageId, locale, fieldPath, expectedDraftVersion })),
+  });
+  await expect(dialog).not.toBeVisible();
+  await expect(picker.getByRole("status")).toContainText("초안 2개에서 사용 위치 2곳을 교체했습니다.");
+});
+
+test("cancels bulk draft media replacement before mutation and restores focus", async ({ page }) => {
+  await mockDraftReplacementImpact(page);
+  let replacementPostCount = 0;
+  await page.route(`**/api/staff/website/media/${BUNDLED_ASSET}/draft-replacements`, (route) => {
+    replacementPostCount += 1;
+    return route.fulfill({ json: {} });
+  });
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "홈", exact: true }).click();
+  await page.getByRole("button", { name: "미디어 선택" }).click();
+  const picker = page.getByRole("dialog", { name: "미디어 선택" });
+  await picker.getByRole("button", { name: "속초 해안 대표 이미지 선택" }).click();
+  const trigger = picker.getByRole("button", { name: "초안 사용 위치 일괄 교체" });
+  await trigger.click();
+  await page.getByRole("dialog", { name: "초안 사용 위치 일괄 교체" }).getByRole("button", { name: "취소" }).click();
+  expect(replacementPostCount).toBe(0);
+  await expect(trigger).toBeFocused();
+});
+
+test("keeps impact visible when bulk draft media replacement conflicts", async ({ page }) => {
+  await mockDraftReplacementImpact(page);
+  let replacementPostCount = 0;
+  await page.route(`**/api/staff/website/media/${BUNDLED_ASSET}/draft-replacements`, (route) => {
+    replacementPostCount += 1;
+    return route.fulfill({
+      status: 409,
+      json: { code: "WEBSITE_MEDIA_REPLACEMENT_CONFLICT", message: "미디어 사용 위치가 변경되었습니다." },
+    });
+  });
+  const { dialog } = await openBulkReplacementImpact(page);
+  await dialog.getByRole("button", { name: "초안 위치 교체하기" }).click();
+  await expect(dialog.getByRole("alert")).toContainText("영향 범위가 변경되었습니다. 다시 확인해 주세요.");
+  await expect(dialog.getByText("한국어 초안 1곳 · 영어 초안 1곳")).toBeVisible();
+  expect(replacementPostCount).toBe(1);
+});
+
+test("shows bulk draft media replacement impact at 390px", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockDraftReplacementImpact(page);
+  const { dialog } = await openBulkReplacementImpact(page);
+  const button = dialog.getByRole("button", { name: "초안 위치 교체하기" });
+  const box = await button.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+  await page.keyboard.press("Escape");
+  await expect(dialog).not.toBeVisible();
 });
 
 for (const mobile of [false, true]) {

@@ -252,7 +252,7 @@ int replaceDraftMediaReferences(
         List<String> expectedFieldPaths)
 ```
 
-활성 page row를 잠그고 version과 lifecycle을 다시 확인한다. 실제 변경 경로가 기대 경로와 다르면 conflict를 던진다. 기존 page type validator를 통과한 뒤 `draft_content`, `draft_version + 1`, `updated_by`를 갱신하고 한국어 `DRAFT` usage를 동기화한다. `MEDIA_DRAFT_USAGES_REPLACED` audit에는 `locale: ko`, source/target ID, count를 기록한다.
+활성 page row를 잠그고 version과 lifecycle을 다시 확인한다. 실제 변경 경로가 기대 경로와 다르면 conflict를 던진다. 기존 page type validator를 통과한 뒤 `draft_content`, `draft_version + 1`, `updated_by`를 갱신하고 한국어 `DRAFT` usage를 동기화한다. 기존 `DRAFT_SAVED` audit에는 `operation: MEDIA_DRAFT_USAGES_REPLACED`, `locale: ko`, source/target ID, count를 기록한다.
 
 `WebsiteTranslationService`에도 같은 signature를 추가한다. locale은 `en`으로 고정한다. 기존 `normalize`, draft row update, `media.synchronize`, `audit`, `reviewEvent`를 재사용한다. 이전 상태가 `IN_REVIEW`, `APPROVED`, `PUBLISHED`면 새 draft version으로 `APPROVAL_INVALIDATED`를 한 번 기록한다.
 
@@ -293,7 +293,7 @@ assertThatThrownBy(() -> replacements.replace(token, source.id(), staleRequest))
         .isInstanceOf(WebsiteMediaConflictException.class)
         .extracting(error -> ((WebsiteMediaConflictException) error).code())
         .isEqualTo("WEBSITE_MEDIA_REPLACEMENT_CONFLICT");
-assertThat(jdbc.queryForObject("select count(*) from website_page_audit where action = 'MEDIA_DRAFT_USAGES_REPLACED'", Integer.class))
+assertThat(jdbc.queryForObject("select count(*) from website_page_audit where action = 'DRAFT_SAVED' and details->>'operation' = 'MEDIA_DRAFT_USAGES_REPLACED'", Integer.class))
         .isZero();
 ```
 
