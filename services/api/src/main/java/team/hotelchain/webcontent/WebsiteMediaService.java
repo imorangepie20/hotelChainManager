@@ -11,6 +11,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import javax.imageio.ImageIO;
 import javax.imageio.ImageReader;
@@ -37,12 +38,14 @@ public class WebsiteMediaService {
 
     private final JdbcTemplate jdbc;
     private final StaffAccessService access;
+    private final WebsiteMediaVariantService variants;
     private final Path storageDirectory;
 
-    public WebsiteMediaService(JdbcTemplate jdbc, StaffAccessService access,
+    public WebsiteMediaService(JdbcTemplate jdbc, StaffAccessService access, WebsiteMediaVariantService variants,
             @Value("${website.media.storage-dir:}") String configuredStorageDirectory) {
         this.jdbc = jdbc;
         this.access = access;
+        this.variants = variants;
         this.storageDirectory = configuredStorageDirectory == null || configuredStorageDirectory.isBlank()
                 ? Path.of(System.getProperty("java.io.tmpdir"), "hotel-chain-media")
                 : Path.of(configuredStorageDirectory);
@@ -57,7 +60,7 @@ public class WebsiteMediaService {
     public List<WebsiteMediaAsset> catalog(String token, boolean includeArchived) {
         access.requireHeadquarters(token);
         String activeOnly = includeArchived ? "" : " where asset.status = 'ACTIVE'";
-        return jdbc.query("""
+        List<WebsiteMediaAsset> assets = jdbc.query("""
                 select asset.id, asset.display_name, asset.delivery_path, asset.mime_type, asset.byte_size,
                        asset.width, asset.height, asset.default_alt_text, asset.status, asset.version,
                        asset.archived_at,
@@ -74,7 +77,8 @@ public class WebsiteMediaService {
                 rs.getString("mime_type"), rs.getLong("byte_size"), rs.getInt("width"), rs.getInt("height"),
                 rs.getString("default_alt_text"), rs.getInt("usage_count"), rs.getString("status"),
                 rs.getInt("version"), rs.getObject("archived_at", OffsetDateTime.class),
-                permanentDeleteAvailableAt(rs.getObject("archived_at", OffsetDateTime.class))));
+                permanentDeleteAvailableAt(rs.getObject("archived_at", OffsetDateTime.class)), List.of()));
+        return withVariants(assets);
     }
 
     @Transactional
@@ -116,6 +120,7 @@ public class WebsiteMediaService {
                     ) values (?, 'UPLOADED', ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', 1, ?, ?)
                     """, id, deliveryPath(id), storageKey, name, alt, image.mimeType(), (long) bytes.length,
                     image.width(), image.height(), actor.id(), actor.id());
+            variants.enqueueEligible(id, image.width());
         } catch (RuntimeException exception) {
             deleteStoredFile(target);
             throw exception;
@@ -241,7 +246,7 @@ public class WebsiteMediaService {
     }
 
     private WebsiteMediaAsset catalogAsset(UUID mediaId) {
-        return jdbc.query("""
+        WebsiteMediaAsset asset = jdbc.query("""
                 select asset.id, asset.display_name, asset.delivery_path, asset.mime_type, asset.byte_size,
                        asset.width, asset.height, asset.default_alt_text, asset.status, asset.version,
                        asset.archived_at,
@@ -257,7 +262,8 @@ public class WebsiteMediaService {
                 rs.getString("mime_type"), rs.getLong("byte_size"), rs.getInt("width"), rs.getInt("height"),
                 rs.getString("default_alt_text"), rs.getInt("usage_count"), rs.getString("status"),
                 rs.getInt("version"), rs.getObject("archived_at", OffsetDateTime.class),
-                permanentDeleteAvailableAt(rs.getObject("archived_at", OffsetDateTime.class))) : null, mediaId);
+                permanentDeleteAvailableAt(rs.getObject("archived_at", OffsetDateTime.class)), List.of()) : null, mediaId);
+        return asset == null ? null : withVariants(List.of(asset)).getFirst();
     }
 
     private WebsiteMediaAsset changeStatus(String token, UUID mediaId, WebsiteMediaVersionRequest request,
@@ -275,7 +281,18 @@ public class WebsiteMediaService {
                  where id = ? and status = ? and version = ?
                 """, nextStatus, nextStatus, actor.id(), mediaId, expectedStatus, request.expectedVersion());
         if (updated == 0) throw versionConflict();
+        if ("ACTIVE".equals(nextStatus)) variants.enqueueEligible(mediaId, current.width());
         return catalogAsset(mediaId);
+    }
+
+    private List<WebsiteMediaAsset> withVariants(List<WebsiteMediaAsset> assets) {
+        Map<UUID, List<WebsiteMediaVariant>> variantsByAsset = variants.findByAssetIds(
+                assets.stream().map(WebsiteMediaAsset::id).toList());
+        return assets.stream().map(asset -> new WebsiteMediaAsset(
+                asset.id(), asset.displayName(), asset.deliveryUrl(), asset.mimeType(), asset.byteSize(),
+                asset.width(), asset.height(), asset.defaultAltText(), asset.usageCount(), asset.status(),
+                asset.version(), asset.archivedAt(), asset.permanentDeleteAvailableAt(),
+                variantsByAsset.getOrDefault(asset.id(), List.of()))).toList();
     }
 
     private MediaAssetRow requireAssetForUpdate(UUID mediaId) {
@@ -315,11 +332,12 @@ public class WebsiteMediaService {
 
     private MediaAssetRow asset(UUID mediaId, boolean activeOnly, String lockClause) {
         String status = activeOnly ? " and status = 'ACTIVE'" : "";
-        return jdbc.query("select id, origin, delivery_path, storage_key, mime_type, status, version, archived_at from website_media_asset where id = ?"
+        return jdbc.query("select id, origin, delivery_path, storage_key, mime_type, width, status, version, archived_at from website_media_asset where id = ?"
                         + status + lockClause,
                 rs -> rs.next() ? new MediaAssetRow(rs.getObject("id", UUID.class), rs.getString("origin"),
                         rs.getString("delivery_path"), rs.getString("storage_key"), rs.getString("mime_type"),
-                        rs.getString("status"), rs.getInt("version"), rs.getObject("archived_at", OffsetDateTime.class)) : null,
+                        rs.getInt("width"), rs.getString("status"), rs.getInt("version"),
+                        rs.getObject("archived_at", OffsetDateTime.class)) : null,
                 mediaId);
     }
 
@@ -420,7 +438,7 @@ public class WebsiteMediaService {
         return new IllegalArgumentException("미디어 형식 오류: " + message);
     }
 
-    record MediaAssetRow(UUID id, String origin, String deliveryPath, String storageKey, String mimeType,
+    record MediaAssetRow(UUID id, String origin, String deliveryPath, String storageKey, String mimeType, int width,
             String status, int version, OffsetDateTime archivedAt) {
     }
 
