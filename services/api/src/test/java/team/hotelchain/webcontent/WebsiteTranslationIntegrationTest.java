@@ -50,6 +50,15 @@ class WebsiteTranslationIntegrationTest {
                         WebsiteTranslationReviewState::reviewedDraftVersion)
                 .containsExactly(WebsiteTranslationReviewStatus.DRAFT, null);
         translations.initialize(token, ko.id(), ko.draftVersion(), ko.lifecycleVersion());
+        assertThat(jdbc.queryForList("""
+                select page_id, locale, review_status, reviewed_draft_version
+                from website_page_translation
+                where page_id = ? and locale = 'en'
+                """, ko.id())).singleElement().satisfies(row -> assertThat(row)
+                        .containsEntry("page_id", ko.id())
+                        .containsEntry("locale", "en")
+                        .containsEntry("review_status", "DRAFT")
+                        .containsEntry("reviewed_draft_version", null));
         var persisted = translations.review(token, ko.id());
         assertThat(persisted)
                 .extracting(WebsiteTranslationReviewState::status,
