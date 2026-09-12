@@ -70,6 +70,29 @@ class StaffOperationsIntegrationTest {
         assertThat(view.roomsNeedingCleaning()).isEmpty();
     }
 
+    @Test
+    void returnsOnlyCleanMatchingRoomsThatCanBeAssigned() {
+        StaffSessionView session = staffAccess.login("operations@example.com", "password");
+
+        assertThat(operations.assignableRooms(session.token(), RESERVATION))
+                .singleElement()
+                .extracting(AssignableRoom::roomNumber)
+                .isEqualTo("101");
+    }
+
+    @Test
+    void marksAConfirmedReservationAsNoShow() {
+        StaffSessionView session = staffAccess.login("operations@example.com", "password");
+        operations.assign(session.token(), RESERVATION, ROOM);
+
+        operations.markNoShow(session.token(), RESERVATION);
+
+        assertThat(jdbc.queryForObject("select status from reservation where id = ?", String.class, RESERVATION))
+                .isEqualTo("NO_SHOW");
+        assertThat(jdbc.queryForObject("select count(*) from reservation_room_assignment where reservation_id = ?", Integer.class, RESERVATION))
+                .isZero();
+    }
+
     private UUID ratePlan() { return UUID.fromString("52000000-0000-0000-0000-000000000001"); }
     private void clean() {
         jdbc.update("delete from staff_session"); jdbc.update("delete from staff_member where email = 'operations@example.com'");

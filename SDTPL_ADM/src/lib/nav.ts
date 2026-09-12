@@ -20,6 +20,7 @@ export const navGroups: NavGroup[] = [
       { title: "E-commerce", href: "/dashboard/ecommerce", icon: ShoppingCart },
       { title: "Payment", href: "/dashboard/payment", icon: CreditCard },
       { title: "Hotel", href: "/dashboard/hotel", icon: Hotel },
+      { title: "Website CMS", href: "/dashboard/website", icon: Globe },
       { title: "Project Management", href: "/dashboard/project-management", icon: KanbanSquare },
       { title: "Real Estate", href: "/dashboard/real-estate", icon: Building2 },
       { title: "Sales", href: "/dashboard/sales", icon: TrendingUp },

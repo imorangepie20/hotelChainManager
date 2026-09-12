@@ -1,6 +1,7 @@
 package team.hotelchain.operations;
 
 import java.util.UUID;
+import java.util.List;
 
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -47,6 +48,30 @@ public class StaffOperationsService {
     }
 
     @Transactional
+    public List<AssignableRoom> assignableRooms(String token, UUID reservationId) {
+        ReservationOperation reservation = reservation(reservationId);
+        staffAccess.requireHotel(token, reservation.hotelId());
+        if (!"CONFIRMED".equals(reservation.status())) {
+            throw new BusinessConflictException("RESERVATION_NOT_ASSIGNABLE", "확정된 예약만 객실을 배정할 수 있습니다.");
+        }
+        return jdbc.query("""
+                SELECT p.id, p.room_number
+                  FROM physical_room p
+                 WHERE p.hotel_id = ? AND p.room_type_id = ? AND p.housekeeping_status = 'CLEAN'
+                   AND NOT EXISTS (SELECT 1 FROM reservation_room_assignment own
+                                   WHERE own.reservation_id = ? AND own.physical_room_id = p.id)
+                   AND NOT EXISTS (
+                       SELECT 1 FROM reservation_room_assignment a JOIN reservation r ON r.id = a.reservation_id
+                        WHERE a.physical_room_id = p.id AND r.id <> ? AND r.status IN ('CONFIRMED', 'CHECKED_IN')
+                          AND r.check_in < ? AND r.check_out > ?
+                   )
+                 ORDER BY p.room_number
+                """, (rs, row) -> new AssignableRoom(rs.getObject("id", UUID.class), rs.getString("room_number")),
+                reservation.hotelId(), reservation.roomTypeId(), reservationId, reservationId,
+                reservation.checkOut(), reservation.checkIn());
+    }
+
+    @Transactional
     public void checkIn(String token, UUID reservationId) {
         ReservationOperation reservation = reservation(reservationId);
         staffAccess.requireHotel(token, reservation.hotelId());
@@ -75,6 +100,17 @@ public class StaffOperationsService {
                 UPDATE physical_room SET housekeeping_status = 'NEEDS_CLEANING'
                 WHERE id IN (SELECT physical_room_id FROM reservation_room_assignment WHERE reservation_id = ?)
                 """, reservationId);
+    }
+
+    @Transactional
+    public void markNoShow(String token, UUID reservationId) {
+        ReservationOperation reservation = reservation(reservationId);
+        staffAccess.requireHotel(token, reservation.hotelId());
+        if (!"CONFIRMED".equals(reservation.status())) {
+            throw new BusinessConflictException("RESERVATION_NOT_NO_SHOW_READY", "확정 상태 예약만 노쇼 처리할 수 있습니다.");
+        }
+        jdbc.update("delete from reservation_room_assignment where reservation_id = ?", reservationId);
+        jdbc.update("update reservation set status = 'NO_SHOW' where id = ?", reservationId);
     }
 
     @Transactional

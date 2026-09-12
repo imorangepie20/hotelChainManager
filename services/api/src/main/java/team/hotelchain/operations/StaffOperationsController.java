@@ -43,9 +43,21 @@ public class StaffOperationsController {
         return ResponseEntity.noContent().build();
     }
 
+    @GetMapping("/reservations/{reservationId}/assignable-rooms")
+    public java.util.List<AssignableRoom> assignableRooms(@PathVariable UUID reservationId,
+            @RequestHeader("X-Staff-Session") String token) {
+        return operations.assignableRooms(token, reservationId);
+    }
+
     @PostMapping("/reservations/{reservationId}/check-in")
     public ResponseEntity<Void> checkIn(@PathVariable UUID reservationId, @RequestHeader("X-Staff-Session") String token) {
         operations.checkIn(token, reservationId);
+        return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/reservations/{reservationId}/no-show")
+    public ResponseEntity<Void> markNoShow(@PathVariable UUID reservationId, @RequestHeader("X-Staff-Session") String token) {
+        operations.markNoShow(token, reservationId);
         return ResponseEntity.noContent().build();
     }
 

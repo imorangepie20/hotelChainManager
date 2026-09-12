@@ -1,0 +1,43 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "롯데리조트 속초 참조 기반 고객 여정 업그레이드",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    { "id": "guest", "label": "고객 경험" },
+    { "id": "site", "label": "고객 웹사이트" },
+    { "id": "content", "label": "브랜드 콘텐츠" },
+    { "id": "booking", "label": "예약 서비스" }
+  ],
+  "phases": [
+    { "id": "discover", "label": "목적지 발견", "fromCol": 0, "toCol": 1 },
+    { "id": "consider", "label": "경험 탐색", "fromCol": 2, "toCol": 3, "variant": "emphasis" },
+    { "id": "convert", "label": "예약 전환", "fromCol": 4, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": ["arrival", "immersiveHero", "editorialContent", "staySearch", "availableRooms", "reservation"],
+  "nodes": [
+    { "id": "arrival", "lane": "guest", "col": 0, "type": "external", "label": "여행 영감", "sublabel": "속초·설악·제주 목적지 선택", "width": 136 },
+    { "id": "immersiveHero", "lane": "site", "col": 1, "type": "frontend", "label": "몰입형 히어로", "sublabel": "장소성·계절성·핵심 CTA", "width": 136 },
+    { "id": "editorialContent", "lane": "site", "col": 2, "type": "frontend", "label": "에디토리얼 모듈", "sublabel": "객실·다이닝·시설·여정", "width": 136 },
+    { "id": "offerStories", "lane": "content", "col": 2, "type": "cloud", "label": "큐레이션 콘텐츠", "sublabel": "기간·혜택·여행 테마", "width": 136 },
+    { "id": "destinationTrust", "lane": "content", "col": 3, "type": "cloud", "label": "현장 정보", "sublabel": "위치·체크인·운영 안내", "width": 136 },
+    { "id": "staySearch", "lane": "site", "col": 4, "type": "frontend", "label": "고정 예약 바", "sublabel": "지점·날짜·인원·AI 도우미", "width": 136 },
+    { "id": "availableRooms", "lane": "booking", "col": 5, "type": "backend", "label": "실시간 객실 제안", "sublabel": "서버 가격·재고 결과", "width": 136 },
+    { "id": "reservation", "lane": "guest", "col": 5, "type": "frontend", "label": "예약 완료", "sublabel": "테스트 결제·예약 관리", "width": 136 }
+  ],
+  "edges": [
+    { "id": "arrival-hero", "from": "arrival", "to": "immersiveHero", "label": "첫 인상", "role": "main" },
+    { "id": "hero-editorial", "from": "immersiveHero", "to": "editorialContent", "label": "장소 경험", "role": "main", "variant": "emphasis" },
+    { "id": "content-offers", "from": "editorialContent", "to": "offerStories", "label": "여정별 제안", "role": "branch" },
+    { "id": "offers-trust", "from": "offerStories", "to": "destinationTrust", "label": "운영 정보 확인", "role": "branch" },
+    { "id": "editorial-search", "from": "editorialContent", "to": "staySearch", "label": "예약 CTA", "role": "main", "variant": "emphasis" },
+    { "id": "search-rooms", "from": "staySearch", "to": "availableRooms", "label": "실제 재고 조회", "role": "main" },
+    { "id": "rooms-reservation", "from": "availableRooms", "to": "reservation", "label": "요금제 선택", "role": "main", "variant": "emphasis" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "분석에서 유지할 원칙", "items": ["큰 장소 사진과 절제된 카피로 첫 인상을 만든다", "객실·다이닝·시설을 여행 목적에 따라 엮는다", "페이지 어느 지점에서도 예약 흐름으로 자연스럽게 돌아온다"] },
+    { "dot": "amber", "title": "우리 서비스의 차별점", "items": ["재고·가격은 Spring Boot의 실제 조회값만 표시한다", "AI는 조건 정리와 후보 설명만 하며 예약을 확정하지 않는다", "속초·설악·제주의 브랜드 톤은 공유하고 장소 콘텐츠는 분리한다"] }
+  ]
+}

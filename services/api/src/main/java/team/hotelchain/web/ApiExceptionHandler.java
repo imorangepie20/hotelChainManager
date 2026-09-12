@@ -4,6 +4,8 @@ import team.hotelchain.reservation.BusinessConflictException;
 import team.hotelchain.reservation.ReservationNotFoundException;
 import team.hotelchain.staff.StaffAccessDeniedException;
 import team.hotelchain.staff.StaffAuthenticationException;
+import team.hotelchain.webcontent.WebsitePageNotFoundException;
+import team.hotelchain.webcontent.WebsiteMediaNotFoundException;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -29,6 +31,18 @@ public class ApiExceptionHandler {
     @ResponseStatus(HttpStatus.NOT_FOUND)
     public ApiError notFound(ReservationNotFoundException exception) {
         return new ApiError("RESERVATION_NOT_FOUND", exception.getMessage());
+    }
+
+    @ExceptionHandler(WebsitePageNotFoundException.class)
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    public ApiError websitePageNotFound(WebsitePageNotFoundException exception) {
+        return new ApiError("WEBSITE_PAGE_NOT_FOUND", exception.getMessage());
+    }
+
+    @ExceptionHandler(WebsiteMediaNotFoundException.class)
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    public ApiError websiteMediaNotFound(WebsiteMediaNotFoundException exception) {
+        return new ApiError("WEBSITE_MEDIA_NOT_FOUND", exception.getMessage());
     }
 
     @ExceptionHandler(StaffAuthenticationException.class)

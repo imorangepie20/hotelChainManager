@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "STAY HANEUL 롯데리조트급 CMS 목표 구조",
+    "quality_profile": "showcase",
+    "output": "lotte-resort-cms-target.html",
+    "views": [
+      {
+        "id": "authoring",
+        "label": "본사 콘텐츠 운영",
+        "focus": ["hq", "admin", "cms", "taxonomy", "media", "database"],
+        "note": "본사가 유형별 콘텐츠와 미디어를 초안으로 만들고 검토·발행하는 경로입니다."
+      },
+      {
+        "id": "customer",
+        "label": "고객 공개 화면",
+        "focus": ["customer", "public", "cms", "media", "storage"],
+        "note": "고객은 발행된 페이지와 활성 자산만 읽습니다."
+      },
+      {
+        "id": "booking-boundary",
+        "label": "예약 데이터 경계",
+        "focus": ["cms", "taxonomy", "booking", "database"],
+        "note": "객실 소개는 CMS가 관리하고 가격·재고·예약 확정은 Spring 예약 도메인이 소유합니다."
+      }
+    ]
+  },
+  "components": [
+    { "id": "hq", "type": "external", "label": "본사 콘텐츠 운영자", "sublabel": "운영자", "pos": [32, 220], "size": [150, 70] },
+    { "id": "admin", "type": "frontend", "label": "관리자 CMS", "sublabel": "페이지 · 미디어 · 발행 캘린더", "pos": [235, 220], "size": [170, 70], "tag": "Next.js :4001" },
+    { "id": "cms", "type": "backend", "label": "CMS Authoring Core", "sublabel": "초안 · 발행 · 권한", "pos": [465, 220], "size": [190, 70], "tag": "Spring Boot :4080" },
+    { "id": "taxonomy", "type": "backend", "label": "콘텐츠 유형 모델", "sublabel": "상세 콘텐츠 템플릿", "pos": [465, 62], "size": [190, 70], "tag": "Target" },
+    { "id": "media", "type": "backend", "label": "미디어 라이브러리", "sublabel": "자산 · alt · 변형 · 사용 위치", "pos": [465, 380], "size": [190, 70], "tag": "Target" },
+    { "id": "database", "type": "database", "label": "CMS PostgreSQL", "sublabel": "페이지 · 이력 · 감사", "pos": [720, 220], "size": [185, 70] },
+    { "id": "storage", "type": "cloud", "label": "미디어 저장소", "sublabel": "원본 · 최적화본 · 공개 전달", "pos": [720, 380], "size": [185, 70], "tag": "Target" },
+    { "id": "booking", "type": "backend", "label": "예약 도메인", "sublabel": "객실 유형 · 재고 · 가격 · 예약", "pos": [720, 62], "size": [185, 70], "tag": "Spring owner" },
+    { "id": "public", "type": "backend", "label": "공개 콘텐츠 전달", "sublabel": "발행본 · 메뉴 · SEO metadata", "pos": [970, 220], "size": [190, 70], "tag": "Read only" },
+    { "id": "customer", "type": "frontend", "label": "고객 웹", "sublabel": "탐색 · 상세 · 예약 연결", "pos": [1190, 220], "size": [160, 70], "tag": "React :4000" }
+  ],
+  "connections": [
+    { "id": "author", "from": "hq", "to": "admin", "label": "운영 작업", "variant": "emphasis" },
+    { "id": "admin-api", "from": "admin", "to": "cms", "label": "본사 인증 API", "variant": "security", "labelDy": -31 },
+    { "id": "content-model", "from": "cms", "to": "taxonomy", "label": "유형별 검증", "fromSide": "top", "toSide": "bottom", "labelAt": [560, 176] },
+    { "id": "asset-management", "from": "cms", "to": "media", "label": "자산 참조", "fromSide": "bottom", "toSide": "top", "labelAt": [560, 336] },
+    { "id": "cms-store", "from": "cms", "to": "database", "label": "초안 · 이력 · 감사", "labelAt": [688, 330] },
+    { "id": "media-store", "from": "media", "to": "storage", "label": "원본 · 공개 변형", "labelAt": [688, 464] },
+    { "id": "room-binding", "from": "taxonomy", "to": "booking", "label": "객실 유형 연결", "variant": "dashed", "labelAt": [688, 148] },
+    { "id": "publish", "from": "database", "to": "public", "label": "발행본 조회", "variant": "emphasis", "labelAt": [938, 190] },
+    { "id": "public-media", "from": "storage", "to": "public", "label": "활성 자산", "variant": "dashed", "fromSide": "top", "toSide": "bottom" },
+    { "id": "customer-page", "from": "public", "to": "customer", "label": "공개 페이지 · 메뉴 · SEO", "variant": "emphasis", "labelDy": -31 },
+    { "id": "customer-booking", "from": "customer", "to": "booking", "label": "실시간 재고 · 가격 · 예약", "variant": "security", "fromSide": "top", "toSide": "bottom" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "콘텐츠 운영", "items": ["유형별 템플릿과 재사용 블록으로 상세 페이지를 작성", "초안·검토·발행·이력을 페이지와 번역 단위로 보존"] },
+    { "dot": "emerald", "title": "고객 공개", "items": ["발행본과 활성 미디어만 고객 웹에 전달", "목록·상세·검색 페이지가 같은 콘텐츠 모델을 사용"] },
+    { "dot": "rose", "title": "변경 불가 경계", "items": ["가격·재고·예약 확정은 CMS가 쓰지 않음", "Spring 예약 도메인이 실제 판매 가능 여부를 최종 검증"] }
+  ]
+}

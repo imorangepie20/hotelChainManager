@@ -56,6 +56,17 @@ class AvailabilityIntegrationTest {
     }
 
     @Test
+    void multipliesTheDisplayedTotalByRequestedRoomCount() {
+        List<AvailabilityOffer> offers = availabilityService.search(
+                new AvailabilityQuery(HOTEL_ID, CHECK_IN, CHECK_IN.plusDays(3), 2, 0, 2));
+
+        assertThat(offers).singleElement().satisfies(offer -> {
+            assertThat(offer.remaining()).isEqualTo(2);
+            assertThat(offer.total()).isEqualTo(960_000);
+        });
+    }
+
+    @Test
     void excludesAnOfferWhenAnyNightIsSoldOut() {
         jdbc.update("update inventory_day set confirmed = capacity where stay_date = ?", CHECK_IN.plusDays(1));
 

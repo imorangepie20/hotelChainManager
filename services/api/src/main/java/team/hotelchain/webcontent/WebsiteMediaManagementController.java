@@ -1,0 +1,70 @@
+package team.hotelchain.webcontent;
+
+import java.util.List;
+import java.util.UUID;
+import org.springframework.http.MediaType;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
+
+@RestController
+@RequestMapping("/api/staff/website/media")
+public class WebsiteMediaManagementController {
+    private final WebsiteMediaService media;
+
+    public WebsiteMediaManagementController(WebsiteMediaService media) {
+        this.media = media;
+    }
+
+    @GetMapping
+    public List<WebsiteMediaAsset> catalog(
+            @RequestParam(defaultValue = "false") boolean includeArchived,
+            @RequestHeader("X-Staff-Session") String token) {
+        return media.catalog(token, includeArchived);
+    }
+
+    @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public WebsiteMediaAsset upload(
+            @RequestParam MultipartFile file,
+            @RequestParam String displayName,
+            @RequestParam String defaultAltText,
+            @RequestHeader("X-Staff-Session") String token) {
+        return media.upload(token, file, displayName, defaultAltText);
+    }
+
+    @GetMapping("/{mediaId}/usages")
+    public List<WebsiteMediaUsage> usages(@PathVariable UUID mediaId, @RequestHeader("X-Staff-Session") String token) {
+        return media.usages(token, mediaId);
+    }
+
+    @PatchMapping("/{mediaId}")
+    public WebsiteMediaAsset updateMetadata(
+            @PathVariable UUID mediaId,
+            @RequestBody WebsiteMediaMetadataRequest request,
+            @RequestHeader("X-Staff-Session") String token) {
+        return media.updateMetadata(token, mediaId, request);
+    }
+
+    @PostMapping("/{mediaId}/archive")
+    public WebsiteMediaAsset archive(
+            @PathVariable UUID mediaId,
+            @RequestBody WebsiteMediaVersionRequest request,
+            @RequestHeader("X-Staff-Session") String token) {
+        return media.archive(token, mediaId, request);
+    }
+
+    @PostMapping("/{mediaId}/restore")
+    public WebsiteMediaAsset restore(
+            @PathVariable UUID mediaId,
+            @RequestBody WebsiteMediaVersionRequest request,
+            @RequestHeader("X-Staff-Session") String token) {
+        return media.restore(token, mediaId, request);
+    }
+}

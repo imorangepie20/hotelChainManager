@@ -46,11 +46,26 @@ services:
       STAFF_SOKCHO_PASSWORD: ${STAFF_SOKCHO_PASSWORD:-}
       STAFF_SEORAKSAN_PASSWORD: ${STAFF_SEORAKSAN_PASSWORD:-}
       STAFF_JEJU_PASSWORD: ${STAFF_JEJU_PASSWORD:-}
+      WEBSITE_MEDIA_STORAGE_DIR: /app/media
     ports:
       - "127.0.0.1:4080:4080"
     depends_on:
       db:
         condition: service_healthy
+    volumes:
+      - hotel-media-data:/app/media
+
+  concierge:
+    build:
+      context: services/concierge
+    environment:
+      CONCIERGE_API_BASE_URL: http://api:4080
+    ports:
+      - "127.0.0.1:9000:9000"
+    depends_on:
+      api:
+        condition: service_started
 
 volumes:
   hotel-db-data:
+  hotel-media-data:

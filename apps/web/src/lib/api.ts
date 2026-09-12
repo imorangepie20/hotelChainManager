@@ -11,6 +11,24 @@ export type Reservation = {
   cancellationPolicy: string; guest: { name: string; email: string }
 }
 
+export type WebsiteNavigationItem = {
+  id: string
+  hotelId: string | null
+  label: string
+  path: string
+  children: WebsiteNavigationItem[]
+}
+
+export type PublishedWebsitePage = {
+  id: string
+  type: 'HOTEL_LANDING' | 'CONTENT_PAGE' | 'HOME_PAGE'
+  contentKind: string | null
+  path: string
+  hotelId: string | null
+  content: Record<string, unknown>
+  connections: { roomTypeIds: string[]; targetHotelIds: string[]; relatedPages: { targetPageId: string; relationType: 'RELATED' | 'MANUAL_CARD'; displayOrder: number }[] }
+}
+
 export class ApiFailure extends Error {
   constructor(public code: string, message: string, public status: number) { super(message) }
 }
@@ -32,6 +50,10 @@ const headers = (token: string, key?: string) => ({
 
 export const api = {
   hotels: () => request<Hotel[]>('/api/hotels'),
+  hotelContent: (hotelId: string) => request<Record<string, unknown>>(`/api/hotels/${hotelId}/content`),
+  websiteNavigation: () => request<WebsiteNavigationItem[]>('/api/website/navigation'),
+  websitePage: (path: string) => request<PublishedWebsitePage>(`/api/website/pages/resolve?${new URLSearchParams({ path })}`),
+  websiteCollection: (contentKind: string, hotelSlug?: string) => request<unknown[]>(`/api/website/collections?${new URLSearchParams({ kind: contentKind, ...(hotelSlug ? { hotelSlug } : {}) })}`),
   availability: (query: URLSearchParams) => request<{ offers: Offer[] }>(`/api/availability?${query}`),
   reserve: (body: object, token: string, key: string) => request<Reservation>('/api/reservations', {
     method: 'POST', headers: headers(token, key), body: JSON.stringify(body),

@@ -8,8 +8,9 @@ RUN ./mvnw -B -DskipTests package
 
 FROM eclipse-temurin:21-jre-alpine@sha256:974b08960c5d96694c780e65b2d5705268ab1e1ca1a0dd0caf4ba6c3fe34d699
 RUN addgroup -S hotel && adduser -S hotel -G hotel
-USER hotel
 WORKDIR /app
 COPY --from=build /workspace/target/api-0.0.1-SNAPSHOT.jar app.jar
+RUN mkdir -p /app/media && chown -R hotel:hotel /app
+USER hotel
 EXPOSE 4080
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]

@@ -1,0 +1,241 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "호텔 고객 웹 콘텐츠 플랫폼",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "publish",
+        "label": "편집과 발행",
+        "focus": [
+          "hq",
+          "admin",
+          "cms",
+          "content-db",
+          "audit"
+        ],
+        "note": "본사 편집자는 초안·검토·발행 이력으로 고객 콘텐츠를 관리한다."
+      },
+      {
+        "id": "delivery",
+        "label": "고객 조회",
+        "focus": [
+          "guest",
+          "web",
+          "cms",
+          "content-db"
+        ],
+        "note": "고객 웹은 발행된 콘텐츠만 조회하고 예약 데이터와 분리한다."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "hq",
+      "type": "external",
+      "label": "본사 콘텐츠 운영자",
+      "sublabel": "HQ_ADMIN",
+      "pos": [
+        35,
+        125
+      ],
+      "size": [
+        145,
+        64
+      ]
+    },
+    {
+      "id": "admin",
+      "type": "frontend",
+      "label": "관리자 CMS",
+      "sublabel": "페이지 · 미디어 · SEO · 미리보기",
+      "pos": [
+        250,
+        125
+      ],
+      "size": [
+        185,
+        70
+      ]
+    },
+    {
+      "id": "cms",
+      "type": "backend",
+      "label": "콘텐츠 발행 API",
+      "sublabel": "초안 · 예약 발행 · 버전 복원",
+      "pos": [
+        510,
+        125
+      ],
+      "size": [
+        185,
+        70
+      ]
+    },
+    {
+      "id": "content-db",
+      "type": "database",
+      "label": "콘텐츠 저장소",
+      "sublabel": "페이지 · 블록 · 번역 · 발행본",
+      "pos": [
+        775,
+        125
+      ],
+      "size": [
+        185,
+        70
+      ]
+    },
+    {
+      "id": "audit",
+      "type": "database",
+      "label": "변경 이력",
+      "sublabel": "작성자 · 시각 · 이전 버전",
+      "pos": [
+        775,
+        285
+      ],
+      "size": [
+        185,
+        64
+      ]
+    },
+    {
+      "id": "media",
+      "type": "cloud",
+      "label": "미디어 라이브러리",
+      "sublabel": "이미지 · 동영상 · 대체 텍스트",
+      "pos": [
+        510,
+        285
+      ],
+      "size": [
+        185,
+        64
+      ]
+    },
+    {
+      "id": "guest",
+      "type": "external",
+      "label": "고객",
+      "sublabel": "웹 · 모바일",
+      "pos": [
+        35,
+        455
+      ],
+      "size": [
+        145,
+        64
+      ]
+    },
+    {
+      "id": "web",
+      "type": "frontend",
+      "label": "고객 호텔 웹",
+      "sublabel": "지점 · 객실 · 오퍼 · 예약",
+      "pos": [
+        250,
+        455
+      ],
+      "size": [
+        185,
+        70
+      ]
+    },
+    {
+      "id": "reservation",
+      "type": "backend",
+      "label": "예약·재고 API",
+      "sublabel": "가격 · 재고 · 예약 확정",
+      "pos": [
+        510,
+        455
+      ],
+      "size": [
+        185,
+        70
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "hq",
+      "to": "admin",
+      "label": "콘텐츠 편집"
+    },
+    {
+      "from": "admin",
+      "to": "cms",
+      "label": "저장 · 발행",
+      "variant": "emphasis"
+    },
+    {
+      "from": "cms",
+      "to": "content-db",
+      "label": "버전 저장"
+    },
+    {
+      "from": "cms",
+      "to": "audit",
+      "label": "이력 기록",
+      "variant": "dashed"
+    },
+    {
+      "from": "cms",
+      "to": "media",
+      "label": "자산 참조",
+      "variant": "dashed",
+      "labelAt": [
+        603,
+        209
+      ]
+    },
+    {
+      "from": "guest",
+      "to": "web",
+      "label": "HTTPS"
+    },
+    {
+      "from": "web",
+      "to": "cms",
+      "label": "발행본 조회",
+      "variant": "emphasis"
+    },
+    {
+      "from": "web",
+      "to": "reservation",
+      "label": "실시간 재고·요금",
+      "labelAt": [
+        473,
+        539
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "운영 범위",
+      "items": [
+        "지점·페이지·섹션·오퍼·현장 안내",
+        "이미지와 대체 텍스트, SEO, 한국어·영어"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "발행 통제",
+      "items": [
+        "초안·미리보기·발행·예약 발행",
+        "버전 비교·복원과 작성자 변경 이력"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "업무 경계",
+      "items": [
+        "본사만 콘텐츠 발행 권한",
+        "재고·가격·예약 확정은 별도 예약 API"
+      ]
+    }
+  ]
+}

@@ -48,7 +48,7 @@ public class AvailabilityService {
         return byRatePlan.values().stream()
                 .filter(group -> group.size() == nights)
                 .filter(group -> group.stream().mapToInt(OfferNightRow::remaining).min().orElse(0) >= query.rooms())
-                .map(this::toOffer)
+                .map(group -> toOffer(group, query.rooms()))
                 .toList();
     }
 
@@ -77,7 +77,7 @@ public class AvailabilityService {
                 rs.getInt("remaining"));
     }
 
-    private AvailabilityOffer toOffer(List<OfferNightRow> group) {
+    private AvailabilityOffer toOffer(List<OfferNightRow> group, int rooms) {
         OfferNightRow first = group.getFirst();
         List<NightlyPrice> prices = group.stream()
                 .map(row -> new NightlyPrice(row.stayDate(), row.amount()))
@@ -85,7 +85,7 @@ public class AvailabilityService {
         return new AvailabilityOffer(
                 first.roomTypeId(), first.roomTypeName(), first.ratePlanId(), first.ratePlanName(),
                 first.breakfastIncluded(), group.stream().mapToInt(OfferNightRow::remaining).min().orElseThrow(),
-                prices, prices.stream().mapToInt(NightlyPrice::amount).sum(), "KRW", first.policyVersion());
+                prices, prices.stream().mapToInt(NightlyPrice::amount).sum() * rooms, "KRW", first.policyVersion());
     }
 
     private record OfferNightRow(

@@ -69,6 +69,12 @@ public class StaffAccessService {
         return principal;
     }
 
+    public StaffPrincipal requireHeadquarters(String token) {
+        StaffPrincipal principal = current(token);
+        if ("HQ_ADMIN".equals(principal.role())) return principal;
+        throw new StaffAccessDeniedException();
+    }
+
     public StaffPrincipal requireHotel(String token, UUID hotelId) {
         StaffPrincipal principal = current(token);
         if ("HQ_ADMIN".equals(principal.role()) || hotelId.equals(principal.hotelId())) {

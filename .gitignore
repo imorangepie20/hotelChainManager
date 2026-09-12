@@ -8,3 +8,7 @@
 .logs/
 .nested-git-backups/
 docs/diagrams/*.visual-check.*.png
+.agents/
+.codex/
+.impeccable/
+SDTPL_ADM/debug.log

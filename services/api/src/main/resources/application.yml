@@ -10,12 +10,20 @@ spring:
       validation-timeout: 1000
   flyway:
     locations: classpath:db/migration
+  servlet:
+    multipart:
+      max-file-size: 11MB
+      max-request-size: 12MB
 
 server:
   port: 4080
 
 reservation:
   hold-ttl: ${RESERVATION_HOLD_TTL:10m}
+
+website:
+  media:
+    storage-dir: ${WEBSITE_MEDIA_STORAGE_DIR:}
 
 management:
   endpoint:
