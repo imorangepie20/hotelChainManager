@@ -1031,8 +1031,11 @@ test("미디어 variant 상태를 갱신하고 실패 항목을 다시 시도한
   const retryRequests: string[] = [];
   let releaseRetryFailure!: () => void;
   let releaseRetrySuccess!: () => void;
+  let releaseOtherRetry!: () => void;
   const retryFailure = new Promise<void>((resolve) => { releaseRetryFailure = resolve; });
   const retrySuccess = new Promise<void>((resolve) => { releaseRetrySuccess = resolve; });
+  const otherRetry = new Promise<void>((resolve) => { releaseOtherRetry = resolve; });
+  const otherRetryRequests: string[] = [];
   const pending = mediaAsset({
     id: UPLOADED_ASSET,
     displayName: "변환 중인 제주 이미지",
@@ -1074,10 +1077,16 @@ test("미디어 variant 상태를 갱신하고 실패 항목을 다시 시도한
     displayName: "다른 실패 이미지",
     deliveryUrl: "/images/sokcho-coast-hero.png",
     usageCount: 0,
-    variants: [{
-      id: "other-variant-1280", format: "WEBP", targetWidth: 1280, status: "FAILED", deliveryUrl: null,
-      mimeType: null, byteSize: null, width: null, height: null, attemptCount: 1, lastError: "이전 변환 실패", updatedAt: "2026-09-13T00:00:04Z",
-    }],
+    variants: [
+      {
+        id: "other-variant-640", format: "WEBP", targetWidth: 640, status: "FAILED", deliveryUrl: null,
+        mimeType: null, byteSize: null, width: null, height: null, attemptCount: 1, lastError: "이전 변환 실패", updatedAt: "2026-09-13T00:00:04Z",
+      },
+      {
+        id: "other-variant-1280", format: "WEBP", targetWidth: 1280, status: "FAILED", deliveryUrl: null,
+        mimeType: null, byteSize: null, width: null, height: null, attemptCount: 1, lastError: "이전 변환 실패", updatedAt: "2026-09-13T00:00:04Z",
+      },
+    ],
   });
   const undersized = mediaAsset({
     id: "undersized-asset",
@@ -1103,6 +1112,15 @@ test("미디어 variant 상태를 갱신하고 실패 항목을 다시 시도한
     }
     await retrySuccess;
     return route.fulfill({ contentType: "application/json", body: JSON.stringify(pending) });
+  });
+  await page.route("**/api/staff/website/media/other-failed-asset/variants/1280/retry", async (route) => {
+    otherRetryRequests.push("1280");
+    await otherRetry;
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify(otherFailed) });
+  });
+  await page.route("**/api/staff/website/media/other-failed-asset/variants/640/retry", (route) => {
+    otherRetryRequests.push("640");
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify(otherFailed) });
   });
 
   await page.goto("/dashboard/website");
@@ -1133,6 +1151,13 @@ test("미디어 variant 상태를 갱신하고 실패 항목을 다시 시도한
   await expect(picker.getByRole("button", { name: "1280px 다시 시도" })).toBeEnabled();
   releaseRetrySuccess();
   await expect(picker.getByText("다른 실패 이미지")).toBeVisible();
+
+  await picker.getByRole("button", { name: "1280px 다시 시도" }).click();
+  await expect(picker.getByRole("button", { name: "1280px 다시 시도 중" })).toBeDisabled();
+  await expect(picker.getByRole("button", { name: "640px 다시 시도" })).toBeEnabled();
+  await picker.getByRole("button", { name: "640px 다시 시도" }).click();
+  expect(otherRetryRequests).toEqual(["1280", "640"]);
+  releaseOtherRetry();
 
   await picker.getByRole("button", { name: "작은 원본 이미지 선택" }).click();
   await expect(picker.getByText("원본보다 큰 이미지는 생성하지 않습니다.")).toBeVisible();
