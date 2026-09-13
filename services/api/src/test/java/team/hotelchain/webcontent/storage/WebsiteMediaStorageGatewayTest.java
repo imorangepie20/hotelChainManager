@@ -80,6 +80,36 @@ class WebsiteMediaStorageGatewayTest {
     }
 
     @Test
+    void restoresBothStoresAfterAQuarantinedTransactionRollsBack() {
+        var local = new RecordingObjectStore("local").seed("asset.png", BYTES);
+        var s3 = new RecordingObjectStore("s3").seed("asset.png", BYTES);
+        var gateway = gateway(WebsiteMediaStorageMode.MIRROR, local, s3);
+
+        var quarantined = gateway.quarantineEverywhere(List.of("asset.png"), TRANSACTION_ID);
+        gateway.restoreEverywhere(quarantined);
+
+        assertThat(local.exists("asset.png")).isTrue();
+        assertThat(s3.exists("asset.png")).isTrue();
+        assertThat(local.list()).hasSize(1);
+        assertThat(s3.list()).hasSize(1);
+    }
+
+    @Test
+    void purgesBothStoresAfterAQuarantinedTransactionCommits() {
+        var local = new RecordingObjectStore("local").seed("asset.png", BYTES);
+        var s3 = new RecordingObjectStore("s3").seed("asset.png", BYTES);
+        var gateway = gateway(WebsiteMediaStorageMode.MIRROR, local, s3);
+
+        var quarantined = gateway.quarantineEverywhere(List.of("asset.png"), TRANSACTION_ID);
+        gateway.purgeEverywhere(quarantined);
+
+        assertThat(local.exists("asset.png")).isFalse();
+        assertThat(s3.exists("asset.png")).isFalse();
+        assertThat(local.list()).isEmpty();
+        assertThat(s3.list()).isEmpty();
+    }
+
+    @Test
     void unknownCleanupFailurePreservesObjectsForAudit() {
         var local = new RecordingObjectStore("local");
         var s3 = new RecordingObjectStore("s3");
