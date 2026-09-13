@@ -21,12 +21,14 @@ import {
   deleteWebsiteMedia,
   getWebsiteMedia,
   getWebsiteMediaUsages,
+  retryWebsiteMediaVariant,
   restoreWebsiteMedia,
   StaffApiError,
   updateWebsiteMedia,
   uploadWebsiteMedia,
   type WebsiteMediaAsset,
   type WebsiteMediaUsage,
+  type WebsiteMediaVariant,
 } from "@/lib/staff-api";
 
 const customerWebOrigin = (process.env.NEXT_PUBLIC_CUSTOMER_WEB_ORIGIN ?? "http://127.0.0.1:4000").replace(/\/$/, "");
@@ -50,6 +52,17 @@ function usageStateLabel(state: WebsiteMediaUsage["documentState"]) {
 
 function assetStatusLabel(status: WebsiteMediaAsset["status"]) {
   return status === "ACTIVE" ? "활성" : "보관됨";
+}
+
+function variantStatusLabel(status: WebsiteMediaVariant["status"]) {
+  if (status === "PENDING") return "변환 대기 중";
+  if (status === "PROCESSING") return "변환 중";
+  if (status === "READY") return "변환 완료";
+  return "변환 실패";
+}
+
+function isActiveVariant(status: WebsiteMediaVariant["status"]) {
+  return status === "PENDING" || status === "PROCESSING";
 }
 
 function permanentDeleteState(asset: WebsiteMediaAsset) {
@@ -124,6 +137,7 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
   const [metadataAltText, setMetadataAltText] = useState("");
   const [metadataError, setMetadataError] = useState("");
   const [metadataNotice, setMetadataNotice] = useState("");
+  const [variantError, setVariantError] = useState("");
   const [savingMetadata, setSavingMetadata] = useState(false);
   const [changingStatus, setChangingStatus] = useState(false);
   const [archiveConfirmationOpen, setArchiveConfirmationOpen] = useState(false);
@@ -131,6 +145,7 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
   const [replacementConfirmationOpen, setReplacementConfirmationOpen] = useState(false);
   const [draftReplacementOpen, setDraftReplacementOpen] = useState(false);
   const [replacementAssetId, setReplacementAssetId] = useState<string | null>(null);
+  const [retryingVariantWidths, setRetryingVariantWidths] = useState<Set<640 | 1280>>(new Set());
   const uploadRequestGeneration = useRef(0);
   const catalogRequestGeneration = useRef(0);
   const usageRequestGeneration = useRef(0);
@@ -142,6 +157,8 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
   const activeAssets = useMemo(() => assets.filter((asset) => asset.status === "ACTIVE"), [assets]);
   const archivedAssets = useMemo(() => assets.filter((asset) => asset.status === "ARCHIVED"), [assets]);
   const selectedByCurrentDraft = Boolean(selectedAsset && protectedAssetIds.includes(selectedAsset.id));
+  const selectedAssetIdForPolling = selectedAsset?.id ?? "";
+  const selectedAssetHasActiveVariant = selectedAsset?.variants.some((item) => isActiveVariant(item.status)) ?? false;
 
   const refreshCatalog = useCallback(async (preferredAssetId: string, resetMetadata: boolean) => {
     const requestGeneration = ++catalogRequestGeneration.current;
@@ -205,6 +222,14 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
     void refreshUsages(selectedAssetId);
   }, [open, refreshUsages, selectedAssetId]);
 
+  useEffect(() => {
+    if (!open || !selectedAssetIdForPolling || !selectedAssetHasActiveVariant) return;
+    const timer = window.setTimeout(() => {
+      void refreshCatalog(selectedAssetIdForPolling, false);
+    }, 2_000);
+    return () => window.clearTimeout(timer);
+  }, [open, refreshCatalog, selectedAssetHasActiveVariant, selectedAssetIdForPolling]);
+
   function replaceAsset(nextAsset: WebsiteMediaAsset) {
     catalogRequestGeneration.current += 1;
     setAssets((current) => current.map((asset) => asset.id === nextAsset.id ? nextAsset : asset));
@@ -227,6 +252,23 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
   async function recoverFromMediaConflict(mediaId: string) {
     await Promise.all([refreshCatalog(mediaId, true), refreshUsages(mediaId)]);
     setMetadataError("최신 자산 정보를 불러왔습니다. 변경 내용을 확인한 뒤 다시 저장해 주세요.");
+  }
+
+  async function retryVariant(targetWidth: 640 | 1280) {
+    if (!selectedAsset) return;
+    setVariantError("");
+    setRetryingVariantWidths((current) => new Set(current).add(targetWidth));
+    try {
+      replaceAsset(await retryWebsiteMediaVariant(token, selectedAsset.id, targetWidth));
+    } catch (cause) {
+      setVariantError(cause instanceof Error ? cause.message : `${targetWidth}px 변환을 다시 시도하지 못했습니다.`);
+    } finally {
+      setRetryingVariantWidths((current) => {
+        const next = new Set(current);
+        next.delete(targetWidth);
+        return next;
+      });
+    }
   }
 
   async function upload() {
@@ -363,6 +405,8 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
       setMetadataAltText("");
       setMetadataError("");
       setMetadataNotice("");
+      setVariantError("");
+      setRetryingVariantWidths(new Set());
       setArchiveConfirmationOpen(false);
       setDeleteConfirmationOpen(false);
     }
@@ -443,6 +487,26 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
                   {metadataError && <p role="alert" className="text-sm text-destructive">{metadataError}</p>}
                 </div>}
               </section>}
+
+              <section aria-label="반응형 이미지" className="border-t pt-4">
+                <h3 className="font-medium">반응형 이미지</h3>
+                {!selectedAsset ? <p className="mt-3 text-sm text-muted-foreground">자산을 선택하면 변환 상태를 표시합니다.</p> : selectedAsset.variants.length === 0 ? <p className="mt-3 text-sm text-muted-foreground">생성된 반응형 이미지가 없습니다.</p> : (
+                  <ul className="mt-3 grid gap-3">
+                    {selectedAsset.variants.map((variant) => {
+                      const retrying = retryingVariantWidths.has(variant.targetWidth);
+                      return <li key={variant.id} className="rounded-lg border bg-background p-3 text-sm">
+                        <p className="font-medium">{variant.targetWidth}px · {variantStatusLabel(variant.status)}{variant.status === "FAILED" ? ` · ${variant.attemptCount}/3회` : ""}</p>
+                        {variant.status === "READY" && variant.deliveryUrl && variant.width && variant.height && <a href={variant.deliveryUrl} target="_blank" rel="noreferrer" className="mt-1 inline-block text-sm text-primary underline underline-offset-4">{variant.width} × {variant.height} · WebP</a>}
+                        {variant.status === "FAILED" && <>
+                          {variant.lastError && <p className="mt-1 text-xs text-muted-foreground">{variant.lastError}</p>}
+                          <Button type="button" variant="outline" size="sm" className="mt-3" onClick={() => void retryVariant(variant.targetWidth)} disabled={retrying}>{retrying ? `${variant.targetWidth}px 다시 시도 중` : `${variant.targetWidth}px 다시 시도`}</Button>
+                        </>}
+                      </li>;
+                    })}
+                  </ul>
+                )}
+                {variantError && <p role="alert" className="mt-3 text-sm text-destructive">{variantError}</p>}
+              </section>
 
               <section className="border-t pt-4">
                 <h3 className="font-medium">사용 위치</h3>

@@ -647,6 +647,7 @@ function mediaAsset(overrides: Record<string, unknown> = {}) {
     version: 1,
     archivedAt: null,
     permanentDeleteAvailableAt: null,
+    variants: [],
     ...overrides,
   };
 }
@@ -1023,6 +1024,63 @@ test.beforeEach(async ({ page }) => {
       }),
     });
   });
+});
+
+test("미디어 variant 상태를 갱신하고 실패 항목을 다시 시도한다", async ({ page }) => {
+  let catalogRequestCount = 0;
+  const retryRequests: string[] = [];
+  const pending = mediaAsset({
+    id: UPLOADED_ASSET,
+    displayName: "변환 중인 제주 이미지",
+    deliveryUrl: `/api/website/media/${UPLOADED_ASSET}/content`,
+    usageCount: 0,
+    variants: [{
+      id: "variant-640", format: "WEBP", targetWidth: 640, status: "PENDING", deliveryUrl: null,
+      mimeType: null, byteSize: null, width: null, height: null, attemptCount: 0, lastError: null, updatedAt: "2026-09-13T00:00:00Z",
+    }],
+  });
+  const terminal = mediaAsset({
+    id: UPLOADED_ASSET,
+    displayName: "변환 중인 제주 이미지",
+    deliveryUrl: `/api/website/media/${UPLOADED_ASSET}/content`,
+    usageCount: 0,
+    variants: [
+      {
+        id: "variant-640", format: "WEBP", targetWidth: 640, status: "READY", deliveryUrl: `/api/website/media/${UPLOADED_ASSET}/variants/640.webp`,
+        mimeType: "image/webp", byteSize: 34567, width: 640, height: 360, attemptCount: 1, lastError: null, updatedAt: "2026-09-13T00:00:02Z",
+      },
+      {
+        id: "variant-1280", format: "WEBP", targetWidth: 1280, status: "FAILED", deliveryUrl: null,
+        mimeType: null, byteSize: null, width: null, height: null, attemptCount: 3, lastError: "변환 작업이 시간 초과되었습니다.", updatedAt: "2026-09-13T00:00:02Z",
+      },
+    ],
+  });
+
+  await page.unroute("**/api/staff/website/media?includeArchived=true");
+  await page.route("**/api/staff/website/media?includeArchived=true", (route) => {
+    catalogRequestCount += 1;
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify([catalogRequestCount === 1 ? pending : terminal]) });
+  });
+  await page.route(`**/api/staff/website/media/${UPLOADED_ASSET}/variants/1280/retry`, (route) => {
+    retryRequests.push(`${UPLOADED_ASSET}:1280`);
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify(pending) });
+  });
+
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "홈", exact: true }).click();
+  await page.getByRole("button", { name: "미디어 선택" }).click();
+
+  const picker = page.getByRole("dialog", { name: "미디어 선택" });
+  await expect(picker.getByText("640px · 변환 대기 중")).toBeVisible();
+  await expect(picker.getByText("640 × 360 · WebP")).toBeVisible({ timeout: 5_000 });
+  await expect(picker.getByText("1280px · 변환 실패 · 3/3회")).toBeVisible();
+  await picker.getByRole("button", { name: "1280px 다시 시도" }).click();
+  expect(retryRequests).toEqual([`${UPLOADED_ASSET}:1280`]);
+
+  await picker.getByRole("button", { name: "취소", exact: true }).click();
+  const catalogRequestsAfterClose = catalogRequestCount;
+  await page.waitForTimeout(2_500);
+  expect(catalogRequestCount).toBe(catalogRequestsAfterClose);
 });
 
 test("edits a landing block and requires saving before publishing", async ({ page }) => {

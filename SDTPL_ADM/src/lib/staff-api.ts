@@ -249,6 +249,20 @@ export type WebsitePageMoveImpactItem = {
   depth: number; published: boolean;
 };
 export type WebsitePageMoveImpact = { pageId: string; newParentId: string; newRootDraftPath: string; items: WebsitePageMoveImpactItem[] };
+export type WebsiteMediaVariant = {
+  id: string;
+  format: "WEBP";
+  targetWidth: 640 | 1280;
+  status: "PENDING" | "PROCESSING" | "READY" | "FAILED";
+  deliveryUrl: string | null;
+  mimeType: "image/webp" | null;
+  byteSize: number | null;
+  width: number | null;
+  height: number | null;
+  attemptCount: number;
+  lastError: string | null;
+  updatedAt: string;
+};
 export type WebsiteMediaAsset = {
   id: string;
   displayName: string;
@@ -263,6 +277,7 @@ export type WebsiteMediaAsset = {
   version: number;
   archivedAt: string | null;
   permanentDeleteAvailableAt: string | null;
+  variants: WebsiteMediaVariant[];
 };
 export type WebsiteMediaUsage = {
   locale?: "ko" | "en";
@@ -380,6 +395,9 @@ export function uploadWebsiteMedia(token: string, input: UploadWebsiteMediaInput
 }
 export function getWebsiteMediaUsages(token: string, mediaId: string) {
   return mediaRequest<WebsiteMediaUsage[]>(`/api/staff/website/media/${mediaId}/usages`, token);
+}
+export function retryWebsiteMediaVariant(token: string, mediaId: string, targetWidth: 640 | 1280) {
+  return mediaRequest<WebsiteMediaAsset>(`/api/staff/website/media/${mediaId}/variants/${targetWidth}/retry`, token, { method: "POST" });
 }
 export function getWebsiteMediaDraftReplacementImpact(token: string, sourceMediaId: string, targetMediaId: string) {
   const query = new URLSearchParams({ targetMediaId });
