@@ -23,6 +23,7 @@ public record ReservationStayQuote(
         String reservationStatus,
         long previousTotalKrw,
         String currency,
+        long operationRevision,
         int previousNights,
         int assignments,
         List<SelectedStayOffer> offers) {

@@ -38,8 +38,8 @@ public class ReservationStayQuoteService {
                 reservation.id(), reservation.roomTypeId(), reservation.ratePlanId(),
                 reservation.hotelId(), reservation.timezone(), reservation.checkIn(), reservation.checkOut(),
                 checkIn, checkOut, reservation.adults(), reservation.children(), reservation.rooms(),
-                reservation.status(), reservation.totalKrw(), reservation.currency(), reservation.nights(),
-                reservation.assignments(), findOffers(reservation, checkIn, checkOut));
+                reservation.status(), reservation.totalKrw(), reservation.currency(), reservation.operationRevision(),
+                reservation.nights(), reservation.assignments(), findOffers(reservation, checkIn, checkOut));
     }
 
     private void requireDates(LocalDate checkIn, LocalDate checkOut) {
@@ -52,7 +52,7 @@ public class ReservationStayQuoteService {
         String sql = """
                 select r.id, r.room_type_id, r.rate_plan_id, rt.hotel_id, h.timezone,
                        r.check_in, r.check_out, r.adults, r.children, r.rooms, r.status,
-                       r.total_krw, r.currency,
+                       r.total_krw, r.currency, r.operation_revision,
                        (select count(*) from reservation_night rn where rn.reservation_id = r.id) as nights,
                        (select count(*) from reservation_room_assignment rra where rra.reservation_id = r.id)
                            as assignments
@@ -121,7 +121,8 @@ public class ReservationStayQuoteService {
                 rs.getString("timezone"), rs.getDate("check_in").toLocalDate(),
                 rs.getDate("check_out").toLocalDate(), rs.getInt("adults"), rs.getInt("children"),
                 rs.getInt("rooms"), rs.getString("status"), rs.getLong("total_krw"),
-                rs.getString("currency").trim(), rs.getInt("nights"), rs.getInt("assignments"));
+                rs.getString("currency").trim(), rs.getLong("operation_revision"),
+                rs.getInt("nights"), rs.getInt("assignments"));
     }
 
     private OfferNight mapOfferNight(ResultSet rs, int rowNumber) throws SQLException {
@@ -146,6 +147,7 @@ public class ReservationStayQuoteService {
             String status,
             long totalKrw,
             String currency,
+            long operationRevision,
             int nights,
             int assignments) {
     }
