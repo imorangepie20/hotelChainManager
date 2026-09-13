@@ -30,7 +30,7 @@ public final class WebsiteMediaVariantJob {
                 : Path.of(configuredStorageDirectory);
     }
 
-    @Scheduled(fixedDelayString = "${website.media.variant-scan-delay:2s}")
+    @Scheduled(fixedDelayString = "${website.media.variant-scan-delay:2s}", scheduler = "websiteMediaVariantScheduler")
     public void generateNextVariant() {
         processNext();
     }

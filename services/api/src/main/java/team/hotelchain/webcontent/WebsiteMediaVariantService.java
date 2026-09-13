@@ -179,11 +179,19 @@ public class WebsiteMediaVariantService {
     public Optional<VariantClaim> claimNext() {
         OffsetDateTime now = now();
         jdbc.update("""
-                update website_media_variant
+                with expired as (
+                    select id from website_media_variant
+                     where status = 'PROCESSING' and attempt_count >= 3 and lease_expires_at <= ?
+                     order by lease_expires_at, id
+                     for update skip locked
+                     limit 1
+                )
+                update website_media_variant variant
                    set status = 'FAILED', lease_expires_at = null, next_attempt_at = null,
                        claim_token = null, last_error = ?, updated_at = ?
-                 where status = 'PROCESSING' and attempt_count >= 3 and lease_expires_at <= ?
-                """, GENERIC_FAILURE, now, now);
+                  from expired
+                 where variant.id = expired.id
+                """, now, GENERIC_FAILURE, now);
 
         List<VariantClaim> candidates = jdbc.query("""
                 select variant.id, variant.asset_id, variant.target_width, asset.storage_key,

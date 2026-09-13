@@ -61,8 +61,9 @@ function variantStatusLabel(status: WebsiteMediaVariant["status"]) {
   return "변환 실패";
 }
 
-function isActiveVariant(status: WebsiteMediaVariant["status"]) {
-  return status === "PENDING" || status === "PROCESSING";
+function isActiveVariant(variant: WebsiteMediaVariant) {
+  return variant.status === "PENDING" || variant.status === "PROCESSING"
+    || (variant.status === "FAILED" && variant.attemptCount < 3);
 }
 
 function variantKey(mediaId: string, targetWidth: 640 | 1280) {
@@ -172,7 +173,8 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
   const archivedAssets = useMemo(() => assets.filter((asset) => asset.status === "ARCHIVED"), [assets]);
   const selectedByCurrentDraft = Boolean(selectedAsset && protectedAssetIds.includes(selectedAsset.id));
   const selectedAssetIdForPolling = selectedAsset?.id ?? "";
-  const selectedAssetHasActiveVariant = selectedAsset?.variants.some((item) => isActiveVariant(item.status)) ?? false;
+  const selectedAssetHasActiveVariant = selectedAsset?.status === "ACTIVE"
+    && selectedAsset.variants.some(isActiveVariant);
 
   function invalidateVariantContext() {
     variantContextGeneration.current += 1;
@@ -270,7 +272,7 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
         setAssets((current) => current.map((asset) => asset.id === refreshedAsset.id
           ? { ...asset, variants: refreshedAsset.variants }
           : asset));
-        if (refreshedAsset.variants.some((item) => isActiveVariant(item.status))) schedule();
+        if (refreshedAsset.status === "ACTIVE" && refreshedAsset.variants.some(isActiveVariant)) schedule();
       } catch {
         if (!disposed && pollRequestGeneration.current === requestGeneration) schedule();
       }
@@ -324,7 +326,9 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
     try {
       const asset = await retryWebsiteMediaVariant(token, mediaId, targetWidth);
       if (variantContextGeneration.current !== contextGeneration || selectedAssetIdRef.current !== mediaId || retryRequestGenerations.current.get(key) !== requestGeneration) return;
-      replaceAsset(asset);
+      setAssets((current) => current.map((existing) => existing.id === asset.id
+        ? { ...existing, variants: asset.variants }
+        : existing));
     } catch (cause) {
       if (variantContextGeneration.current !== contextGeneration || selectedAssetIdRef.current !== mediaId || retryRequestGenerations.current.get(key) !== requestGeneration) return;
       setVariantErrors((current) => ({ ...current, [key]: cause instanceof Error ? cause.message : `${targetWidth}px 변환을 다시 시도하지 못했습니다.` }));

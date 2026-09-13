@@ -3,6 +3,7 @@ package team.hotelchain.webcontent;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.doAnswer;
@@ -54,6 +55,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.context.WebApplicationContext;
 import org.springframework.web.multipart.MultipartFile;
 import team.hotelchain.staff.StaffAccessDeniedException;
@@ -74,6 +76,7 @@ class WebsiteMediaVariantIntegrationTest {
     @org.springframework.beans.factory.annotation.Autowired WebsiteMediaVariantEncoder encoder;
     @org.springframework.beans.factory.annotation.Autowired WebApplicationContext context;
     @org.springframework.beans.factory.annotation.Autowired TestClock clock;
+    @org.springframework.beans.factory.annotation.Autowired TransactionTemplate transactions;
     WebsiteMediaVariantJob job;
 
     @BeforeEach
@@ -542,6 +545,57 @@ class WebsiteMediaVariantIntegrationTest {
         assertThat(terminal.status()).isEqualTo("FAILED");
         assertThat(terminal.attemptCount()).isEqualTo(3);
         assertThat(terminal.nextAttemptAt()).isNull();
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void skipsLockedTerminalLeasesAndBoundsCleanupWithoutBlockingAnEligibleClaim() throws Exception {
+        try {
+            WebsiteMediaAsset locked = uploadImage(640, 360);
+            WebsiteMediaAsset expiredOne = uploadImage(640, 360);
+            WebsiteMediaAsset expiredTwo = uploadImage(640, 360);
+            WebsiteMediaAsset eligible = uploadImage(640, 360);
+            for (WebsiteMediaAsset asset : List.of(locked, expiredOne, expiredTwo)) {
+                jdbc.update("""
+                        update website_media_variant
+                           set status = 'PROCESSING', attempt_count = 3, lease_expires_at = ?
+                         where asset_id = ?
+                        """, OffsetDateTime.ofInstant(START.minusSeconds(1), ZoneOffset.UTC), asset.id());
+            }
+
+            try (var lockConnection = dataSource.getConnection()) {
+                lockConnection.setAutoCommit(false);
+                try {
+                    try (var statement = lockConnection.prepareStatement(
+                            "select id from website_media_variant where asset_id = ? for update")) {
+                        statement.setObject(1, locked.id());
+                        try (var rows = statement.executeQuery()) {
+                            assertThat(rows.next()).isTrue();
+                        }
+                    }
+
+                    Optional<WebsiteMediaVariantService.VariantClaim> claimed = assertDoesNotThrow(() ->
+                            transactions.execute(status -> {
+                                jdbc.execute("set local lock_timeout = '1s'");
+                                return variants.claimNext();
+                            }), "a held terminal-row lock must not delay an unrelated eligible claim");
+                    assertThat(claimed).get()
+                            .extracting(WebsiteMediaVariantService.VariantClaim::assetId).isEqualTo(eligible.id());
+                    assertThat(failureRow(locked.id()).status()).isEqualTo("PROCESSING");
+                    assertThat(List.of(failureRow(expiredOne.id()).status(), failureRow(expiredTwo.id()).status()))
+                            .containsExactlyInAnyOrder("FAILED", "PROCESSING");
+                } finally {
+                    lockConnection.rollback();
+                }
+            }
+
+            assertThat(variants.claimNext()).isEmpty();
+            assertThat(variants.claimNext()).isEmpty();
+            assertThat(List.of(failureRow(locked.id()).status(), failureRow(expiredOne.id()).status(),
+                    failureRow(expiredTwo.id()).status())).containsOnly("FAILED");
+        } finally {
+            removeCommittedWorkerFixtures();
+        }
     }
 
     @Test

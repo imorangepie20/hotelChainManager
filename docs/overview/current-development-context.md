@@ -21,10 +21,11 @@
 ## CMS 비동기 미디어 variant (2026-09-13)
 
 - V25는 활성 업로드 PNG/JPEG에 원본 폭 이하의 640px·1280px WebP 작업을 멱등 enqueue/backfill하고, V26은 READY 메타데이터 제약을 additive하게 보강하며, V27은 새 worker claim을 attempt와 함께 식별하는 nullable `claim_token`을 추가한다. V25 파일은 최초 적용 checksum을 유지한다.
-- 2초 worker는 `FOR UPDATE SKIP LOCKED`, 5분 lease, 30초·2분 backoff와 최대 3회 시도를 사용한다. 완료 파일은 claim별 고유 immutable key로 발행하고 덮어쓰지 않으며 rollback은 자기 파일만 정리하고 `STATUS_UNKNOWN`은 보존한다. 만료된 PROCESSING attempt 3은 terminal FAILED다.
-- 공개 READY variant는 `image/webp`와 1년 immutable cache로 전달한다. 관리자 미디어 선택기는 상태·규격·용량·실패와 폭별 재시도를 표시하고 진행 중인 현재 자산만 polling한다. 원본 URL·한국어/영어 페이지 JSON과 고객 renderer는 유지했다.
+- 전용 단일 스레드의 2초 worker는 예약 만료 scheduler와 분리하며 `FOR UPDATE SKIP LOCKED`, 5분 lease, 30초·2분 backoff와 최대 3회 시도를 사용한다. 완료 파일은 claim별 고유 immutable key로 발행하고 덮어쓰지 않으며 rollback은 자기 파일만 정리하고 `STATUS_UNKNOWN`은 보존한다. 만료된 PROCESSING attempt 3은 `SKIP LOCKED LIMIT 1`로 한 건씩 terminal FAILED로 정리해 다른 작업 선점을 막지 않는다.
+- 공개 READY variant는 `image/webp`와 1년 immutable cache로 전달한다. 관리자 미디어 선택기는 상태·규격·용량·실패와 폭별 재시도를 표시하고 ACTIVE 자산의 PENDING/PROCESSING·FAILED 1·2회에서 polling한다. polling/재시도 응답은 편집 메타데이터·버전을 유지하고 이전 API의 누락 variants도 정규화한다. 원본 URL·한국어/영어 페이지 JSON과 고객 renderer는 유지했다.
 - 서버 변경 범위 92건, 관리자 variant 1건과 영문 제목 미디어 회귀 18건, 관리자 TypeScript, 고객 parser 2개와 production build가 통과했다. 별도 4082 API·`db-test` 내 일회성 DB·전용 storage에서 V25→V26→V27, health `UP`, 실제 업로드·640/1280 READY, 640 WebP HTTP 200·정확한 캐시 헤더·RIFF/WEBP·원본 checksum 보존을 확인하고 컨테이너·DB·volume을 제거했다. 개발 4080 컨테이너와 개발 DB는 변경하지 않았다.
 - rolling 배포에서는 이전 worker를 먼저 drain해야 하며, 실제 운영 다중 인스턴스 장기 부하·storage audit, 고객 `<picture>`·`srcset`, CDN·객체 저장소는 후속이다. 상세 결과는 [변경 기록](../changes/2026-09-13-async-media-variants.md)을 따른다.
+- 최종 리뷰 보완 검증은 서버 99건, 관리자 미디어 E2E 27건·API 경계 7건과 TypeScript를 통과했다. 실제 PostgreSQL terminal 잠금 회귀와 인코더 차단 중 예약 만료 스케줄 실행을 포함한다. 개발 API/DB mutation과 서버 재시작은 수행하지 않았다.
 
 
 

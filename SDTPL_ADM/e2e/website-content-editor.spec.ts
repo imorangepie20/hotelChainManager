@@ -1026,6 +1026,127 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
+test("미디어 variant 재시도 응답이 편집 중 메타데이터 버전을 바꾸지 않는다", async ({ page }) => {
+  const original = mediaAsset({
+    id: UPLOADED_ASSET, displayName: "원래 자산명", defaultAltText: "원래 대체 텍스트",
+    deliveryUrl: `/api/website/media/${UPLOADED_ASSET}/content`, usageCount: 0,
+    variants: [{
+      id: "variant-640", format: "WEBP", targetWidth: 640, status: "FAILED", deliveryUrl: null,
+      mimeType: null, byteSize: null, width: null, height: null, attemptCount: 3,
+      lastError: "변환 실패", updatedAt: "2026-09-13T00:00:00Z",
+    }],
+  });
+  await page.route("**/api/staff/website/media?includeArchived=true", (route) => route.fulfill({
+    json: [original],
+  }));
+  await page.route(`**/api/staff/website/media/${UPLOADED_ASSET}/variants/640/retry`, (route) => route.fulfill({
+    json: { ...original, displayName: "다른 관리자의 변경", defaultAltText: "다른 관리자의 설명", version: 2,
+      variants: [{
+        id: "variant-640", format: "WEBP", targetWidth: 640, status: "PENDING", deliveryUrl: null,
+        mimeType: null, byteSize: null, width: null, height: null, attemptCount: 0,
+        lastError: null, updatedAt: "2026-09-13T00:00:01Z",
+      }], },
+  }));
+  await page.route(`**/api/staff/website/media/${UPLOADED_ASSET}`, (route) => route.fulfill({
+    status: 409, json: { code: "WEBSITE_MEDIA_VERSION_CONFLICT", message: "자산 버전 충돌" },
+  }));
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "홈", exact: true }).click();
+  await page.getByRole("button", { name: "미디어 선택" }).click();
+  const picker = page.getByRole("dialog", { name: "미디어 선택" });
+  await picker.getByLabel("선택한 자산 이름").fill("편집 중인 자산명");
+  await picker.getByRole("button", { name: "640px 다시 시도", exact: true }).click();
+  await expect(picker.getByText("640px · 변환 대기 중")).toBeVisible();
+  await expect(picker.getByLabel("선택한 자산 이름")).toHaveValue("편집 중인 자산명");
+  await expect(picker.getByLabel("선택한 자산 기본 대체 텍스트")).toHaveValue("원래 대체 텍스트");
+  const savedRequest = page.waitForRequest((request) => request.method() === "PATCH"
+    && request.url().endsWith(`/api/staff/website/media/${UPLOADED_ASSET}`));
+  await picker.getByRole("button", { name: "자산 정보 저장" }).click();
+  expect((await savedRequest).postDataJSON()).toEqual({
+    displayName: "편집 중인 자산명", defaultAltText: "원래 대체 텍스트", expectedVersion: 1,
+  });
+});
+
+for (const attemptCount of [1, 2]) {
+  test(`미디어 variant 자동 재시도 ${attemptCount}회 backoff 중에도 상태를 갱신한다`, async ({ page }) => {
+    let catalogRequests = 0;
+    const failed = {
+      id: "variant-640", format: "WEBP", targetWidth: 640, status: "FAILED", deliveryUrl: null,
+      mimeType: null, byteSize: null, width: null, height: null, attemptCount,
+      lastError: "변환 실패", updatedAt: "2026-09-13T00:00:00Z",
+    };
+    await page.route("**/api/staff/website/media?includeArchived=true", (route) => {
+      catalogRequests += 1;
+      const variant = catalogRequests === 1 ? failed : catalogRequests === 2
+        ? { ...failed, status: "PROCESSING", attemptCount: attemptCount + 1, lastError: null }
+        : { ...failed, status: "READY", attemptCount: attemptCount + 1, lastError: null,
+          deliveryUrl: `/api/website/media/${UPLOADED_ASSET}/variants/640.webp`,
+          mimeType: "image/webp", byteSize: 2048, width: 640, height: 360 };
+      return route.fulfill({ json: [mediaAsset({
+        id: UPLOADED_ASSET, deliveryUrl: `/api/website/media/${UPLOADED_ASSET}/content`, usageCount: 0,
+        variants: [variant, { ...failed, id: "variant-1280", targetWidth: 1280, attemptCount: 3 }],
+      })] });
+    });
+    await page.goto("/dashboard/website");
+    await page.getByRole("button", { name: "홈", exact: true }).click();
+    await page.clock.install({ time: new Date("2026-09-13T00:00:00Z") });
+    await page.clock.pauseAt(new Date("2026-09-13T00:00:01Z"));
+    await page.getByRole("button", { name: "미디어 선택" }).click();
+    const picker = page.getByRole("dialog", { name: "미디어 선택" });
+    await expect(picker.getByText(`640px · 변환 실패 · ${attemptCount}/3회`)).toBeVisible();
+    await page.clock.runFor(2_100);
+    await expect(picker.getByText("640px · 변환 중")).toBeVisible();
+    await page.clock.runFor(2_100);
+    await expect(picker.getByRole("link", { name: "640 × 360 · WebP · 2 KB" })).toBeVisible();
+    await expect(picker.getByText("1280px · 변환 실패 · 3/3회")).toBeVisible();
+    await page.clock.runFor(10_000);
+    expect(catalogRequests).toBe(3);
+  });
+}
+
+test("미디어 variant 보관 자산의 대기 작업은 polling하지 않는다", async ({ page }) => {
+  let catalogRequests = 0;
+  await page.route("**/api/staff/website/media?includeArchived=true", (route) => {
+    catalogRequests += 1;
+    return route.fulfill({ json: [mediaAsset({
+      id: UPLOADED_ASSET, deliveryUrl: `/api/website/media/${UPLOADED_ASSET}/content`, usageCount: 0,
+      status: "ARCHIVED", version: 2, archivedAt: "2026-09-01T00:00:00Z", permanentDeleteAvailableAt: "2026-10-01T00:00:00Z",
+      variants: [{
+        id: "variant-640", format: "WEBP", targetWidth: 640, status: "PENDING", deliveryUrl: null,
+        mimeType: null, byteSize: null, width: null, height: null, attemptCount: 0,
+        lastError: null, updatedAt: "2026-09-13T00:00:00Z",
+      }],
+    })] });
+  });
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "홈", exact: true }).click();
+  await page.clock.install({ time: new Date("2026-09-13T00:00:00Z") });
+  await page.clock.pauseAt(new Date("2026-09-13T00:00:01Z"));
+  await page.getByRole("button", { name: "미디어 선택" }).click();
+  const picker = page.getByRole("dialog", { name: "미디어 선택" });
+  await expect(picker.getByRole("button", { name: "복원", exact: true })).toBeVisible();
+  await expect(picker.getByText("640px · 변환 대기 중")).toBeVisible();
+  await page.clock.runFor(10_000);
+  await page.waitForTimeout(250);
+  expect(catalogRequests).toBe(1);
+});
+
+test("미디어 variant 필드가 없는 이전 API 카탈로그에서도 자산을 선택한다", async ({ page }) => {
+  const runtimeErrors: string[] = [];
+  page.on("pageerror", (error) => runtimeErrors.push(error.message));
+  const { variants: _variants, ...legacyAsset } = mediaAsset();
+  await page.route("**/api/staff/website/media?includeArchived=true", (route) => route.fulfill({ json: [legacyAsset] }));
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "홈", exact: true }).click();
+  await page.getByRole("button", { name: "미디어 선택" }).click();
+  const picker = page.getByRole("dialog", { name: "미디어 선택" });
+  await expect(picker.getByText("생성된 반응형 이미지가 없습니다.")).toBeVisible();
+  await expect(picker.getByLabel("선택한 자산 이름")).toHaveValue("속초 해안 대표 이미지");
+  await picker.getByRole("button", { name: "선택", exact: true }).click();
+  await expect(picker).not.toBeVisible();
+  expect(runtimeErrors).toEqual([]);
+});
+
 test("미디어 variant 상태를 갱신하고 실패 항목을 다시 시도한다", async ({ page }) => {
   let catalogRequestCount = 0;
   const retryRequests: string[] = [];

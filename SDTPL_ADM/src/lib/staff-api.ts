@@ -347,6 +347,16 @@ async function mediaRequest<T>(path: string, token: string, init?: RequestInit):
   return response.json() as Promise<T>;
 }
 
+type WebsiteMediaAssetResponse = Omit<WebsiteMediaAsset, "variants"> & { variants?: WebsiteMediaVariant[] };
+
+function normalizeWebsiteMediaAsset(asset: WebsiteMediaAssetResponse): WebsiteMediaAsset {
+  return { ...asset, variants: asset.variants ?? [] };
+}
+
+async function mediaAssetRequest(path: string, token: string, init?: RequestInit): Promise<WebsiteMediaAsset> {
+  return normalizeWebsiteMediaAsset(await mediaRequest<WebsiteMediaAssetResponse>(path, token, init));
+}
+
 export type WebsitePreviewGrantResponse = { grantId: string; previewToken: string; previewPath: string; expiresAt: string };
 export function issueWebsitePreviewGrant(token: string, pageId: string, input: { locale: "ko" | "en"; expectedDraftVersion: number }) {
   return contentRequest<WebsitePreviewGrantResponse>(`/api/staff/website/pages/${pageId}/preview-grants`, token,
@@ -383,25 +393,29 @@ export function publishWebsiteHome(token: string, expectedDraftVersion: number, 
 export function getWebsiteHomeVersions(token: string) {
   return contentRequest<WebContentVersion[]>("/api/staff/website/home/versions", token);
 }
-export function getWebsiteMedia(token: string, includeArchived = false) {
-  return mediaRequest<WebsiteMediaAsset[]>(`/api/staff/website/media${includeArchived ? "?includeArchived=true" : ""}`, token);
+export async function getWebsiteMedia(token: string, includeArchived = false): Promise<WebsiteMediaAsset[]> {
+  const assets = await mediaRequest<WebsiteMediaAssetResponse[]>(`/api/staff/website/media${includeArchived ? "?includeArchived=true" : ""}`, token);
+  return assets.map(normalizeWebsiteMediaAsset);
 }
 export function uploadWebsiteMedia(token: string, input: UploadWebsiteMediaInput) {
   const formData = new FormData();
   formData.append("file", input.file);
   formData.append("displayName", input.displayName);
   formData.append("defaultAltText", input.defaultAltText);
-  return mediaRequest<WebsiteMediaAsset>("/api/staff/website/media", token, { method: "POST", body: formData });
+  return mediaAssetRequest("/api/staff/website/media", token, { method: "POST", body: formData });
 }
 export function getWebsiteMediaUsages(token: string, mediaId: string) {
   return mediaRequest<WebsiteMediaUsage[]>(`/api/staff/website/media/${mediaId}/usages`, token);
 }
 export function retryWebsiteMediaVariant(token: string, mediaId: string, targetWidth: 640 | 1280) {
-  return mediaRequest<WebsiteMediaAsset>(`/api/staff/website/media/${mediaId}/variants/${targetWidth}/retry`, token, { method: "POST" });
+  return mediaAssetRequest(`/api/staff/website/media/${mediaId}/variants/${targetWidth}/retry`, token, { method: "POST" });
 }
-export function getWebsiteMediaDraftReplacementImpact(token: string, sourceMediaId: string, targetMediaId: string) {
+export async function getWebsiteMediaDraftReplacementImpact(token: string, sourceMediaId: string, targetMediaId: string): Promise<WebsiteMediaDraftReplacementImpact> {
   const query = new URLSearchParams({ targetMediaId });
-  return mediaRequest<WebsiteMediaDraftReplacementImpact>(`/api/staff/website/media/${sourceMediaId}/draft-replacement-impact?${query}`, token);
+  const impact = await mediaRequest<Omit<WebsiteMediaDraftReplacementImpact, "sourceAsset" | "targetAsset"> & {
+    sourceAsset: WebsiteMediaAssetResponse; targetAsset: WebsiteMediaAssetResponse;
+  }>(`/api/staff/website/media/${sourceMediaId}/draft-replacement-impact?${query}`, token);
+  return { ...impact, sourceAsset: normalizeWebsiteMediaAsset(impact.sourceAsset), targetAsset: normalizeWebsiteMediaAsset(impact.targetAsset) };
 }
 export function replaceWebsiteMediaDraftUsages(token: string, sourceMediaId: string, input: ReplaceWebsiteMediaDraftUsagesInput) {
   return mediaRequest<WebsiteMediaDraftReplacementResult>(`/api/staff/website/media/${sourceMediaId}/draft-replacements`, token, {
@@ -409,17 +423,17 @@ export function replaceWebsiteMediaDraftUsages(token: string, sourceMediaId: str
   });
 }
 export function updateWebsiteMedia(token: string, mediaId: string, input: WebsiteMediaMetadataInput) {
-  return mediaRequest<WebsiteMediaAsset>(`/api/staff/website/media/${mediaId}`, token, {
+  return mediaAssetRequest(`/api/staff/website/media/${mediaId}`, token, {
     method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
   });
 }
 export function archiveWebsiteMedia(token: string, mediaId: string, input: WebsiteMediaVersionInput) {
-  return mediaRequest<WebsiteMediaAsset>(`/api/staff/website/media/${mediaId}/archive`, token, {
+  return mediaAssetRequest(`/api/staff/website/media/${mediaId}/archive`, token, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
   });
 }
 export function restoreWebsiteMedia(token: string, mediaId: string, input: WebsiteMediaVersionInput) {
-  return mediaRequest<WebsiteMediaAsset>(`/api/staff/website/media/${mediaId}/restore`, token, {
+  return mediaAssetRequest(`/api/staff/website/media/${mediaId}/restore`, token, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
   });
 }

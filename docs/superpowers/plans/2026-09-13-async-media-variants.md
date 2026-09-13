@@ -16,6 +16,7 @@
 - 원본보다 큰 variant는 생성하지 않는다.
 - 자동 재시도는 최초 실패 후 30초, 두 번째 실패 후 2분이며 총 시도는 3회다.
 - processing lease는 5분, scheduler 기본 간격은 2초다.
+- 미디어 전용 단일 스레드 scheduler를 사용하고 예약 만료의 기본 scheduler와 분리한다. 만료 attempt 3 정리는 `FOR UPDATE SKIP LOCKED LIMIT 1`로 제한해 잠긴 row가 다른 작업 선점을 막지 않게 한다.
 - 기존 `WebsiteMediaAsset.deliveryUrl`, 페이지 JSON, 공개 원본 endpoint는 변경하지 않는다.
 - 공개 renderer의 `<picture>`/`srcset`, CDN, 객체 저장소, 외부 큐, AVIF, crop은 구현하지 않는다.
 - 기존 자산·usage·페이지 데이터와 원본 파일을 보존하며 destructive contract 단계는 실행하지 않는다.
@@ -269,13 +270,15 @@ select variant.id, variant.asset_id, variant.target_width, asset.storage_key
 
 - [ ] **Step 6: 파일 생성과 scheduler 연결**
 
-`WebsiteMediaVariantJob.processNext()`는 source와 final path가 정규화된 media root 아래인지 확인하고 `{assetId}-{targetWidth}.webp.{uuid}.tmp`에 encode한다. 검증 성공 후 `Files.move(..., ATOMIC_MOVE, REPLACE_EXISTING)`를 우선 사용하고 파일시스템이 atomic move를 지원하지 않으면 같은 디렉터리의 `REPLACE_EXISTING`으로 이동한다. 실패 시 temp를 제거하고 `completeFailed`를 호출한다.
+`WebsiteMediaVariantJob.processNext()`는 source와 final path가 정규화된 media root 아래인지 확인하고 claim별 UUID를 포함한 고유 임시 파일에 encode한다. 검증 성공 후 row lock 아래에서 attempt·V27 claim token이 일치할 때만 고유 immutable key로 이동하고 READY를 확정한다. `REPLACE_EXISTING`을 사용하지 않는다. rollback은 자기 파일만 제거하고 commit은 잠금 중 확인한 이전 key만 정리하며 `STATUS_UNKNOWN`은 파일을 보존한다. 실패 시 temp를 제거하고 `completeFailed`를 호출한다.
+
+`TimeConfiguration`에서 `@Bean(defaultCandidate = false)`로 단일 스레드 `websiteMediaVariantScheduler`를 등록한다. Boot의 기본 `taskScheduler`를 유지하고 인코더를 latch로 차단한 실제 Spring scheduling 테스트에서 예약 만료가 별도 스레드로 실행됨을 검증한다.
 
 ```java
 @Component
 @ConditionalOnProperty(name = "website.media.variant-job-enabled", havingValue = "true", matchIfMissing = true)
 public final class WebsiteMediaVariantJob {
-    @Scheduled(fixedDelayString = "${website.media.variant-scan-delay:2s}")
+    @Scheduled(fixedDelayString = "${website.media.variant-scan-delay:2s}", scheduler = "websiteMediaVariantScheduler")
     public void generateNextVariant() { processNext(); }
     boolean processNext();
 }
@@ -496,24 +499,25 @@ export function retryWebsiteMediaVariant(token: string, mediaId: string, targetW
 }
 ```
 
-`WebsiteMediaAsset`에 `variants: WebsiteMediaVariant[]`를 필수로 추가하고 모든 test fixture를 갱신한다.
+`WebsiteMediaAsset`에 `variants: WebsiteMediaVariant[]`를 필수로 추가하고 모든 test fixture를 갱신한다. catalog·업로드·메타데이터·보관·복원·재시도·일괄 교체 영향 응답의 자산에서 누락된 `variants`는 API 경계에서만 빈 배열로 정규화한다. 이전 API catalog의 실제 UI 선택과 각 반환 경로를 회귀 테스트한다.
 
 - [ ] **Step 4: 상태 영역과 제한된 polling 구현**
 
-선택 자산 정보 아래 `<section aria-label="반응형 이미지">`를 추가한다. READY 링크는 `target="_blank" rel="noreferrer"`를 사용한다. FAILED 버튼은 해당 폭 하나만 disable하고 성공 응답으로 `replaceAsset`을 호출한다.
+선택 자산 정보 아래 `<section aria-label="반응형 이미지">`를 추가한다. READY 링크는 `target="_blank" rel="noreferrer"`를 사용한다. FAILED 버튼은 해당 폭 하나만 disable하고 성공 응답의 variants만 병합해 입력 중인 메타데이터와 expectedVersion을 유지한다.
 
 ```tsx
 useEffect(() => {
-  if (!open || !selectedAsset?.variants.some((item) =>
-      item.status === "PENDING" || item.status === "PROCESSING")) return;
+  if (!open || selectedAsset?.status !== "ACTIVE" || !selectedAsset.variants.some((item) =>
+      item.status === "PENDING" || item.status === "PROCESSING"
+      || (item.status === "FAILED" && item.attemptCount < 3))) return;
   const timer = window.setTimeout(() => {
-    void refreshCatalog(selectedAsset.id, false);
+    // catalog 응답에서 variants만 병합하고 active 상태일 때 응답 완료 후 다시 예약한다.
   }, 2_000);
   return () => window.clearTimeout(timer);
 }, [open, refreshCatalog, selectedAsset]);
 ```
 
-`selectedAsset` 객체 전체 대신 `selectedAsset.id`와 active 여부를 primitive로 계산해 effect dependency가 불필요하게 흔들리지 않게 한다. polling refresh에서는 기존 메타데이터 입력을 덮어쓰지 않는다.
+`selectedAsset` 객체 전체 대신 `selectedAsset.id`와 active 여부를 primitive로 계산해 effect dependency가 불필요하게 흔들리지 않게 한다. polling refresh에서는 기존 메타데이터 입력·버전을 덮어쓰지 않는다. FAILED 1·2회 자동 재시도 backoff도 polling하며 READY/FAILED 3회·보관·닫기에는 중단한다.
 
 - [ ] **Step 5: 대상 E2E와 TypeScript 통과 확인**
 
