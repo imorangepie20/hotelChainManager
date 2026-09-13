@@ -898,3 +898,16 @@ git status --short --branch
 ```
 
 Expected: only the user-owned `.tmp/` remains untracked. Do not push until the user requests it.
+
+---
+
+## 실행 결과
+
+2026-09-13에 Tasks 1~6 구현과 Task 7의 격리 Compose 전환·롤백·최종 집중 검증을 완료했다. 구현 commit과 정확한 검증 증거는 [S3 미디어 저장소 이관 기록](../../changes/2026-09-13-s3-media-storage-migration.md)에 남겼다.
+
+- 서버 집중 suite: 119건 통과, 실패·오류·skip 0
+- 관리자 집중 Playwright: 8건 통과, TypeScript 통과, ESLint 오류 0, UI 탐지 `[]`
+- 격리 Compose: `local → mirror → s3-primary → mirror 복구 → local 롤백` 완료, `both=6`, 강제 fallback counter `+1`
+- 영구 삭제의 양쪽 저장소 rollback restore·commit purge는 gateway 회귀 테스트로, 실제 S3 격리 동작은 S3Mock adapter 계약 테스트로 나눠 확인했다. 계획에 명시한 동일 이름의 PostgreSQL+S3Mock 통합 테스트 2건은 추가하지 않았다.
+- 실제 backfill proof는 참조 객체 6개의 한 batch였다. 101개를 두 batch로 나누는 실제 API 시나리오는 미자동화이며, 최대 100개 제한과 mismatch 비덮어쓰기는 서비스/API 회귀에서 확인했다.
+- 운영 provider·CDN·다중 인스턴스 부하는 미검증이다. 사용자 `.tmp/`, 개발 DB와 media volume은 수정하지 않았다.

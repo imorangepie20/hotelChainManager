@@ -172,13 +172,15 @@
 - 관리자 미디어 선택기는 대기·처리·완료 규격과 용량·실패 원인·시도 횟수를 표시한다. 열린 대화상자의 현재 자산에 진행 중 작업이 있을 때만 2초 간격으로 해당 variant를 갱신하며, `HQ_ADMIN`은 FAILED 640·1280 작업을 폭별로 다시 시도할 수 있다.
 - 보관은 원본과 READY variant 공개 전달을 함께 중단하고 복원은 기존 READY를 다시 노출하며 누락 작업만 enqueue한다. 영구 삭제는 원본과 모든 READY 파일을 함께 격리해 commit 시 제거하고 rollback 시 복구한다.
 - V25·V26·V27은 additive expand migration이다. 이전 binary는 새 table·열·파일을 무시할 수 있지만, claim-token fencing은 새 코드의 claim부터 적용되므로 rolling 배포에서는 이전 worker를 drain하고 in-flight lease를 정리한 뒤 전환한다. 롤백은 이전 API image를 먼저 배포하고 table과 파일을 유지한다.
-- 기존 원본 URL과 한국어·영어 페이지 JSON은 유지한다. 공개 발행본과 저장 초안 미리보기 응답은 참조 중인 활성 업로드 자산의 READY variant만 응답 전용 `mediaVariants`로 제공하며, 고객 HERO와 이미지 갤러리는 검증된 값만 `<picture>`·`srcset`으로 사용하고 원본 `<img>`를 fallback으로 둔다. CDN·객체 저장소는 후속 범위다. 상세 결과는 [비동기 미디어 variant 변경 기록](../changes/2026-09-13-async-media-variants.md)과 [고객 반응형 미디어 변경 기록](../changes/2026-09-13-customer-responsive-media.md)을 따른다.
+- 기존 원본 URL과 한국어·영어 페이지 JSON은 유지한다. 공개 발행본과 저장 초안 미리보기 응답은 참조 중인 활성 업로드 자산의 READY variant만 응답 전용 `mediaVariants`로 제공하며, 고객 HERO와 이미지 갤러리는 검증된 값만 `<picture>`·`srcset`으로 사용하고 원본 `<img>`를 fallback으로 둔다. 상세 결과는 [비동기 미디어 variant 변경 기록](../changes/2026-09-13-async-media-variants.md)과 [고객 반응형 미디어 변경 기록](../changes/2026-09-13-customer-responsive-media.md)을 따른다.
 
-### 6.8 저장소 정합성 점검
+### 6.8 저장소 정합성 점검과 S3 호환 이관
 
-- `HQ_ADMIN`은 미디어 선택기에서 수동으로 로컬 저장소를 읽기 전용 점검한다. 서버는 업로드 원본과 storage key가 있는 variant의 DB 참조를 실제 파일과 비교한다.
+- `HQ_ADMIN`은 미디어 선택기에서 수동으로 로컬·S3 저장소를 읽기 전용 점검한다. 서버는 업로드 원본과 storage key가 있는 READY variant의 DB 참조를 저장소별 실제 객체와 비교한다. 기존 최상위 점검 필드는 현재 읽기 우선 저장소 결과로 유지한다.
 - DB가 참조하지만 없는 파일은 누락, `.trash` 밖의 참조 없는 일반 파일은 orphan, 수정 후 10분이 지난 참조 없는 `.tmp`는 오래된 임시 파일로 분리한다. 최근 `.tmp`와 `.trash`는 진행 중 처리·transaction 격리 영역이므로 제외한다.
 - 응답은 정렬된 상대 storage key와 점검 시각만 반환한다. 절대·상위 경로는 노출하지 않으며 파일 삭제·복구·격리, DB 수정과 정기 실행은 하지 않는다.
+- 저장 모드는 `local`, `mirror`, `s3-primary`다. 모든 지원 모드는 로컬 사본을 유지한다. `mirror`는 로컬을 읽고 로컬 뒤 S3에 기록하며, `s3-primary`는 S3를 우선 읽고 로컬로 한 번 fallback한 뒤 S3와 로컬에 기록한다. 공개 URL·DB storage key·cache 계약은 바꾸지 않는다.
+- `mirror`의 명시적 backfill은 DB가 참조하는 `localOnly` 객체를 한 번에 최대 100개까지 S3에 추가 복사한다. 다른 내용의 기존 S3 객체는 덮어쓰지 않고 mismatch로 보고하며, 로컬 파일과 DB는 변경하지 않는다. 상세 운영 절차와 검증은 [S3 미디어 저장소 이관 기록](../changes/2026-09-13-s3-media-storage-migration.md)을 따른다.
 
 ## 7. 주요 API 계약
 
@@ -207,7 +209,9 @@
 | 본사 | `POST /api/staff/website/pages/{pageId}/versions/{sourceVersion}/restore-draft` | 이전 발행 콘텐츠를 초안으로 복원 |
 | 본사 | `GET /api/staff/website/pages/{pageId}/versions/compare?baseVersion=&compareVersion=` | 두 발행 snapshot 비교 |
 | 본사 | `GET/POST /api/staff/website/media` | 미디어 카탈로그·업로드 |
-| 본사 관리자 | `GET /api/staff/website/media/storage-audit` | DB 참조와 실제 미디어 파일의 읽기 전용 정합성 점검 |
+| 본사 관리자 | `GET /api/staff/website/media/storage-audit` | DB 참조와 저장소별 실제 미디어 객체의 읽기 전용 정합성 점검 |
+| 본사 관리자 | `GET /api/staff/website/media/storage-migration` | 로컬·S3 참조 객체 일치 상태와 fallback 횟수 조회 |
+| 본사 관리자 | `POST /api/staff/website/media/storage-migration/backfill` | `mirror`에서 로컬 객체를 S3로 최대 100개 추가 복사 |
 | 본사 | `GET /api/staff/website/media/{mediaId}/usages` | 미디어 사용 위치 조회 |
 | 본사 관리자 | `POST /api/staff/website/media/{mediaId}/variants/{targetWidth}/retry` | FAILED WebP 640·1280 작업 수동 재시도 |
 | 본사 관리자 | `GET /api/staff/website/media/{mediaId}/draft-replacement-impact?targetMediaId=...` | 활성 한국어·영어 초안 교체 영향 조회 |
@@ -219,6 +223,6 @@
 
 현재 CMS는 초안/발행 분리, 페이지 트리, 홈·지점·일반 페이지 편집, SEO, 안전한 이미지 카탈로그·업로드·참조 보호, 미디어 보관/복원, 일반 페이지 보관/복원/영구 삭제, 발행 이력 복원·비교, 저장 전 preview까지 구현했다.
 
-페이지 부모 이동·redirect·최대 4단계 트리, 보관된 업로드 자산의 30일 유예 영구 삭제, 현재 이미지 위치의 파일 교체, 활성 한국어·영어 초안 사용 위치 일괄 교체, 비동기 640px·1280px WebP variant와 고객 HERO·갤러리 `<picture>`·`srcset`, 읽기 전용 storage audit, 한국어·영어 독립 초안/발행과 영어 번역 검토·승인 첫 단계와 인증된 저장 초안 실제 URL 미리보기도 구현했다. 다음 단계는 언어별 임의 슬러그·SECTION 번역·영어 이력 복원/비교, CDN·객체 저장소, canonical·OG·robots, 예약 발행·알림, 한국어 승인과 블록 이동 감지다.
+페이지 부모 이동·redirect·최대 4단계 트리, 보관된 업로드 자산의 30일 유예 영구 삭제, 현재 이미지 위치의 파일 교체, 활성 한국어·영어 초안 사용 위치 일괄 교체, 비동기 640px·1280px WebP variant와 고객 HERO·갤러리 `<picture>`·`srcset`, 저장소별 읽기 전용 audit와 `local → mirror → s3-primary` S3 호환 이관, 한국어·영어 독립 초안/발행과 영어 번역 검토·승인 첫 단계와 인증된 저장 초안 실제 URL 미리보기도 구현했다. 다음 단계는 언어별 임의 슬러그·SECTION 번역·영어 이력 복원/비교, CDN 계정·DNS·purge 연동, canonical·OG·robots, 예약 발행·알림, 한국어 승인과 블록 이동 감지다.
 
 검증 기록과 테스트 범위는 [CMS 변경 기록](../changes/2026-09-10-web-content-management.md), 전체 제품 경계는 [전체 구현 설계서](full-site-implementation-design.md), 최신 진행 상태는 [현재 개발 상태](../overview/current-development-context.md)에 기록한다.

@@ -182,3 +182,11 @@ Docker Compose에는 명시적 profile에서만 실행되는 Adobe S3Mock 개발
 - 저장소별 점검은 상대 key만 표시하고 자동 삭제·복구를 수행하지 않는다.
 - 기존 공개 URL, 페이지 JSON, cache header와 고객·CMS 이미지 동작이 유지된다.
 - 배포·롤백 절차와 미검증 운영 항목을 한국어 변경 기록에 남긴다.
+
+## 16. 구현·검증 결과
+
+설계는 `local`, `mirror`, `s3-primary` 세 모드와 로컬 사본 유지 원칙대로 구현했다. provider 중립 gateway, AWS SDK `2.54.17` S3 adapter, 저장소별 audit, 최대 100개 수동 backfill과 CMS 운영 UI를 추가했으며 공개 URL과 DB storage key는 변경하지 않았다.
+
+최종 서버 집중 suite 119건과 관리자 Playwright 8건, TypeScript 검사가 통과했다. 격리 Compose project `hotel-media-s3-proof`에서는 실제 업로드와 640·1280 WebP 생성, `both=6` backfill, S3 객체 제거 후 fallback counter 1 증가, S3 복구와 S3 설정 없는 `local` 롤백을 확인했다. 원본 검증 SHA-256은 `d4ff6adf929730317f8efdbbe57f5e4207a29bcccb9b83f28fc28d6999a255ae`다.
+
+영구 삭제 commit·rollback은 gateway의 양쪽 저장소 회귀 테스트로, 실제 S3 격리 계약은 S3Mock adapter 테스트로 분리해 검증했다. 계획에 있던 101개 backfill의 실제 두 batch 시나리오와 운영 provider·CDN·다중 인스턴스 부하는 미검증이다. 정확한 증거와 운영 절차는 [S3 미디어 저장소 이관 기록](../../changes/2026-09-13-s3-media-storage-migration.md)에 남긴다.
