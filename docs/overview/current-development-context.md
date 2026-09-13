@@ -25,8 +25,14 @@
 - 전용 단일 스레드의 2초 worker는 예약 만료 scheduler와 분리하며 `FOR UPDATE SKIP LOCKED`, 5분 lease, 30초·2분 backoff와 최대 3회 시도를 사용한다. 완료 파일은 claim별 고유 immutable key로 발행하고 덮어쓰지 않으며 rollback은 자기 파일만 정리하고 `STATUS_UNKNOWN`은 보존한다. 만료된 PROCESSING attempt 3은 `SKIP LOCKED LIMIT 1`로 한 건씩 terminal FAILED로 정리해 다른 작업 선점을 막지 않는다.
 - 공개 READY variant는 `image/webp`와 1년 immutable cache로 전달한다. 관리자 미디어 선택기는 상태·규격·용량·실패와 폭별 재시도를 표시하고 ACTIVE 자산의 PENDING/PROCESSING·FAILED 1·2회에서 polling한다. polling/재시도 응답은 편집 메타데이터·버전을 유지하고 이전 API의 누락 variants도 정규화한다. 원본 URL·한국어/영어 페이지 JSON은 유지하며, 공개·저장 초안 미리보기 응답은 참조 중인 READY variant를 응답 전용 map으로 제공한다. 고객 HERO와 이미지 갤러리는 이를 검증한 뒤 `<picture>`·`srcset`으로 사용하고 원본을 fallback으로 둔다.
 - 서버 변경 범위 92건, 관리자 variant 1건과 영문 제목 미디어 회귀 18건, 관리자 TypeScript, 고객 parser 2개와 production build가 통과했다. 별도 4082 API·`db-test` 내 일회성 DB·전용 storage에서 V25→V26→V27, health `UP`, 실제 업로드·640/1280 READY, 640 WebP HTTP 200·정확한 캐시 헤더·RIFF/WEBP·원본 checksum 보존을 확인하고 컨테이너·DB·volume을 제거했다. 개발 4080 컨테이너와 개발 DB는 변경하지 않았다.
-- rolling 배포에서는 이전 worker를 먼저 drain해야 하며, 실제 운영 다중 인스턴스 장기 부하·storage audit, CDN·객체 저장소는 후속이다. 고객 연결 결과는 [반응형 미디어 변경 기록](../changes/2026-09-13-customer-responsive-media.md), worker 상세는 [비동기 variant 변경 기록](../changes/2026-09-13-async-media-variants.md)을 따른다.
+- rolling 배포에서는 이전 worker를 먼저 drain해야 하며, 실제 운영 다중 인스턴스 장기 부하와 CDN·객체 저장소는 후속이다. 고객 연결 결과는 [반응형 미디어 변경 기록](../changes/2026-09-13-customer-responsive-media.md), worker 상세는 [비동기 variant 변경 기록](../changes/2026-09-13-async-media-variants.md)을 따른다.
 - 최종 리뷰 보완 검증은 서버 99건, 관리자 미디어 E2E 27건·API 경계 7건과 TypeScript를 통과했다. 실제 PostgreSQL terminal 잠금 회귀와 인코더 차단 중 예약 만료 스케줄 실행을 포함한다. 개발 API/DB mutation과 서버 재시작은 수행하지 않았다.
+
+## CMS 미디어 저장소 점검 (2026-09-13)
+
+- `HQ_ADMIN`은 관리자 미디어 선택기에서 DB의 업로드 원본·READY variant 참조와 로컬 named volume 파일을 수동으로 읽기 전용 비교할 수 있다. 누락 파일, 참조 없는 일반 파일, 10분 이상 지난 참조 없는 `.tmp`를 분리하고 최근 `.tmp`와 `.trash`는 제외한다.
+- 응답은 상대 storage key만 제공하며 자동 삭제·복구·정기 실행은 하지 않는다. 실제 개발 API/DB/volume 점검은 health `UP`, 누락 0, orphan 0, 오래된 임시 파일 0이었다.
+- 서버 관련 46건, 관리자 Chromium 2건(390×844 포함), TypeScript와 실제 CMS 정상 표시를 확인했다. 상세 범위는 [저장소 점검 변경 기록](../changes/2026-09-13-media-storage-audit.md)을 따른다.
 
 
 
@@ -235,7 +241,7 @@
 
 
 
-1. CMS 미디어를 CDN·객체 저장소로 이관하고 storage audit을 단계적으로 구현한다. 저장 초안 URL 미리보기는 운영 HTTPS 설정을 배포 환경에서 확인한다.
+1. CMS 미디어를 CDN·S3 호환 객체 저장소로 이관한다. 저장소 점검 결과에 대한 자동 정리·복구는 별도 영향 확인·승인·감사 흐름으로 설계한다. 저장 초안 URL 미리보기는 운영 HTTPS 설정을 배포 환경에서 확인한다.
 
 
 

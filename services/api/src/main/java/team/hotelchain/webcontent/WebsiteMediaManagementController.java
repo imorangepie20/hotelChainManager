@@ -23,14 +23,17 @@ public class WebsiteMediaManagementController {
     private final WebsiteMediaService media;
     private final WebsiteMediaVariantService variants;
     private final WebsiteMediaDraftReplacementService replacements;
+    private final WebsiteMediaStorageAuditService storageAudit;
 
     public WebsiteMediaManagementController(
             WebsiteMediaService media,
             WebsiteMediaVariantService variants,
-            WebsiteMediaDraftReplacementService replacements) {
+            WebsiteMediaDraftReplacementService replacements,
+            WebsiteMediaStorageAuditService storageAudit) {
         this.media = media;
         this.variants = variants;
         this.replacements = replacements;
+        this.storageAudit = storageAudit;
     }
 
     @GetMapping
@@ -38,6 +41,11 @@ public class WebsiteMediaManagementController {
             @RequestParam(defaultValue = "false") boolean includeArchived,
             @RequestHeader("X-Staff-Session") String token) {
         return media.catalog(token, includeArchived);
+    }
+
+    @GetMapping("/storage-audit")
+    public WebsiteMediaStorageAudit storageAudit(@RequestHeader("X-Staff-Session") String token) {
+        return storageAudit.audit(token);
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

@@ -10,6 +10,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
+import java.time.Instant;
 import java.util.Base64;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -30,6 +32,8 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.context.WebApplicationContext;
 import team.hotelchain.staff.StaffAccessDeniedException;
 import team.hotelchain.staff.StaffAccessService;
 import team.hotelchain.staff.StaffSessionView;
@@ -48,6 +52,7 @@ class WebsiteMediaIntegrationTest {
     @org.springframework.beans.factory.annotation.Autowired WebsitePageService pages;
     @org.springframework.beans.factory.annotation.Autowired WebsiteTranslationService translations;
     @org.springframework.beans.factory.annotation.Autowired PlatformTransactionManager transactionManager;
+    @org.springframework.beans.factory.annotation.Autowired WebApplicationContext context;
 
     @BeforeEach
     void seed() throws IOException {
@@ -158,6 +163,70 @@ class WebsiteMediaIntegrationTest {
         assertThat(media.publicContent(replacement.id()).bytes()).isEqualTo(newBytes);
         assertThat(media.catalog(token)).filteredOn(asset -> asset.id().equals(oldAsset.id())).singleElement()
                 .satisfies(asset -> assertThat(asset.version()).isEqualTo(oldAsset.version()));
+    }
+
+    @Test
+    void reportsMissingOrphanAndStaleTemporaryStorageKeysWithoutChangingFiles() throws Exception {
+        String token = staffAccess.login("media-hq@example.com", "hq-password").token();
+        WebsiteMediaAsset uploaded = media.upload(token,
+                new MemoryMultipartFile("audit.png", "image/png", image("png")), "점검 이미지", "점검 이미지");
+        Path storage = Path.of(System.getProperty("java.io.tmpdir"), "hotel-chain-media");
+        String originalStorageKey = uploaded.id() + ".png";
+        Path readyVariant = readyVariantFile(uploaded);
+        Files.delete(storage.resolve(originalStorageKey));
+        Path orphan = Files.writeString(storage.resolve("unreachable-orphan.jpg"), "orphan");
+        Path staleTemporary = Files.writeString(storage.resolve("abandoned-variant.webp.tmp"), "temporary");
+        Files.setLastModifiedTime(staleTemporary, FileTime.from(Instant.now().minusSeconds(601)));
+        Path freshTemporary = Files.writeString(storage.resolve("active-variant.webp.tmp"), "temporary");
+        Path trash = storage.resolve(".trash").resolve("transaction.delete");
+        Files.createDirectories(trash.getParent());
+        Files.writeString(trash, "quarantined");
+
+        var mockMvc = MockMvcBuilders.webAppContextSetup(context).build();
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .get("/api/staff/website/media/storage-audit")
+                        .header("X-Staff-Session", token))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.healthy").value(false))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.missingStorageKeys[0]").value(originalStorageKey))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.missingStorageKeys.length()").value(1))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.orphanStorageKeys[0]").value("unreachable-orphan.jpg"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.orphanStorageKeys.length()").value(1))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.staleTemporaryStorageKeys[0]").value("abandoned-variant.webp.tmp"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.staleTemporaryStorageKeys.length()").value(1))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.checkedAt").isString());
+
+        assertThat(readyVariant).isRegularFile();
+        assertThat(orphan).isRegularFile();
+        assertThat(staleTemporary).isRegularFile();
+        assertThat(freshTemporary).isRegularFile();
+        assertThat(trash).isRegularFile();
+    }
+
+    @Test
+    void restrictsStorageAuditToHeadquartersAdministrators() throws Exception {
+        String token = staffAccess.login("media-branch@example.com", "branch-password").token();
+
+        var mockMvc = MockMvcBuilders.webAppContextSetup(context).build();
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .get("/api/staff/website/media/storage-audit")
+                        .header("X-Staff-Session", token))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
+    }
+
+    @Test
+    void reportsHealthyStorageWhenDatabaseAndFilesMatch() throws Exception {
+        String token = staffAccess.login("media-hq@example.com", "hq-password").token();
+        var mockMvc = MockMvcBuilders.webAppContextSetup(context).build();
+
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .get("/api/staff/website/media/storage-audit")
+                        .header("X-Staff-Session", token))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.healthy").value(true))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.missingStorageKeys.length()").value(0))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.orphanStorageKeys.length()").value(0))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.staleTemporaryStorageKeys.length()").value(0));
     }
 
     @Test

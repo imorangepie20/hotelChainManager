@@ -2096,6 +2096,60 @@ test("uploads an asset for a landing page and keeps its page-specific alt text",
   });
 });
 
+test("runs a read-only media storage audit and displays categorized storage keys", async ({ page }) => {
+  let auditMethod = "";
+  await page.route("**/api/staff/website/media/storage-audit", (route) => {
+    auditMethod = route.request().method();
+    return route.fulfill({ json: {
+      checkedAt: "2026-09-13T04:30:00Z",
+      healthy: false,
+      missingStorageKeys: ["missing-original.png"],
+      orphanStorageKeys: ["unreachable-orphan.jpg"],
+      staleTemporaryStorageKeys: ["abandoned-variant.webp.tmp"],
+    } });
+  });
+
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "미디어 선택" }).click();
+  const dialog = page.getByRole("dialog", { name: "미디어 선택" });
+  await dialog.getByRole("button", { name: "저장소 점검", exact: true }).click();
+
+  expect(auditMethod).toBe("GET");
+  const audit = dialog.getByLabel("미디어 저장소 점검");
+  await expect(audit.getByText("누락 1개 · orphan 1개 · 오래된 임시 파일 1개", { exact: true })).toBeVisible();
+  await expect(audit.getByText("missing-original.png", { exact: true })).toBeVisible();
+  await expect(audit.getByText("unreachable-orphan.jpg", { exact: true })).toBeVisible();
+  await expect(audit.getByText("abandoned-variant.webp.tmp", { exact: true })).toBeVisible();
+});
+
+test("shows healthy media storage and replaces it with a later audit error", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  let requestCount = 0;
+  await page.route("**/api/staff/website/media/storage-audit", (route) => {
+    requestCount += 1;
+    if (requestCount === 1) {
+      return route.fulfill({ json: {
+        checkedAt: "2026-09-13T04:30:00Z",
+        healthy: true,
+        missingStorageKeys: [],
+        orphanStorageKeys: [],
+        staleTemporaryStorageKeys: [],
+      } });
+    }
+    return route.fulfill({ status: 500, json: { message: "저장소를 읽지 못했습니다." } });
+  });
+
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "미디어 선택" }).click();
+  const audit = page.getByRole("dialog", { name: "미디어 선택" }).getByLabel("미디어 저장소 점검");
+  await audit.getByRole("button", { name: "저장소 점검", exact: true }).click();
+  await expect(audit.getByText("DB 참조와 저장 파일이 모두 일치합니다.", { exact: true })).toBeVisible();
+
+  await audit.getByRole("button", { name: "저장소 점검", exact: true }).click();
+  await expect(audit.getByRole("alert")).toHaveText("저장소를 읽지 못했습니다.");
+  await expect(audit.getByText("DB 참조와 저장 파일이 모두 일치합니다.", { exact: true })).toHaveCount(0);
+});
+
 test("shows the upload validation error without changing the selected page image", async ({ page }) => {
   await page.goto("/dashboard/website");
   await page.getByRole("button", { name: "미디어 선택" }).click();

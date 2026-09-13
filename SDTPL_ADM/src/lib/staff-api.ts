@@ -289,6 +289,13 @@ export type WebsiteMediaUsage = {
   fieldPath: string;
   altText: string;
 };
+export type WebsiteMediaStorageAudit = {
+  checkedAt: string;
+  healthy: boolean;
+  missingStorageKeys: string[];
+  orphanStorageKeys: string[];
+  staleTemporaryStorageKeys: string[];
+};
 export type UploadWebsiteMediaInput = {
   file: File;
   displayName: string;
@@ -396,6 +403,9 @@ export function getWebsiteHomeVersions(token: string) {
 export async function getWebsiteMedia(token: string, includeArchived = false): Promise<WebsiteMediaAsset[]> {
   const assets = await mediaRequest<WebsiteMediaAssetResponse[]>(`/api/staff/website/media${includeArchived ? "?includeArchived=true" : ""}`, token);
   return assets.map(normalizeWebsiteMediaAsset);
+}
+export function getWebsiteMediaStorageAudit(token: string) {
+  return mediaRequest<WebsiteMediaStorageAudit>("/api/staff/website/media/storage-audit", token);
 }
 export function uploadWebsiteMedia(token: string, input: UploadWebsiteMediaInput) {
   const formData = new FormData();

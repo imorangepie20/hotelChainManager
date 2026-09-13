@@ -76,7 +76,7 @@ cd services/api
 
 ## 미검증과 다음 작업
 
-- 실제 운영의 다중 인스턴스 rolling 배포와 장시간 CPU·메모리·큐 부하, 운영 알림, 실패·orphan storage audit은 검증하지 않았다.
+- 실제 운영의 다중 인스턴스 rolling 배포와 장시간 CPU·메모리·큐 부하, 운영 알림은 검증하지 않았다. 실패·orphan의 읽기 전용 storage audit은 후속 [변경 기록](2026-09-13-media-storage-audit.md)에서 구현·검증했다.
 - 고객 `<picture>`·`srcset` 전환은 후속 [변경 기록](2026-09-13-customer-responsive-media.md)에서 구현·검증했다.
 - CDN과 S3 호환 객체 저장소, AVIF, crop·초점·관리자 지정 규격, variant 일괄 재생성은 후속 범위다.
 - 변경 경로 밖 전체 backend suite, 전체 관리자 E2E, 고객 예약·결제 회귀는 실행하지 않았다.
