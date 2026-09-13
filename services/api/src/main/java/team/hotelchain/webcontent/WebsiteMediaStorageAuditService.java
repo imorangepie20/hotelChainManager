@@ -1,10 +1,5 @@
 package team.hotelchain.webcontent;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.LinkOption;
-import java.nio.file.Path;
-import java.nio.file.InvalidPathException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -13,12 +8,13 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
-import java.util.stream.Stream;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import team.hotelchain.staff.StaffAccessService;
+import team.hotelchain.webcontent.storage.WebsiteMediaObjectMetadata;
+import team.hotelchain.webcontent.storage.WebsiteMediaStorageGateway;
+import team.hotelchain.webcontent.storage.WebsiteMediaStorageKey;
 
 @Service
 public class WebsiteMediaStorageAuditService {
@@ -27,19 +23,17 @@ public class WebsiteMediaStorageAuditService {
     private final JdbcTemplate jdbc;
     private final StaffAccessService access;
     private final Clock clock;
-    private final Path storageDirectory;
+    private final WebsiteMediaStorageGateway storage;
 
     public WebsiteMediaStorageAuditService(
             JdbcTemplate jdbc,
             StaffAccessService access,
             Clock clock,
-            @Value("${website.media.storage-dir:}") String configuredStorageDirectory) {
+            WebsiteMediaStorageGateway storage) {
         this.jdbc = jdbc;
         this.access = access;
         this.clock = clock;
-        this.storageDirectory = (configuredStorageDirectory == null || configuredStorageDirectory.isBlank()
-                ? Path.of(System.getProperty("java.io.tmpdir"), "hotel-chain-media")
-                : Path.of(configuredStorageDirectory)).toAbsolutePath().normalize();
+        this.storage = storage;
     }
 
     @Transactional(readOnly = true)
@@ -64,18 +58,9 @@ public class WebsiteMediaStorageAuditService {
         Set<String> staleTemporaryStorageKeys = new TreeSet<>();
         Instant staleBefore = checkedAt.toInstant().minus(STALE_TEMPORARY_FILE_AGE);
 
-        if (Files.exists(storageDirectory)) {
-            Path trashDirectory = storageDirectory.resolve(".trash").normalize();
-            try (Stream<Path> paths = Files.walk(storageDirectory)) {
-                paths.filter(path -> !path.startsWith(trashDirectory))
-                        .filter(path -> Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS))
-                        .forEach(path -> classifyFile(
-                                path, expectedStorageKeys, actualStorageKeys,
-                                orphanStorageKeys, staleTemporaryStorageKeys, staleBefore));
-            } catch (IOException cause) {
-                throw new IllegalStateException("미디어 저장소를 점검하지 못했습니다.", cause);
-            }
-        }
+        storage.list("local").forEach(metadata -> classifyFile(
+                metadata, expectedStorageKeys, actualStorageKeys,
+                orphanStorageKeys, staleTemporaryStorageKeys, staleBefore));
 
         List<String> missingStorageKeys = expectedStorageKeys.stream()
                 .filter(key -> !actualStorageKeys.contains(key))
@@ -91,38 +76,28 @@ public class WebsiteMediaStorageAuditService {
     }
 
     private void classifyFile(
-            Path path,
+            WebsiteMediaObjectMetadata metadata,
             Set<String> expectedStorageKeys,
             Set<String> actualStorageKeys,
             Set<String> orphanStorageKeys,
             Set<String> staleTemporaryStorageKeys,
             Instant staleBefore) {
-        String storageKey = storageDirectory.relativize(path.toAbsolutePath().normalize())
-                .toString()
-                .replace('\\', '/');
+        String storageKey = metadata.key();
         actualStorageKeys.add(storageKey);
         if (expectedStorageKeys.contains(storageKey)) return;
         if (!storageKey.endsWith(".tmp")) {
             orphanStorageKeys.add(storageKey);
             return;
         }
-        try {
-            if (!Files.getLastModifiedTime(path, LinkOption.NOFOLLOW_LINKS).toInstant().isAfter(staleBefore)) {
-                staleTemporaryStorageKeys.add(storageKey);
-            }
-        } catch (IOException cause) {
-            throw new IllegalStateException("미디어 임시 파일의 수정 시각을 확인하지 못했습니다.", cause);
+        if (!metadata.lastModified().isAfter(staleBefore)) {
+            staleTemporaryStorageKeys.add(storageKey);
         }
     }
 
     private String relativeStorageKey(String storageKey) {
         try {
-            Path relativePath = Path.of(storageKey.replace('\\', '/')).normalize();
-            if (relativePath.isAbsolute() || relativePath.startsWith("..") || relativePath.toString().isBlank()) {
-                throw new IllegalStateException("상대 경로가 아닌 미디어 저장소 키가 등록되어 있습니다.");
-            }
-            return relativePath.toString().replace('\\', '/');
-        } catch (InvalidPathException cause) {
+            return WebsiteMediaStorageKey.publicKey(storageKey);
+        } catch (IllegalArgumentException cause) {
             throw new IllegalStateException("유효하지 않은 미디어 저장소 키가 등록되어 있습니다.", cause);
         }
     }

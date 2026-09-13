@@ -5,7 +5,6 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -27,6 +26,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.web.multipart.MultipartFile;
 import team.hotelchain.staff.StaffAccessService;
 import team.hotelchain.staff.StaffPrincipal;
+import team.hotelchain.webcontent.storage.WebsiteMediaStorageException;
+import team.hotelchain.webcontent.storage.WebsiteMediaStorageGateway;
 
 @Service
 public class WebsiteMediaService {
@@ -39,13 +40,16 @@ public class WebsiteMediaService {
     private final JdbcTemplate jdbc;
     private final StaffAccessService access;
     private final WebsiteMediaVariantService variants;
+    private final WebsiteMediaStorageGateway storage;
     private final Path storageDirectory;
 
     public WebsiteMediaService(JdbcTemplate jdbc, StaffAccessService access, WebsiteMediaVariantService variants,
+            WebsiteMediaStorageGateway storage,
             @Value("${website.media.storage-dir:}") String configuredStorageDirectory) {
         this.jdbc = jdbc;
         this.access = access;
         this.variants = variants;
+        this.storage = storage;
         this.storageDirectory = configuredStorageDirectory == null || configuredStorageDirectory.isBlank()
                 ? Path.of(System.getProperty("java.io.tmpdir"), "hotel-chain-media")
                 : Path.of(configuredStorageDirectory);
@@ -101,16 +105,7 @@ public class WebsiteMediaService {
 
         UUID id = UUID.randomUUID();
         String storageKey = id + ("image/png".equals(image.mimeType()) ? ".png" : ".jpg");
-        Path root = storageDirectory.toAbsolutePath().normalize();
-        Path target = root.resolve(storageKey).normalize();
-        if (!target.startsWith(root)) throw new IllegalStateException("미디어 저장 경로가 올바르지 않습니다.");
-
-        try {
-            Files.createDirectories(root);
-            Files.write(target, bytes, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
-        } catch (IOException exception) {
-            throw new IllegalStateException("이미지 파일을 저장하지 못했습니다.", exception);
-        }
+        storage.put(storageKey, bytes, image.mimeType());
 
         try {
             jdbc.update("""
@@ -122,7 +117,7 @@ public class WebsiteMediaService {
                     image.width(), image.height(), actor.id(), actor.id());
             variants.enqueueEligible(id, image.width());
         } catch (RuntimeException exception) {
-            deleteStoredFile(target);
+            storage.deleteEverywhere(storageKey);
             throw exception;
         }
         return catalogAsset(id);
@@ -212,12 +207,9 @@ public class WebsiteMediaService {
         if (asset == null || !"UPLOADED".equals(asset.origin()) || asset.storageKey() == null) {
             throw new WebsiteMediaNotFoundException(mediaId);
         }
-        Path root = storageDirectory.toAbsolutePath().normalize();
-        Path source = root.resolve(asset.storageKey()).normalize();
-        if (!source.startsWith(root) || !Files.isRegularFile(source)) throw new WebsiteMediaNotFoundException(mediaId);
         try {
-            return new WebsiteMediaContent(Files.readAllBytes(source), asset.mimeType());
-        } catch (IOException exception) {
+            return new WebsiteMediaContent(storage.get(asset.storageKey()), asset.mimeType());
+        } catch (WebsiteMediaStorageException exception) {
             throw new WebsiteMediaNotFoundException(mediaId);
         }
     }
@@ -429,14 +421,6 @@ public class WebsiteMediaService {
             }
         } catch (IOException exception) {
             throw invalid("PNG 또는 JPEG 이미지만 업로드할 수 있습니다.");
-        }
-    }
-
-    private void deleteStoredFile(Path target) {
-        try {
-            Files.deleteIfExists(target);
-        } catch (IOException ignored) {
-            // The database insert failed; a later storage audit can remove an unreachable file.
         }
     }
 
