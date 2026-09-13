@@ -154,7 +154,7 @@ public class WebsiteMediaVariantService {
                 update website_media_variant
                    set status = 'PENDING', storage_key = null, mime_type = null, byte_size = null,
                        width = null, height = null, attempt_count = 0, next_attempt_at = null,
-                       lease_expires_at = null, last_error = null, updated_at = ?
+                       lease_expires_at = null, claim_token = null, last_error = null, updated_at = ?
                  where id = ? and status = 'FAILED'
                 """, now(), variant.id());
         if (updated != 1) throw retryConflict();
@@ -181,7 +181,7 @@ public class WebsiteMediaVariantService {
         jdbc.update("""
                 update website_media_variant
                    set status = 'FAILED', lease_expires_at = null, next_attempt_at = null,
-                       last_error = ?, updated_at = ?
+                       claim_token = null, last_error = ?, updated_at = ?
                  where status = 'PROCESSING' and attempt_count >= 3 and lease_expires_at <= ?
                 """, GENERIC_FAILURE, now, now);
 
@@ -205,16 +205,17 @@ public class WebsiteMediaVariantService {
                 rs.getObject("asset_id", UUID.class),
                 rs.getInt("target_width"),
                 rs.getString("storage_key"),
-                rs.getInt("attempt_count") + 1), now, now);
+                rs.getInt("attempt_count") + 1,
+                UUID.randomUUID()), now, now);
         if (candidates.isEmpty()) return Optional.empty();
 
         VariantClaim claim = candidates.getFirst();
         jdbc.update("""
                 update website_media_variant
                    set status = 'PROCESSING', attempt_count = ?, next_attempt_at = null,
-                       lease_expires_at = ?, last_error = null, updated_at = ?
+                       lease_expires_at = ?, claim_token = ?, last_error = null, updated_at = ?
                  where id = ?
-                """, claim.attemptCount(), now.plus(LEASE_DURATION), now, claim.variantId());
+                """, claim.attemptCount(), now.plus(LEASE_DURATION), claim.claimToken(), now, claim.variantId());
         return Optional.of(claim);
     }
 
@@ -222,20 +223,24 @@ public class WebsiteMediaVariantService {
     public boolean completeReady(
             UUID variantId,
             int attemptCount,
+            UUID claimToken,
             String storageKey,
             WebsiteMediaVariantEncoder.Result result,
             Path temporaryTarget,
             Path finalTarget) throws IOException {
         List<VariantState> states = jdbc.query("""
-                select status, attempt_count, storage_key
+                select status, attempt_count, claim_token, storage_key
                   from website_media_variant
                  where id = ?
                  for update
                 """, (rs, rowNumber) -> new VariantState(
-                rs.getString("status"), rs.getInt("attempt_count"), rs.getString("storage_key")), variantId);
+                rs.getString("status"), rs.getInt("attempt_count"),
+                rs.getObject("claim_token", UUID.class), rs.getString("storage_key")), variantId);
         if (states.isEmpty()
                 || !"PROCESSING".equals(states.getFirst().status())
-                || states.getFirst().attemptCount() != attemptCount) {
+                || states.getFirst().attemptCount() != attemptCount
+                || claimToken == null
+                || !claimToken.equals(states.getFirst().claimToken())) {
             return false;
         }
 
@@ -248,16 +253,16 @@ public class WebsiteMediaVariantService {
                 update website_media_variant
                    set status = 'READY', storage_key = ?, mime_type = ?, byte_size = ?,
                        width = ?, height = ?, next_attempt_at = null, lease_expires_at = null,
-                       last_error = null, updated_at = ?
-                 where id = ? and status = 'PROCESSING' and attempt_count = ?
+                       claim_token = null, last_error = null, updated_at = ?
+                 where id = ? and status = 'PROCESSING' and attempt_count = ? and claim_token = ?
                 """, storageKey, result.mimeType(), result.byteSize(), result.width(), result.height(),
-                now(), variantId, attemptCount);
+                now(), variantId, attemptCount, claimToken);
         if (updated != 1) throw new IllegalStateException("현재 미디어 variant claim을 완료할 수 없습니다.");
         return true;
     }
 
     @Transactional
-    public boolean completeFailed(UUID variantId, int attemptCount, String errorSummary) {
+    public boolean completeFailed(UUID variantId, int attemptCount, UUID claimToken, String errorSummary) {
         OffsetDateTime now = now();
         OffsetDateTime nextAttemptAt = switch (attemptCount) {
             case 1 -> now.plusSeconds(30);
@@ -267,9 +272,9 @@ public class WebsiteMediaVariantService {
         int updated = jdbc.update("""
                 update website_media_variant
                    set status = 'FAILED', next_attempt_at = ?, lease_expires_at = null,
-                       last_error = ?, updated_at = ?
-                 where id = ? and status = 'PROCESSING' and attempt_count = ?
-                """, nextAttemptAt, allowedFailure(errorSummary), now, variantId, attemptCount);
+                       claim_token = null, last_error = ?, updated_at = ?
+                 where id = ? and status = 'PROCESSING' and attempt_count = ? and claim_token = ?
+                """, nextAttemptAt, allowedFailure(errorSummary), now, variantId, attemptCount, claimToken);
         return updated == 1;
     }
 
@@ -291,7 +296,8 @@ public class WebsiteMediaVariantService {
             UUID assetId,
             int targetWidth,
             String sourceStorageKey,
-            int attemptCount) {
+            int attemptCount,
+            UUID claimToken) {
     }
 
     private Path previousTarget(Path finalTarget, String storageKey) {
@@ -301,7 +307,7 @@ public class WebsiteMediaVariantService {
         return candidate.startsWith(root) && !candidate.equals(finalTarget) ? candidate : null;
     }
 
-    private record VariantState(String status, int attemptCount, String storageKey) {
+    private record VariantState(String status, int attemptCount, UUID claimToken, String storageKey) {
     }
 
     private record RetryAsset(String status, String origin) {

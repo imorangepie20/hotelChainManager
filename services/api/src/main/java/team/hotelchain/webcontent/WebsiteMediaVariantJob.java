@@ -55,11 +55,13 @@ public final class WebsiteMediaVariantJob {
             Files.createDirectories(root);
             WebsiteMediaVariantEncoder.Result result = encoder.encode(source, temporaryTarget, claim.targetWidth());
             boolean completed = variants.completeReady(
-                    claim.variantId(), claim.attemptCount(), finalStorageKey, result, temporaryTarget, target);
+                    claim.variantId(), claim.attemptCount(), claim.claimToken(),
+                    finalStorageKey, result, temporaryTarget, target);
             if (!completed) deleteTemporaryFile(temporaryTarget);
         } catch (Exception exception) {
             deleteTemporaryFile(temporaryTarget);
-            variants.completeFailed(claim.variantId(), claim.attemptCount(), failureSummary(exception));
+            variants.completeFailed(
+                    claim.variantId(), claim.attemptCount(), claim.claimToken(), failureSummary(exception));
         }
         return true;
     }

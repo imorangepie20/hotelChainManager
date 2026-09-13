@@ -7,7 +7,9 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -47,7 +49,6 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.SingleConnectionDataSource;
-import org.springframework.http.MediaType;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.transaction.annotation.Propagation;
@@ -71,7 +72,6 @@ class WebsiteMediaVariantIntegrationTest {
     @org.springframework.beans.factory.annotation.Autowired WebsiteMediaService media;
     @org.springframework.beans.factory.annotation.Autowired WebsiteMediaVariantService variants;
     @org.springframework.beans.factory.annotation.Autowired WebsiteMediaVariantEncoder encoder;
-    @org.springframework.beans.factory.annotation.Autowired PublicWebsiteMediaController publicMedia;
     @org.springframework.beans.factory.annotation.Autowired WebApplicationContext context;
     @org.springframework.beans.factory.annotation.Autowired TestClock clock;
     WebsiteMediaVariantJob job;
@@ -136,6 +136,52 @@ class WebsiteMediaVariantIntegrationTest {
             }
         } catch (Exception exception) {
             throw new IllegalStateException("V25 미디어 variant migration을 검증할 수 없습니다.", exception);
+        } finally {
+            try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+                statement.execute("drop schema if exists \"" + schema + "\" cascade");
+            } catch (Exception exception) {
+                throw new IllegalStateException("격리된 migration test schema를 정리할 수 없습니다.", exception);
+            }
+        }
+    }
+
+    @Test
+    void v27AddsNullableClaimTokenWithoutChangingExistingMediaRows() {
+        String schema = "media_variant_claim_" + UUID.randomUUID().toString().replace("-", "");
+        UUID assetId = UUID.randomUUID();
+        try {
+            isolatedFlyway(schema, MigrationVersion.fromVersion("24")).migrate();
+            try (var connection = dataSource.getConnection()) {
+                var isolatedJdbc = new JdbcTemplate(new SingleConnectionDataSource(connection, true));
+                insertUploadedAsset(isolatedJdbc, schema, assetId, 640, "ACTIVE");
+                isolatedFlyway(schema, MigrationVersion.fromVersion("26")).migrate();
+                OffsetDateTime leaseExpiresAt = OffsetDateTime.ofInstant(START.plusSeconds(300), ZoneOffset.UTC);
+                isolatedJdbc.update("""
+                        update "%s".website_media_variant
+                           set status = 'PROCESSING', attempt_count = 1, lease_expires_at = ?
+                         where asset_id = ? and target_width = 640
+                        """.formatted(schema), leaseExpiresAt, assetId);
+                List<String> checksums = cmsChecksums(isolatedJdbc, schema);
+                MigrationClaimRow existingClaim = migrationClaimRow(isolatedJdbc, schema, assetId);
+
+                isolatedFlyway(schema, MigrationVersion.fromVersion("27")).migrate();
+
+                assertThat(cmsChecksums(isolatedJdbc, schema)).isEqualTo(checksums);
+                assertThat(migrationClaimRow(isolatedJdbc, schema, assetId)).isEqualTo(existingClaim);
+                assertThat(isolatedJdbc.queryForObject("""
+                        select count(*)
+                          from information_schema.columns
+                         where table_schema = ? and table_name = 'website_media_variant'
+                           and column_name = 'claim_token'
+                        """, Integer.class, schema)).isOne();
+                assertThat(isolatedJdbc.queryForObject("""
+                        select count(*)
+                          from "%s".website_media_variant
+                         where claim_token is not null
+                        """.formatted(schema), Integer.class)).isZero();
+            }
+        } catch (Exception exception) {
+            throw new IllegalStateException("V27 미디어 variant claim migration을 검증할 수 없습니다.", exception);
         } finally {
             try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
                 statement.execute("drop schema if exists \"" + schema + "\" cascade");
@@ -223,21 +269,67 @@ class WebsiteMediaVariantIntegrationTest {
     @Test
     void deliversOnlyReadyVariantsOfActiveUploadedAssets() throws Exception {
         WebsiteMediaAsset asset = uploadImage(640, 360);
+        var mvc = MockMvcBuilders.webAppContextSetup(context).build();
+        String path = "/api/website/media/" + asset.id() + "/variants/640.webp";
 
-        assertThatThrownBy(() -> publicMedia.variant(asset.id(), 640))
-                .isInstanceOf(WebsiteMediaNotFoundException.class);
+        jdbc.update("""
+                update website_media_variant
+                   set status = 'PROCESSING', attempt_count = 1, lease_expires_at = ?, claim_token = ?
+                 where asset_id = ? and target_width = 640
+                """, OffsetDateTime.ofInstant(START.plusSeconds(300), ZoneOffset.UTC), UUID.randomUUID(), asset.id());
+        mvc.perform(get(path)).andExpect(status().isNotFound());
+
+        jdbc.update("""
+                update website_media_variant
+                   set status = 'FAILED', lease_expires_at = null, claim_token = null,
+                       next_attempt_at = ?, last_error = '미디어 variant 생성에 실패했습니다.'
+                 where asset_id = ? and target_width = 640
+                """, OffsetDateTime.ofInstant(START.plusSeconds(30), ZoneOffset.UTC), asset.id());
+        mvc.perform(get(path)).andExpect(status().isNotFound());
+
+        variants.retry(headquartersToken(), asset.id(), 640);
         assertThat(job.processNext()).isTrue();
 
-        var response = publicMedia.variant(asset.id(), 640);
-        assertThat(response.getHeaders().getContentType()).isEqualTo(MediaType.parseMediaType("image/webp"));
-        assertThat(response.getHeaders().getCacheControl()).isEqualTo("public, max-age=31536000, immutable");
-        assertThat(response.getHeaders().getFirst("X-Content-Type-Options")).isEqualTo("nosniff");
-        assertThat(response.getBody()).isNotEmpty();
+        var response = mvc.perform(get(path))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Content-Type", "image/webp"))
+                .andExpect(header().string("Cache-Control", "public, max-age=31536000, immutable"))
+                .andExpect(header().string("X-Content-Type-Options", "nosniff"))
+                .andReturn().getResponse();
+        assertThat(response.getContentAsByteArray()).isNotEmpty();
 
         media.archive(headquartersToken(), asset.id(), new WebsiteMediaVersionRequest(asset.version()));
 
-        assertThatThrownBy(() -> publicMedia.variant(asset.id(), 640))
-                .isInstanceOf(WebsiteMediaNotFoundException.class);
+        mvc.perform(get(path)).andExpect(status().isNotFound());
+    }
+
+    @Test
+    void publicVariantRouteHidesBundledAssetsAndMissingReadyFiles() throws Exception {
+        var mvc = MockMvcBuilders.webAppContextSetup(context).build();
+        WebsiteMediaAsset missingFile = uploadImage(640, 360);
+        jdbc.update("""
+                update website_media_variant
+                   set status = 'READY', storage_key = ?, mime_type = 'image/webp', byte_size = 10,
+                       width = 640, height = 360
+                 where asset_id = ? and target_width = 640
+                """, missingFile.id() + "-missing.webp", missingFile.id());
+
+        mvc.perform(get("/api/website/media/" + missingFile.id() + "/variants/640.webp"))
+                .andExpect(status().isNotFound());
+
+        String bundledStorageKey = "bundled-640-" + UUID.randomUUID() + ".webp";
+        byte[] bundledBytes = "bundled-variant".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        Files.write(storageDirectory().resolve(bundledStorageKey), bundledBytes);
+        jdbc.update("""
+                insert into website_media_variant (
+                    id, asset_id, format, target_width, status, storage_key, mime_type,
+                    byte_size, width, height, attempt_count
+                ) values (?, ?, 'WEBP', 640, 'READY', ?, 'image/webp', ?, 640, 360, 1)
+                """, UUID.randomUUID(), WebsiteMediaService.BUNDLED_ASSET_ID,
+                bundledStorageKey, (long) bundledBytes.length);
+
+        mvc.perform(get("/api/website/media/" + WebsiteMediaService.BUNDLED_ASSET_ID + "/variants/640.webp"))
+                .andExpect(status().isNotFound());
     }
 
     @Test
@@ -252,7 +344,64 @@ class WebsiteMediaVariantIntegrationTest {
         assertThat(row.attemptCount()).isZero();
         assertThat(row.nextAttemptAt()).isNull();
         assertThat(row.leaseExpiresAt()).isNull();
+        assertThat(row.claimToken()).isNull();
         assertThat(row.lastError()).isNull();
+    }
+
+    @Test
+    void oldSuccessfulCompletionCannotPublishAfterManualRetryReusesAttemptOne() throws Exception {
+        WebsiteMediaAsset asset = uploadImage(640, 360);
+        WebsiteMediaVariantService.VariantClaim oldClaim = variants.claimNext().orElseThrow();
+        expireLease(oldClaim.variantId());
+        WebsiteMediaVariantService.VariantClaim reclaimed = variants.claimNext().orElseThrow();
+        assertThat(variants.completeFailed(
+                reclaimed.variantId(), reclaimed.attemptCount(), reclaimed.claimToken(),
+                "미디어 variant 생성에 실패했습니다.")).isTrue();
+
+        variants.retry(headquartersToken(), asset.id(), 640);
+        WebsiteMediaVariantService.VariantClaim newClaim = variants.claimNext().orElseThrow();
+        assertThat(newClaim.attemptCount()).isEqualTo(oldClaim.attemptCount());
+        assertThat(newClaim.claimToken()).isNotEqualTo(oldClaim.claimToken());
+
+        String oldStorageKey = asset.id() + "-640-old-" + UUID.randomUUID() + ".webp";
+        Path temporaryTarget = storageDirectory().resolve(oldStorageKey + ".tmp");
+        Path finalTarget = storageDirectory().resolve(oldStorageKey);
+        WebsiteMediaVariantEncoder.Result result = encoder.encode(
+                storageDirectory().resolve(asset.id() + ".png"), temporaryTarget, 640);
+        try {
+            assertThat(variants.completeReady(
+                    oldClaim.variantId(), oldClaim.attemptCount(), oldClaim.claimToken(),
+                    oldStorageKey, result, temporaryTarget, finalTarget)).isFalse();
+            assertThat(temporaryTarget).exists();
+            assertThat(finalTarget).doesNotExist();
+            assertThat(claimState(asset.id())).isEqualTo(
+                    new ClaimState("PROCESSING", 1, newClaim.claimToken()));
+        } finally {
+            Files.deleteIfExists(temporaryTarget);
+            Files.deleteIfExists(finalTarget);
+        }
+    }
+
+    @Test
+    void oldFailedCompletionCannotFailNewClaimAfterManualRetryReusesAttemptOne() throws IOException {
+        WebsiteMediaAsset asset = uploadImage(640, 360);
+        WebsiteMediaVariantService.VariantClaim oldClaim = variants.claimNext().orElseThrow();
+        expireLease(oldClaim.variantId());
+        WebsiteMediaVariantService.VariantClaim reclaimed = variants.claimNext().orElseThrow();
+        assertThat(variants.completeFailed(
+                reclaimed.variantId(), reclaimed.attemptCount(), reclaimed.claimToken(),
+                "미디어 variant 생성에 실패했습니다.")).isTrue();
+
+        variants.retry(headquartersToken(), asset.id(), 640);
+        WebsiteMediaVariantService.VariantClaim newClaim = variants.claimNext().orElseThrow();
+        assertThat(newClaim.attemptCount()).isEqualTo(oldClaim.attemptCount());
+        assertThat(newClaim.claimToken()).isNotEqualTo(oldClaim.claimToken());
+
+        assertThat(variants.completeFailed(
+                oldClaim.variantId(), oldClaim.attemptCount(), oldClaim.claimToken(),
+                "미디어 variant 생성에 실패했습니다.")).isFalse();
+        assertThat(claimState(asset.id())).isEqualTo(
+                new ClaimState("PROCESSING", 1, newClaim.claimToken()));
     }
 
     @Test
@@ -571,7 +720,7 @@ class WebsiteMediaVariantIntegrationTest {
                 update website_media_variant
                    set status = 'PENDING', storage_key = null, mime_type = null, byte_size = null,
                        width = null, height = null, attempt_count = 0, next_attempt_at = null,
-                       lease_expires_at = null, last_error = null
+                       lease_expires_at = null, claim_token = null, last_error = null
                  where asset_id = ?
                 """, assetId);
     }
@@ -581,20 +730,37 @@ class WebsiteMediaVariantIntegrationTest {
                 update website_media_variant
                    set status = 'FAILED', storage_key = null, mime_type = null, byte_size = null,
                        width = null, height = null, attempt_count = 3, next_attempt_at = null,
-                       lease_expires_at = null, last_error = '미디어 variant 생성에 실패했습니다.'
+                       lease_expires_at = null, claim_token = null,
+                       last_error = '미디어 variant 생성에 실패했습니다.'
                  where asset_id = ? and target_width = ?
                 """, assetId, targetWidth);
     }
 
+    private void expireLease(UUID variantId) {
+        jdbc.update("update website_media_variant set lease_expires_at = ? where id = ?",
+                OffsetDateTime.ofInstant(START.minusSeconds(1), ZoneOffset.UTC), variantId);
+    }
+
+    private ClaimState claimState(UUID assetId) {
+        return jdbc.queryForObject("""
+                select status, attempt_count, claim_token
+                  from website_media_variant
+                 where asset_id = ? and target_width = 640
+                """, (rs, rowNumber) -> new ClaimState(
+                rs.getString("status"), rs.getInt("attempt_count"),
+                rs.getObject("claim_token", UUID.class)), assetId);
+    }
+
     private RetryRow retryRow(UUID assetId, int targetWidth) {
         return jdbc.queryForObject("""
-                select status, attempt_count, next_attempt_at, lease_expires_at, last_error
+                select status, attempt_count, next_attempt_at, lease_expires_at, claim_token, last_error
                   from website_media_variant
                  where asset_id = ? and target_width = ?
                 """, (rs, rowNumber) -> new RetryRow(
                 rs.getString("status"), rs.getInt("attempt_count"),
                 rs.getObject("next_attempt_at", OffsetDateTime.class),
-                rs.getObject("lease_expires_at", OffsetDateTime.class), rs.getString("last_error")),
+                rs.getObject("lease_expires_at", OffsetDateTime.class),
+                rs.getObject("claim_token", UUID.class), rs.getString("last_error")),
                 assetId, targetWidth);
     }
 
@@ -677,6 +843,16 @@ class WebsiteMediaVariantIntegrationTest {
                 checksum(isolatedJdbc, schema, "website_page", "page.id"));
     }
 
+    private MigrationClaimRow migrationClaimRow(JdbcTemplate isolatedJdbc, String schema, UUID assetId) {
+        return isolatedJdbc.queryForObject("""
+                select status, attempt_count, lease_expires_at
+                  from "%s".website_media_variant
+                 where asset_id = ? and target_width = 640
+                """.formatted(schema), (rs, rowNumber) -> new MigrationClaimRow(
+                rs.getString("status"), rs.getInt("attempt_count"),
+                rs.getObject("lease_expires_at", OffsetDateTime.class)), assetId);
+    }
+
     private String checksum(JdbcTemplate isolatedJdbc, String schema, String table, String orderBy) {
         String alias = switch (table) {
             case "website_media_asset" -> "asset";
@@ -702,6 +878,9 @@ class WebsiteMediaVariantIntegrationTest {
     private record MigrationVariantRow(UUID assetId, int targetWidth) {
     }
 
+    private record MigrationClaimRow(String status, int attemptCount, OffsetDateTime leaseExpiresAt) {
+    }
+
     private record VariantResultRow(
             String status, String storageKey, String mimeType, long byteSize, int width, int height) {
     }
@@ -709,11 +888,15 @@ class WebsiteMediaVariantIntegrationTest {
     private record FailureRow(String status, int attemptCount, OffsetDateTime nextAttemptAt, String lastError) {
     }
 
+    private record ClaimState(String status, int attemptCount, UUID claimToken) {
+    }
+
     private record RetryRow(
             String status,
             int attemptCount,
             OffsetDateTime nextAttemptAt,
             OffsetDateTime leaseExpiresAt,
+            UUID claimToken,
             String lastError) {
     }
 

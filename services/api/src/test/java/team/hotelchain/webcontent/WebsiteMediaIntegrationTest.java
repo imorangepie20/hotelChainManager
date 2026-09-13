@@ -24,7 +24,11 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.test.context.transaction.TestTransaction;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 import team.hotelchain.staff.StaffAccessDeniedException;
 import team.hotelchain.staff.StaffAccessService;
@@ -43,9 +47,11 @@ class WebsiteMediaIntegrationTest {
     @org.springframework.beans.factory.annotation.Autowired PublicWebsiteMediaController publicMedia;
     @org.springframework.beans.factory.annotation.Autowired WebsitePageService pages;
     @org.springframework.beans.factory.annotation.Autowired WebsiteTranslationService translations;
+    @org.springframework.beans.factory.annotation.Autowired PlatformTransactionManager transactionManager;
 
     @BeforeEach
     void seed() throws IOException {
+        removeCommittedPermanentDeleteFixtures();
         deleteStorage();
         BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
         jdbc.update("insert into hotel values (?, ?, ?, ?)", BRANCH_HOTEL, "미디어 테스트 호텔", "속초", "Asia/Seoul");
@@ -463,6 +469,44 @@ class WebsiteMediaIntegrationTest {
     }
 
     @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void committedPermanentDeleteRemovesRowsAndAllQuarantinedFiles() throws IOException {
+        try {
+            StaffSessionView headquarters = staffAccess.login("media-hq@example.com", "hq-password");
+            WebsiteMediaAsset uploaded = media.upload(headquarters.token(),
+                    new MemoryMultipartFile("committed-delete.png", "image/png", image("png")),
+                    "커밋 영구 삭제 대상", "커밋 영구 삭제 대상 기본 alt");
+            Path variantFile = readyVariantFile(uploaded);
+            WebsiteMediaAsset archived = media.archive(headquarters.token(), uploaded.id(),
+                    new WebsiteMediaVersionRequest(uploaded.version()));
+            jdbc.update("update website_media_asset set archived_at = current_timestamp - interval '31 days' where id = ?",
+                    uploaded.id());
+            Path storage = Path.of(System.getProperty("java.io.tmpdir"), "hotel-chain-media");
+            Path originalFile = storage.resolve(uploaded.id() + ".png");
+
+            media.permanentlyDelete(headquarters.token(), uploaded.id(),
+                    new WebsiteMediaVersionRequest(archived.version()));
+
+            TransactionTemplate verification = new TransactionTemplate(transactionManager);
+            verification.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+            verification.executeWithoutResult(status -> {
+                assertThat(jdbc.queryForObject(
+                        "select count(*) from website_media_asset where id = ?", Integer.class, uploaded.id()))
+                        .isZero();
+                assertThat(jdbc.queryForObject(
+                        "select count(*) from website_media_variant where asset_id = ?", Integer.class, uploaded.id()))
+                        .isZero();
+            });
+            assertThat(originalFile).doesNotExist();
+            assertThat(variantFile).doesNotExist();
+            assertThat(regularFilesUnder(storage.resolve(".trash"))).isEmpty();
+        } finally {
+            removeCommittedPermanentDeleteFixtures();
+            deleteStorage();
+        }
+    }
+
+    @Test
     void restoresOriginalAndVariantFilesWhenDeleteVersionConflictRollsBack() throws IOException {
         StaffSessionView headquarters = staffAccess.login("media-hq@example.com", "hq-password");
         WebsiteMediaAsset uploaded = media.upload(headquarters.token(),
@@ -692,6 +736,25 @@ class WebsiteMediaIntegrationTest {
                 try { Files.deleteIfExists(path); }
                 catch (IOException error) { throw new IllegalStateException(error); }
             });
+        }
+    }
+
+    private void removeCommittedPermanentDeleteFixtures() {
+        jdbc.update("delete from website_media_asset where display_name = '커밋 영구 삭제 대상'");
+        jdbc.update("""
+                delete from staff_session
+                 where staff_id in (
+                     select id from staff_member where email in ('media-hq@example.com', 'media-branch@example.com')
+                 )
+                """);
+        jdbc.update("delete from staff_member where email in ('media-hq@example.com', 'media-branch@example.com')");
+        jdbc.update("delete from hotel where id = ?", BRANCH_HOTEL);
+    }
+
+    private List<Path> regularFilesUnder(Path directory) throws IOException {
+        if (!Files.exists(directory)) return List.of();
+        try (var paths = Files.walk(directory)) {
+            return paths.filter(Files::isRegularFile).toList();
         }
     }
 
