@@ -129,6 +129,88 @@ export type StaffReservationStayChangeResult = {
   currency: string;
 };
 
+export type ReservationChangeStatus =
+  | "PENDING_APPROVAL"
+  | "APPROVED"
+  | "AWAITING_PAYMENT"
+  | "REFUND_PENDING"
+  | "READY_TO_APPLY"
+  | "APPLYING"
+  | "COMPLETED"
+  | "REJECTED"
+  | "CANCELLED"
+  | "EXPIRED"
+  | "RECONCILIATION_REQUIRED";
+
+export type ReservationChangePolicy = {
+  settlementEnabled: boolean;
+  directLimitKrw: number;
+  approvalTtlSeconds: number;
+  holdTtlSeconds: number;
+};
+
+export type ReservationChangeQuote = {
+  id: string;
+  revision: number;
+  previousTotalKrw: number;
+  totalKrw: number;
+  differenceKrw: number;
+  currency: string;
+  nightlyPrices: Array<{ date: string; amount: number }>;
+  createdAt: string;
+};
+
+export type ReservationChangeApproval = {
+  id: string;
+  decisionType: string;
+  decidedBy: string | null;
+  decidedRole: string;
+  limitKrw: number;
+  reason: string | null;
+  createdAt: string;
+};
+
+export type ReservationChangeEvent = {
+  id: string;
+  eventType: string;
+  fromStatus: ReservationChangeStatus | null;
+  toStatus: ReservationChangeStatus;
+  actorStaffId: string | null;
+  reason: string | null;
+  createdAt: string;
+};
+
+export type ReservationChangeRequestView = {
+  id: string;
+  reservationId: string;
+  hotelId: string;
+  hotelName?: string;
+  guestName?: string;
+  status: ReservationChangeStatus;
+  settlementDirection: "CHARGE" | "REFUND" | "NONE";
+  version: number;
+  previousCheckIn: string;
+  previousCheckOut: string;
+  previousRoomTypeId: string;
+  previousRoomTypeName?: string;
+  previousRatePlanId: string;
+  previousRatePlanName?: string;
+  targetCheckIn: string;
+  targetCheckOut: string;
+  targetRoomTypeId: string;
+  targetRoomTypeName?: string;
+  targetRatePlanId: string;
+  targetRatePlanName?: string;
+  rooms: number;
+  adults: number;
+  children: number;
+  approvalExpiresAt: string;
+  quote: ReservationChangeQuote;
+  approval: ReservationChangeApproval | null;
+  actions: string[];
+  events: ReservationChangeEvent[];
+};
+
 
 type SessionResponse = { token: string; staff: StaffPrincipal };
 
@@ -648,6 +730,97 @@ export async function updateStaffReservationStay(
     throw new StaffApiError(error.message ?? "숙박 조건을 변경하지 못했습니다.", response.status, error.code);
   }
   return response.json() as Promise<StaffReservationStayChangeResult>;
+}
+
+async function reservationChangeRequest<T>(
+  path: string,
+  token: string,
+  init?: RequestInit,
+): Promise<T> {
+  const response = await fetch(path, {
+    ...init,
+    headers: {
+      "X-Staff-Session": token,
+      ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      ...init?.headers,
+    },
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(
+      error.message ?? "예약 변경 요청을 처리하지 못했습니다. 상태를 새로고침한 뒤 다시 시도해 주세요.",
+      response.status,
+      error.code,
+    );
+  }
+  return response.json() as Promise<T>;
+}
+
+export function getReservationChangePolicy(token: string) {
+  return reservationChangeRequest<ReservationChangePolicy>("/api/staff/reservation-change-policy", token);
+}
+
+export function getReservationChangeRequests(
+  token: string,
+  filters: { status?: ReservationChangeStatus; hotelId?: string } = {},
+) {
+  const searchParams = new URLSearchParams();
+  if (filters.status) searchParams.set("status", filters.status);
+  if (filters.hotelId) searchParams.set("hotelId", filters.hotelId);
+  const query = searchParams.size ? `?${searchParams}` : "";
+  return reservationChangeRequest<ReservationChangeRequestView[]>(`/api/staff/reservation-change-requests${query}`, token);
+}
+
+export function getReservationChangeRequest(token: string, requestId: string) {
+  return reservationChangeRequest<ReservationChangeRequestView>(`/api/staff/reservation-change-requests/${requestId}`, token);
+}
+
+export function createReservationChangeRequest(
+  token: string,
+  reservationId: string,
+  idempotencyKey: string,
+  input: { checkIn: string; checkOut: string; roomTypeId: string; ratePlanId: string; expectedTotal: number },
+) {
+  return reservationChangeRequest<ReservationChangeRequestView>(`/api/staff/reservations/${reservationId}/change-requests`, token, {
+    method: "POST",
+    headers: { "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify(input),
+  });
+}
+
+function mutateReservationChangeRequest(
+  token: string,
+  requestId: string,
+  action: "approve" | "reject" | "reprice" | "cancel",
+  idempotencyKey: string,
+  input: { version: number; reason?: string },
+) {
+  return reservationChangeRequest<ReservationChangeRequestView>(`/api/staff/reservation-change-requests/${requestId}/${action}`, token, {
+    method: "POST",
+    headers: { "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify(input),
+  });
+}
+
+export function approveReservationChangeRequest(token: string, requestId: string, idempotencyKey: string, version: number) {
+  return mutateReservationChangeRequest(token, requestId, "approve", idempotencyKey, { version });
+}
+
+export function rejectReservationChangeRequest(
+  token: string,
+  requestId: string,
+  idempotencyKey: string,
+  input: { version: number; reason: string },
+) {
+  return mutateReservationChangeRequest(token, requestId, "reject", idempotencyKey, input);
+}
+
+export function repriceReservationChangeRequest(token: string, requestId: string, idempotencyKey: string, version: number) {
+  return mutateReservationChangeRequest(token, requestId, "reprice", idempotencyKey, { version });
+}
+
+export function cancelReservationChangeRequest(token: string, requestId: string, idempotencyKey: string, version: number) {
+  return mutateReservationChangeRequest(token, requestId, "cancel", idempotencyKey, { version });
 }
 
 type WebsiteMediaAssetResponse = Omit<WebsiteMediaAsset, "variants"> & { variants?: WebsiteMediaVariant[] };

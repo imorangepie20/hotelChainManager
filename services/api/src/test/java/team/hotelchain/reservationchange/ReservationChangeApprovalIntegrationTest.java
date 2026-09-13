@@ -142,6 +142,12 @@ class ReservationChangeApprovalIntegrationTest {
                         .content(createRequestJson(targetCheckOut, 300_001)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("PENDING_APPROVAL"))
+                .andExpect(jsonPath("$.hotelName").value("승인 스키마 테스트 호텔"))
+                .andExpect(jsonPath("$.guestName").value("투숙객"))
+                .andExpect(jsonPath("$.previousRoomTypeName").value("스탠다드"))
+                .andExpect(jsonPath("$.previousRatePlanName").value("룸 온리"))
+                .andExpect(jsonPath("$.targetRoomTypeName").value("스탠다드"))
+                .andExpect(jsonPath("$.targetRatePlanName").value("룸 온리"))
                 .andExpect(jsonPath("$.approval").doesNotExist());
         UUID approvalRequestId = requestId("above-direct-limit");
 

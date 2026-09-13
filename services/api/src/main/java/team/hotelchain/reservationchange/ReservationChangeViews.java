@@ -28,11 +28,23 @@ public class ReservationChangeViews {
 
     public ReservationChangeRequestView get(StaffPrincipal staff, UUID requestId) {
         RequestRow request = jdbc.query("""
-                select id, reservation_id, hotel_id, status, settlement_direction, version,
-                       previous_check_in, previous_check_out, previous_room_type_id, previous_rate_plan_id,
-                       target_check_in, target_check_out, target_room_type_id, target_rate_plan_id,
-                       rooms, adults, children, approval_expires_at, current_quote_id
-                from reservation_change_request where id = ?
+                select r.id, r.reservation_id, r.hotel_id, h.name as hotel_name,
+                       booking.guest_name, r.status, r.settlement_direction, r.version,
+                       r.previous_check_in, r.previous_check_out, r.previous_room_type_id,
+                       previous_room_type.name as previous_room_type_name, r.previous_rate_plan_id,
+                       previous_rate_plan.name as previous_rate_plan_name,
+                       r.target_check_in, r.target_check_out, r.target_room_type_id,
+                       target_room_type.name as target_room_type_name, r.target_rate_plan_id,
+                       target_rate_plan.name as target_rate_plan_name,
+                       r.rooms, r.adults, r.children, r.approval_expires_at, r.current_quote_id
+                from reservation_change_request r
+                join reservation booking on booking.id = r.reservation_id
+                join hotel h on h.id = r.hotel_id
+                join room_type previous_room_type on previous_room_type.id = r.previous_room_type_id
+                join rate_plan previous_rate_plan on previous_rate_plan.id = r.previous_rate_plan_id
+                join room_type target_room_type on target_room_type.id = r.target_room_type_id
+                join rate_plan target_rate_plan on target_rate_plan.id = r.target_rate_plan_id
+                where r.id = ?
                 """, rs -> rs.next() ? mapRequest(rs) : null, requestId);
         if (request == null) {
             throw new ReservationNotFoundException();
@@ -67,11 +79,14 @@ public class ReservationChangeViews {
         ReservationChangeRequestView.ApprovalView approval = loadLatestApproval(request.id());
         List<ReservationChangeRequestView.EventView> events = loadEvents(request.id());
         return new ReservationChangeRequestView(
-                request.id(), request.reservationId(), request.hotelId(), request.status(),
+                request.id(), request.reservationId(), request.hotelId(), request.hotelName(),
+                request.guestName(), request.status(),
                 request.settlementDirection(), request.version(), request.previousCheckIn(),
-                request.previousCheckOut(), request.previousRoomTypeId(), request.previousRatePlanId(),
+                request.previousCheckOut(), request.previousRoomTypeId(), request.previousRoomTypeName(),
+                request.previousRatePlanId(), request.previousRatePlanName(),
                 request.targetCheckIn(), request.targetCheckOut(), request.targetRoomTypeId(),
-                request.targetRatePlanId(), request.rooms(), request.adults(), request.children(),
+                request.targetRoomTypeName(), request.targetRatePlanId(), request.targetRatePlanName(),
+                request.rooms(), request.adults(), request.children(),
                 request.approvalExpiresAt(), quote, approval, events, actions(staff, request));
     }
 
@@ -151,13 +166,17 @@ public class ReservationChangeViews {
     private RequestRow mapRequest(ResultSet rs) throws SQLException {
         return new RequestRow(
                 rs.getObject("id", UUID.class), rs.getObject("reservation_id", UUID.class),
-                rs.getObject("hotel_id", UUID.class), rs.getString("status"),
+                rs.getObject("hotel_id", UUID.class), rs.getString("hotel_name"),
+                rs.getString("guest_name"), rs.getString("status"),
                 rs.getString("settlement_direction"), rs.getLong("version"),
                 rs.getDate("previous_check_in").toLocalDate(), rs.getDate("previous_check_out").toLocalDate(),
                 rs.getObject("previous_room_type_id", UUID.class),
+                rs.getString("previous_room_type_name"),
                 rs.getObject("previous_rate_plan_id", UUID.class),
+                rs.getString("previous_rate_plan_name"),
                 rs.getDate("target_check_in").toLocalDate(), rs.getDate("target_check_out").toLocalDate(),
-                rs.getObject("target_room_type_id", UUID.class), rs.getObject("target_rate_plan_id", UUID.class),
+                rs.getObject("target_room_type_id", UUID.class), rs.getString("target_room_type_name"),
+                rs.getObject("target_rate_plan_id", UUID.class), rs.getString("target_rate_plan_name"),
                 rs.getInt("rooms"), rs.getInt("adults"), rs.getInt("children"),
                 rs.getTimestamp("approval_expires_at").toInstant(),
                 rs.getObject("current_quote_id", UUID.class));
@@ -167,17 +186,23 @@ public class ReservationChangeViews {
             UUID id,
             UUID reservationId,
             UUID hotelId,
+            String hotelName,
+            String guestName,
             String status,
             String settlementDirection,
             long version,
             java.time.LocalDate previousCheckIn,
             java.time.LocalDate previousCheckOut,
             UUID previousRoomTypeId,
+            String previousRoomTypeName,
             UUID previousRatePlanId,
+            String previousRatePlanName,
             java.time.LocalDate targetCheckIn,
             java.time.LocalDate targetCheckOut,
             UUID targetRoomTypeId,
+            String targetRoomTypeName,
             UUID targetRatePlanId,
+            String targetRatePlanName,
             int rooms,
             int adults,
             int children,

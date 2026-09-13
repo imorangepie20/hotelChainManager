@@ -23,6 +23,8 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ReservationChangeApprovalQueue } from "@/components/hotel-admin/reservation-change-approval-queue";
+import { ReservationChangePanel } from "@/components/hotel-admin/reservation-change-panel";
 import {
   assignRoom,
   cancelStaffReservation,
@@ -30,7 +32,6 @@ import {
   getRoomReassignmentOptions,
   getStaffCancellationPreview,
   getStaffReservations,
-  previewStaffReservationStayChange,
   StaffApiError,
   reassignRoom,
   type AssignableRoom,
@@ -38,8 +39,6 @@ import {
   type StaffPrincipal,
   type StaffReservationGuestUpdateResult,
   type StaffReservationPartyUpdateResult,
-  type StaffReservationStayChangeOffer,
-  type StaffReservationStayChangePreview,
   type StaffReservationStayChangeResult,
   type RoomReassignmentOptions,
   type RoomReassignmentResult,
@@ -47,7 +46,6 @@ import {
   type StaffReservationSummary,
   updateStaffReservationGuest,
   updateStaffReservationParty,
-  updateStaffReservationStay,
 } from "@/lib/staff-api";
 
 const hotels = [
@@ -284,6 +282,8 @@ export function ReservationManagement() {
       {error && <p role="alert" className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
       {notice && <p role="status" aria-label="예약 처리 결과" className="rounded-xl border border-emerald-600/20 bg-emerald-500/10 p-3 text-sm text-emerald-800 dark:text-emerald-300">{notice}</p>}
 
+      {staff?.role === "HQ_ADMIN" && <ReservationChangeApprovalQueue />}
+
       <div className="grid items-start gap-4 xl:grid-cols-[20rem_minmax(0,1fr)]">
         <Card aria-label="예약 날짜 달력" role="group">
           <CardHeader>
@@ -354,6 +354,7 @@ export function ReservationManagement() {
 
       <ReservationDetail
         reservation={selectedReservation}
+        staff={staff}
         checkingCancellation={checkingCancellation}
         cancellationError={cancellationError}
         cancellationTriggerRef={cancellationTriggerRef}
@@ -406,6 +407,7 @@ export function ReservationManagement() {
 
 function ReservationDetail({
   reservation,
+  staff,
   checkingCancellation,
   cancellationError,
   cancellationTriggerRef,
@@ -418,6 +420,7 @@ function ReservationDetail({
   onOpenChange,
 }: {
   reservation: StaffReservationSummary | null;
+  staff: StaffPrincipal | null;
   checkingCancellation: boolean;
   cancellationError: string | null;
   cancellationTriggerRef: RefObject<HTMLButtonElement | null>;
@@ -457,7 +460,7 @@ function ReservationDetail({
                 <ReservationRoomReassignment reservation={reservation} onReassigned={onRoomReassigned} />
               )}
               {reservation.assignedRoomNumbers.length === 0 && (
-                <ReservationStayEditor reservation={reservation} onUpdated={onStayChanged} />
+                <ReservationChangePanel reservation={reservation} staff={staff} onLegacyUpdated={onStayChanged} />
               )}
               <ReservationGuestEditor reservation={reservation} onUpdated={onGuestDetailsUpdated} />
               <ReservationPartyEditor reservation={reservation} onUpdated={onPartyUpdated} />
@@ -702,210 +705,6 @@ function ReservationRoomAssignment({
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
     </section>
   );
-}
-
-function ReservationStayEditor({
-  reservation,
-  onUpdated,
-}: {
-  reservation: StaffReservationSummary;
-  onUpdated: (result: StaffReservationStayChangeResult) => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [checkIn, setCheckIn] = useState(reservation.checkIn);
-  const [checkOut, setCheckOut] = useState(reservation.checkOut);
-  const [preview, setPreview] = useState<StaffReservationStayChangePreview | null>(null);
-  const [selectedOfferId, setSelectedOfferId] = useState("");
-  const [idempotencyKey, setIdempotencyKey] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [loadingPreview, setLoadingPreview] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const canPreview = checkIn.length > 0 && checkOut.length > 0 && checkOut > checkIn;
-  const selectedOffer = preview?.offers.find((offer) => offerId(offer) === selectedOfferId) ?? null;
-
-  function beginEditing() {
-    setCheckIn(reservation.checkIn);
-    setCheckOut(reservation.checkOut);
-    setPreview(null);
-    setSelectedOfferId("");
-    setIdempotencyKey("");
-    setError(null);
-    setEditing(true);
-  }
-
-  function stopEditing() {
-    if (loadingPreview || saving) return;
-    setEditing(false);
-    setError(null);
-  }
-
-  function changeDate(setValue: (value: string) => void, value: string) {
-    setValue(value);
-    setPreview(null);
-    setSelectedOfferId("");
-    setIdempotencyKey("");
-    setError(null);
-  }
-
-  async function loadPreview(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const token = window.localStorage.getItem("hotel-chain-staff-session");
-    if (!token || !canPreview) return;
-    setLoadingPreview(true);
-    setError(null);
-    setPreview(null);
-    setSelectedOfferId("");
-    setIdempotencyKey("");
-    try {
-      const result = await previewStaffReservationStayChange(
-        token,
-        reservation.reservationId,
-        { checkIn, checkOut },
-      );
-      setPreview(result);
-      if (result.offers.length > 0) {
-        setSelectedOfferId(offerId(result.offers[0]));
-        setIdempotencyKey(window.crypto.randomUUID());
-      }
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "변경 가능한 숙박 조건을 조회하지 못했습니다.");
-    } finally {
-      setLoadingPreview(false);
-    }
-  }
-
-  function selectOffer(value: string) {
-    setSelectedOfferId(value);
-    setIdempotencyKey(window.crypto.randomUUID());
-    setError(null);
-  }
-
-  async function save() {
-    const token = window.localStorage.getItem("hotel-chain-staff-session");
-    if (!token || !selectedOffer || !idempotencyKey || !preview) return;
-    setSaving(true);
-    setError(null);
-    try {
-      const result = await updateStaffReservationStay(
-        token,
-        reservation.reservationId,
-        idempotencyKey,
-        {
-          checkIn: preview.checkIn,
-          checkOut: preview.checkOut,
-          roomTypeId: selectedOffer.roomTypeId,
-          ratePlanId: selectedOffer.ratePlanId,
-          expectedTotal: selectedOffer.totalKrw,
-        },
-      );
-      onUpdated(result);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "숙박 조건을 변경하지 못했습니다.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  if (!editing) {
-    return (
-      <div className="flex justify-end">
-        <Button variant="outline" onClick={beginEditing}>숙박 일정·객실 유형 변경</Button>
-      </div>
-    );
-  }
-
-  return (
-    <section aria-labelledby="reservation-stay-change-title" className="space-y-4 border-b pb-4">
-      <div>
-        <h3 id="reservation-stay-change-title" className="text-sm font-medium">숙박 일정·객실 유형 변경</h3>
-        <p className="mt-1 text-xs text-muted-foreground">새 날짜의 실제 재고와 최신 일별 요금을 서버에서 다시 확인합니다.</p>
-      </div>
-      <form className="space-y-4" onSubmit={(event) => void loadPreview(event)}>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-2">
-            <Label htmlFor="reservation-stay-check-in">변경 체크인</Label>
-            <Input
-              id="reservation-stay-check-in"
-              type="date"
-              value={checkIn}
-              disabled={loadingPreview || saving}
-              required
-              onChange={(event) => changeDate(setCheckIn, event.target.value)}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="reservation-stay-check-out">변경 체크아웃</Label>
-            <Input
-              id="reservation-stay-check-out"
-              type="date"
-              min={checkIn}
-              value={checkOut}
-              disabled={loadingPreview || saving}
-              required
-              onChange={(event) => changeDate(setCheckOut, event.target.value)}
-            />
-          </div>
-        </div>
-        <div className="flex flex-wrap justify-end gap-2">
-          <Button type="button" variant="ghost" disabled={loadingPreview || saving} onClick={stopEditing}>변경 취소</Button>
-          <Button type="submit" variant="outline" disabled={!canPreview || loadingPreview || saving}>
-            {loadingPreview ? "변경안 조회 중" : "변경안 조회"}
-          </Button>
-        </div>
-      </form>
-
-      {preview && preview.offers.length === 0 && (
-        <p role="status" className="rounded-lg bg-muted/60 p-3 text-sm">선택한 날짜에 변경 가능한 객실이 없습니다. 다른 날짜를 선택해 주세요.</p>
-      )}
-      {preview && preview.offers.length > 0 && (
-        <div className="space-y-4" aria-live="polite">
-          <div className="space-y-2">
-            <Label htmlFor="reservation-stay-offer">변경할 객실·요금제</Label>
-            <select
-              id="reservation-stay-offer"
-              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none transition-colors focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
-              value={selectedOfferId}
-              disabled={saving}
-              onChange={(event) => selectOffer(event.target.value)}
-            >
-              {preview.offers.map((offer) => (
-                <option key={offerId(offer)} value={offerId(offer)}>
-                  {offer.roomTypeName} · {offer.ratePlanName} · {money(offer.totalKrw, offer.currency)}
-                </option>
-              ))}
-            </select>
-          </div>
-          {selectedOffer && (
-            <div className="space-y-3 rounded-lg bg-muted/60 p-3 text-sm">
-              <dl className="grid gap-3 sm:grid-cols-2">
-                <Detail label="현재 예약 금액" value={money(preview.currentTotalKrw, preview.currency)} />
-                <Detail label="변경 예약 금액" value={money(selectedOffer.totalKrw, selectedOffer.currency)} />
-                <Detail label="금액 차이" value={differenceLabel(selectedOffer)} />
-                <Detail label="남은 객실" value={`${selectedOffer.remaining}실`} />
-              </dl>
-              <p className="text-xs text-muted-foreground">현재는 테스트 결제 범위입니다. 실제 추가 결제나 부분 환불은 처리되지 않습니다.</p>
-            </div>
-          )}
-          <div className="flex justify-end">
-            <Button type="button" disabled={!selectedOffer || !idempotencyKey || saving} onClick={() => void save()}>
-              {saving ? "변경 저장 중" : "숙박 조건 변경 확정"}
-            </Button>
-          </div>
-        </div>
-      )}
-      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-    </section>
-  );
-}
-
-function offerId(offer: StaffReservationStayChangeOffer) {
-  return `${offer.roomTypeId}:${offer.ratePlanId}`;
-}
-
-function differenceLabel(offer: StaffReservationStayChangeOffer) {
-  if (offer.differenceKrw > 0) return `추가 금액 ${money(offer.differenceKrw, offer.currency)}`;
-  if (offer.differenceKrw < 0) return `감소 금액 ${money(Math.abs(offer.differenceKrw), offer.currency)}`;
-  return "금액 차이 없음";
 }
 
 function ReservationGuestEditor({
