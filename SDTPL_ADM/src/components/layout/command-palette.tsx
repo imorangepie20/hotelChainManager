@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Search } from "lucide-react";
-import { navGroups } from "@/lib/nav";
+import { useStaffNavigation } from "@/hooks/use-staff-navigation";
 import { Button } from "@/components/ui/button";
 import {
   Command,
@@ -24,6 +24,7 @@ import {
 export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const router = useRouter();
+  const navGroups = useStaffNavigation();
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -40,11 +41,12 @@ export function CommandPalette() {
     <>
       <Button
         variant="outline"
-        className="relative h-9 w-full justify-start text-muted-foreground sm:w-64"
+        aria-label="메뉴 검색"
+        className="relative size-8 px-0 text-muted-foreground sm:h-9 sm:w-64 sm:justify-start sm:px-3"
         onClick={() => setOpen(true)}
       >
         <Search className="size-4" />
-        <span className="ml-2">Search…</span>
+        <span className="ml-2 hidden sm:inline">메뉴 검색…</span>
         <kbd className="pointer-events-none absolute right-2 top-2 hidden h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 text-[10px] font-medium sm:flex">
           ⌘K
         </kbd>
@@ -55,13 +57,13 @@ export function CommandPalette() {
           showCloseButton={false}
         >
           <DialogHeader className="sr-only">
-            <DialogTitle>Command Palette</DialogTitle>
-            <DialogDescription>Search for a page to navigate to.</DialogDescription>
+            <DialogTitle>메뉴 검색</DialogTitle>
+            <DialogDescription>이동할 관리자 메뉴를 검색합니다.</DialogDescription>
           </DialogHeader>
           <Command>
-            <CommandInput placeholder="Type a page name…" />
+            <CommandInput placeholder="메뉴 이름을 입력하세요…" />
             <CommandList>
-              <CommandEmpty>No results found.</CommandEmpty>
+              <CommandEmpty>검색 결과가 없습니다.</CommandEmpty>
               {navGroups.map((group) => (
                 <CommandGroup key={group.label} heading={group.label}>
                   {group.items.map((item) => (

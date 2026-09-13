@@ -6,7 +6,7 @@ export type StaffPrincipal = {
 
   displayName: string;
 
-  role: "HQ_ADMIN" | "BRANCH_STAFF";
+  role: "HQ_ADMIN" | "HQ_EDITOR" | "HQ_PUBLISHER" | "BRANCH_STAFF";
 
   hotelId: string | null;
 

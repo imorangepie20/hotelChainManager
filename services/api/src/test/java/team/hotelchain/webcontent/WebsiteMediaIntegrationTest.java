@@ -12,6 +12,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import javax.imageio.ImageIO;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,6 +21,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.test.context.transaction.TestTransaction;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 import team.hotelchain.staff.StaffAccessDeniedException;
@@ -36,6 +38,7 @@ class WebsiteMediaIntegrationTest {
     @org.springframework.beans.factory.annotation.Autowired StaffAccessService staffAccess;
     @org.springframework.beans.factory.annotation.Autowired WebsiteMediaService media;
     @org.springframework.beans.factory.annotation.Autowired PublicWebsiteMediaController publicMedia;
+    @org.springframework.beans.factory.annotation.Autowired WebsitePageService pages;
 
     @BeforeEach
     void seed() throws IOException {
@@ -89,6 +92,62 @@ class WebsiteMediaIntegrationTest {
         WebsiteMediaAsset jpeg = media.upload(headquarters.token(),
                 new MemoryMultipartFile("hero.png", "image/png", image("jpeg")), "테스트 JPEG", "숲을 바라보는 객실");
         assertThat(jpeg.mimeType()).isEqualTo("image/jpeg");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void replacesAnUploadedAssetThroughDraftAndPublishWithoutOverwritingFilesOtherPagesOrHistory() throws IOException {
+        String token = staffAccess.login("media-hq@example.com", "hq-password").token();
+        byte[] oldBytes = image("png");
+        byte[] newBytes = image("jpeg");
+        WebsiteMediaAsset oldAsset = media.upload(token,
+                new MemoryMultipartFile("same-name.png", "image/png", oldBytes), "기존 자산", "기본 alt");
+        Map<String, Object> content = Map.of("seo", Map.of("title", "교체 테스트", "description", "미디어 교체 검증"), "blocks", List.of(Map.of(
+                "type", "HERO", "imageAssetId", oldAsset.id().toString(), "imageSrc", oldAsset.deliveryUrl(),
+                "imageAlt", "페이지 문맥 alt", "eyebrow", "STAY HANEUL", "title", "교체 테스트", "description", "이미지 교체")));
+        UUID parent = UUID.fromString("12000000-0000-0000-0000-000000000005");
+        WebsitePageDocument created = pages.createContentPage(token, parent,
+                new WebsitePageDraftMetadata("media-replacement", "교체 테스트", true, 10), content);
+        WebsitePageDocument first = pages.publishPage(token, created.id(), created.draftVersion(), created.publishedVersion());
+        WebsitePageDocument otherCreated = pages.createContentPage(token, parent,
+                new WebsitePageDraftMetadata("media-unchanged", "다른 페이지", true, 20), content);
+        WebsitePageDocument other = pages.publishPage(token, otherCreated.id(), otherCreated.draftVersion(), otherCreated.publishedVersion());
+        String oldSnapshot = jdbc.queryForObject("select page_snapshot::text from website_page_version where page_id = ? and version = ?",
+                String.class, first.id(), first.publishedVersion());
+
+        WebsiteMediaAsset replacement = media.upload(token,
+                new MemoryMultipartFile("same-name.png", "image/png", newBytes), "새 자산", "새 기본 alt");
+        assertThat(replacement.id()).isNotEqualTo(oldAsset.id());
+        assertThat(replacement.deliveryUrl()).isNotEqualTo(oldAsset.deliveryUrl());
+        assertThat(pages.pageDraft(token, first.id())).isEqualTo(first);
+
+        Map<String, Object> hero = new java.util.LinkedHashMap<>((Map<String, Object>) ((List<?>) first.draftContent().get("blocks")).getFirst());
+        hero.put("imageAssetId", replacement.id().toString());
+        hero.put("imageSrc", replacement.deliveryUrl());
+        Map<String, Object> changed = new java.util.LinkedHashMap<>(first.draftContent());
+        changed.put("blocks", List.of(hero));
+        WebsitePageDocument saved = pages.saveContentPageDraft(token, first.id(), first.draftVersion(),
+                new WebsitePageDraftMetadata("media-replacement", "교체 테스트", true, 10), changed);
+        assertThat(saved.publishedContent()).isEqualTo(first.publishedContent());
+        assertThat(pages.resolvePublished("/brand/media-replacement").content()).isEqualTo(first.publishedContent());
+        assertThat(media.usages(token, replacement.id())).singleElement().satisfies(usage -> {
+            assertThat(usage.documentState()).isEqualTo("DRAFT");
+            assertThat(usage.altText()).isEqualTo("페이지 문맥 alt");
+        });
+        assertThat(media.usages(token, oldAsset.id())).hasSize(3);
+
+        pages.publishPage(token, first.id(), saved.draftVersion(), saved.publishedVersion());
+        Map<String, Object> publicHero = (Map<String, Object>) ((List<?>) pages.resolvePublished("/brand/media-replacement").content().get("blocks")).getFirst();
+        assertThat(publicHero).containsEntry("imageAssetId", replacement.id().toString()).containsEntry("imageAlt", "페이지 문맥 alt");
+        assertThat(media.usages(token, replacement.id())).extracting(WebsiteMediaUsage::documentState).containsExactly("DRAFT", "PUBLISHED");
+        assertThat(media.usages(token, oldAsset.id())).hasSize(2).allSatisfy(usage -> assertThat(usage.pageId()).isEqualTo(other.id()));
+        assertThat(pages.pageDraft(token, other.id())).isEqualTo(other);
+        assertThat(jdbc.queryForObject("select page_snapshot::text from website_page_version where page_id = ? and version = ?",
+                String.class, first.id(), first.publishedVersion())).isEqualTo(oldSnapshot);
+        assertThat(media.publicContent(oldAsset.id()).bytes()).isEqualTo(oldBytes);
+        assertThat(media.publicContent(replacement.id()).bytes()).isEqualTo(newBytes);
+        assertThat(media.catalog(token)).filteredOn(asset -> asset.id().equals(oldAsset.id())).singleElement()
+                .satisfies(asset -> assertThat(asset.version()).isEqualTo(oldAsset.version()));
     }
 
     @Test
@@ -180,6 +239,8 @@ class WebsiteMediaIntegrationTest {
                 new WebsiteMediaVersionRequest(uploaded.version()));
         assertThat(archived.status()).isEqualTo("ARCHIVED");
         assertThat(archived.version()).isEqualTo(uploaded.version() + 1);
+        assertThat(archived.archivedAt()).isNotNull();
+        assertThat(archived.permanentDeleteAvailableAt()).isEqualTo(archived.archivedAt().plusDays(30));
         assertThat(media.catalog(headquarters.token())).extracting(WebsiteMediaAsset::id)
                 .doesNotContain(uploaded.id());
         assertThat(media.catalog(headquarters.token(), true)).extracting(WebsiteMediaAsset::id)
@@ -194,7 +255,133 @@ class WebsiteMediaIntegrationTest {
                 new WebsiteMediaVersionRequest(archived.version()));
         assertThat(restored.status()).isEqualTo("ACTIVE");
         assertThat(restored.version()).isEqualTo(archived.version() + 1);
+        assertThat(restored.archivedAt()).isNull();
+        assertThat(restored.permanentDeleteAvailableAt()).isNull();
         assertThat(media.publicContent(uploaded.id()).bytes()).isEqualTo(uploadedBytes);
+    }
+
+    @Test
+    void permanentlyDeletesAnEligibleArchivedUploadAndItsStoredFile() throws IOException {
+        StaffSessionView headquarters = staffAccess.login("media-hq@example.com", "hq-password");
+        WebsiteMediaAsset uploaded = media.upload(headquarters.token(),
+                new MemoryMultipartFile("delete-me.png", "image/png", image("png")),
+                "영구 삭제 대상", "영구 삭제 대상 기본 alt");
+        WebsiteMediaAsset archived = media.archive(headquarters.token(), uploaded.id(),
+                new WebsiteMediaVersionRequest(uploaded.version()));
+        jdbc.update("update website_media_asset set archived_at = current_timestamp - interval '31 days' where id = ?",
+                uploaded.id());
+        Path storedFile = Path.of(System.getProperty("java.io.tmpdir"), "hotel-chain-media", uploaded.id() + ".png");
+
+        media.permanentlyDelete(headquarters.token(), uploaded.id(),
+                new WebsiteMediaVersionRequest(archived.version()));
+
+        assertThat(media.catalog(headquarters.token(), true)).extracting(WebsiteMediaAsset::id)
+                .doesNotContain(uploaded.id());
+        assertThat(Files.exists(storedFile)).isFalse();
+    }
+
+    @Test
+    void restoresTheStoredFileWhenTheDeleteTransactionRollsBack() throws IOException {
+        StaffSessionView headquarters = staffAccess.login("media-hq@example.com", "hq-password");
+        WebsiteMediaAsset uploaded = media.upload(headquarters.token(),
+                new MemoryMultipartFile("rollback.png", "image/png", image("png")),
+                "롤백 복구 대상", "롤백 복구 대상 기본 alt");
+        WebsiteMediaAsset archived = media.archive(headquarters.token(), uploaded.id(),
+                new WebsiteMediaVersionRequest(uploaded.version()));
+        jdbc.update("update website_media_asset set archived_at = current_timestamp - interval '31 days' where id = ?",
+                uploaded.id());
+        Path storedFile = Path.of(System.getProperty("java.io.tmpdir"), "hotel-chain-media", uploaded.id() + ".png");
+
+        media.permanentlyDelete(headquarters.token(), uploaded.id(),
+                new WebsiteMediaVersionRequest(archived.version()));
+        assertThat(Files.exists(storedFile)).isFalse();
+
+        TestTransaction.flagForRollback();
+        TestTransaction.end();
+
+        assertThat(Files.exists(storedFile)).isTrue();
+        Files.deleteIfExists(storedFile);
+    }
+
+    @Test
+    void rejectsPermanentDeletionBeforeTheArchiveGracePeriodEnds() throws IOException {
+        StaffSessionView headquarters = staffAccess.login("media-hq@example.com", "hq-password");
+        WebsiteMediaAsset uploaded = media.upload(headquarters.token(),
+                new MemoryMultipartFile("recent.png", "image/png", image("png")),
+                "최근 보관 자산", "최근 보관 자산 기본 alt");
+        WebsiteMediaAsset archived = media.archive(headquarters.token(), uploaded.id(),
+                new WebsiteMediaVersionRequest(uploaded.version()));
+
+        assertThatThrownBy(() -> media.permanentlyDelete(headquarters.token(), uploaded.id(),
+                new WebsiteMediaVersionRequest(archived.version())))
+                .isInstanceOf(WebsiteMediaConflictException.class)
+                .extracting(error -> ((WebsiteMediaConflictException) error).code())
+                .isEqualTo("WEBSITE_MEDIA_DELETE_CONFLICT");
+    }
+
+    @Test
+    void rejectsPermanentDeletionOfActiveAndBundledAssets() throws IOException {
+        StaffSessionView headquarters = staffAccess.login("media-hq@example.com", "hq-password");
+        WebsiteMediaAsset uploaded = media.upload(headquarters.token(),
+                new MemoryMultipartFile("active.png", "image/png", image("png")),
+                "활성 자산", "활성 자산 기본 alt");
+
+        assertThatThrownBy(() -> media.permanentlyDelete(headquarters.token(), uploaded.id(),
+                new WebsiteMediaVersionRequest(uploaded.version())))
+                .isInstanceOf(WebsiteMediaConflictException.class)
+                .extracting(error -> ((WebsiteMediaConflictException) error).code())
+                .isEqualTo("WEBSITE_MEDIA_DELETE_CONFLICT");
+        assertThatThrownBy(() -> media.permanentlyDelete(headquarters.token(), BUNDLED_ASSET,
+                new WebsiteMediaVersionRequest(1)))
+                .isInstanceOf(WebsiteMediaConflictException.class)
+                .extracting(error -> ((WebsiteMediaConflictException) error).code())
+                .isEqualTo("WEBSITE_MEDIA_DELETE_CONFLICT");
+    }
+
+    @Test
+    void rejectsPermanentDeletionWhenAnArchivedAssetHasAUsage() throws IOException {
+        StaffSessionView headquarters = staffAccess.login("media-hq@example.com", "hq-password");
+        WebsiteMediaAsset uploaded = media.upload(headquarters.token(),
+                new MemoryMultipartFile("referenced.png", "image/png", image("png")),
+                "참조 자산", "참조 자산 기본 alt");
+        WebsiteMediaAsset archived = media.archive(headquarters.token(), uploaded.id(),
+                new WebsiteMediaVersionRequest(uploaded.version()));
+        jdbc.update("update website_media_asset set archived_at = current_timestamp - interval '31 days' where id = ?",
+                uploaded.id());
+        jdbc.update("""
+                insert into website_media_usage (asset_id, page_id, document_state, field_path, alt_text)
+                select ?, page_id, document_state, 'test.permanentDelete', '참조 중인 자산'
+                  from website_media_usage
+                 limit 1
+                """, uploaded.id());
+
+        assertThatThrownBy(() -> media.permanentlyDelete(headquarters.token(), uploaded.id(),
+                new WebsiteMediaVersionRequest(archived.version())))
+                .isInstanceOf(WebsiteMediaConflictException.class)
+                .extracting(error -> ((WebsiteMediaConflictException) error).code())
+                .isEqualTo("WEBSITE_MEDIA_IN_USE");
+    }
+
+    @Test
+    void rejectsPermanentDeletionByBranchStaffAndWithAStaleVersion() throws IOException {
+        StaffSessionView headquarters = staffAccess.login("media-hq@example.com", "hq-password");
+        StaffSessionView branch = staffAccess.login("media-branch@example.com", "branch-password");
+        WebsiteMediaAsset uploaded = media.upload(headquarters.token(),
+                new MemoryMultipartFile("protected.png", "image/png", image("png")),
+                "삭제 보호 자산", "삭제 보호 자산 기본 alt");
+        WebsiteMediaAsset archived = media.archive(headquarters.token(), uploaded.id(),
+                new WebsiteMediaVersionRequest(uploaded.version()));
+        jdbc.update("update website_media_asset set archived_at = current_timestamp - interval '31 days' where id = ?",
+                uploaded.id());
+
+        assertThatThrownBy(() -> media.permanentlyDelete(branch.token(), uploaded.id(),
+                new WebsiteMediaVersionRequest(archived.version())))
+                .isInstanceOf(StaffAccessDeniedException.class);
+        assertThatThrownBy(() -> media.permanentlyDelete(headquarters.token(), uploaded.id(),
+                new WebsiteMediaVersionRequest(uploaded.version())))
+                .isInstanceOf(WebsiteMediaConflictException.class)
+                .extracting(error -> ((WebsiteMediaConflictException) error).code())
+                .isEqualTo("WEBSITE_MEDIA_VERSION_CONFLICT");
     }
 
     @Test

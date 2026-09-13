@@ -103,6 +103,45 @@ for (const width of [1280, 390]) test(`edits and publishes the English translati
   await expect(page.getByLabel("히어로 제목", { exact: true })).toHaveValue("브랜드 이야기");
 });
 
+test("shows translation actions for the authenticated role and blocks self approval", async ({ page }) => {
+  const translationPath = `/api/staff/website/pages/${STORY_PAGE}/translations/en`;
+  let requesterId = "editor-test";
+  await page.route(`**${translationPath}`, route => route.fulfill({ json: contentPageDocument({ publishedVersion: 0, publishedMetadata: null }) }));
+  await page.route(`**${translationPath}/versions`, route => route.fulfill({ json: [] }));
+  await page.route(`**${translationPath}/review`, route => route.fulfill({ json: translationReviewState({
+    status: "IN_REVIEW",
+    reviewedDraftVersion: 1,
+    events: [{ id: 1, action: "REVIEW_REQUESTED", draftVersion: 1, actorId: requesterId, actorDisplayName: "영문 편집자", createdAt: "2026-09-13T00:00:00Z", comment: null }],
+  }) }));
+
+  async function openAs(id: string, role: "HQ_ADMIN" | "HQ_EDITOR" | "HQ_PUBLISHER") {
+    await page.goto("/dashboard/website");
+    await page.evaluate(({ id, role }) => localStorage.setItem("hotel-chain-staff", JSON.stringify({
+      id, email: `${id}@example.test`, displayName: id, role, hotelId: null,
+    })), { id, role });
+    await page.reload();
+    await page.getByRole("button", { name: /브랜드 이야기/ }).click();
+    await page.getByRole("button", { name: "영어", exact: true }).click();
+    await expect(page.getByLabel("영어 번역 검토")).toBeVisible();
+  }
+
+  await openAs("editor-test", "HQ_EDITOR");
+  await expect(page.getByLabel("히어로 제목", { exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "승인", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "반려", exact: true })).toHaveCount(0);
+
+  await openAs("publisher-test", "HQ_PUBLISHER");
+  await expect(page.getByLabel("히어로 제목", { exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "승인", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "반려", exact: true })).toBeVisible();
+
+  requesterId = "hq-test";
+  await openAs("hq-test", "HQ_ADMIN");
+  await expect(page.getByRole("button", { name: "승인", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "반려", exact: true })).toBeVisible();
+  await expect(page.getByText("본인이 요청한 초안은 다른 승인자가 승인해야 합니다.", { exact: true })).toBeVisible();
+});
+
 test("rejects an English translation and returns dialog focus on cancel, Escape, and success", async ({ page }) => {
   let review = translationReviewState({ status: "IN_REVIEW", reviewedDraftVersion: 1 });
   let rejection: Record<string, unknown> | undefined;
@@ -762,13 +801,15 @@ test.beforeEach(async ({ page }) => {
 
   await page.addInitScript(() => {
     localStorage.setItem("hotel-chain-staff-session", "test-session-token");
-    localStorage.setItem("hotel-chain-staff", JSON.stringify({
-      id: "hq-test",
-      email: "hq@example.test",
-      displayName: "본사 관리자",
-      role: "HQ_ADMIN",
-      hotelId: null,
-    }));
+    if (!localStorage.getItem("hotel-chain-staff")) {
+      localStorage.setItem("hotel-chain-staff", JSON.stringify({
+        id: "hq-test",
+        email: "hq@example.test",
+        displayName: "본사 관리자",
+        role: "HQ_ADMIN",
+        hotelId: null,
+      }));
+    }
   });
   await page.route("**/api/staff/me", (route) => route.fulfill({ status: 200, contentType: "application/json", body: "{}" }));
   await page.route("**/api/staff/website/content-reference", (route) => route.fulfill({

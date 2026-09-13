@@ -17,6 +17,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import {
   archiveWebsiteMedia,
+  deleteWebsiteMedia,
   getWebsiteMedia,
   getWebsiteMediaUsages,
   restoreWebsiteMedia,
@@ -28,6 +29,7 @@ import {
 } from "@/lib/staff-api";
 
 const customerWebOrigin = (process.env.NEXT_PUBLIC_CUSTOMER_WEB_ORIGIN ?? "http://127.0.0.1:4000").replace(/\/$/, "");
+const deleteDateFormatter = new Intl.DateTimeFormat("ko-KR", { dateStyle: "long", timeZone: "Asia/Seoul" });
 
 function previewUrl(deliveryUrl: string) {
   if (deliveryUrl.startsWith("/images/")) return `${customerWebOrigin}${deliveryUrl}`;
@@ -47,6 +49,20 @@ function usageStateLabel(state: WebsiteMediaUsage["documentState"]) {
 
 function assetStatusLabel(status: WebsiteMediaAsset["status"]) {
   return status === "ACTIVE" ? "활성" : "보관됨";
+}
+
+function permanentDeleteState(asset: WebsiteMediaAsset) {
+  const uploaded = asset.deliveryUrl.startsWith("/api/website/media/");
+  if (asset.status !== "ARCHIVED" || !uploaded || !asset.permanentDeleteAvailableAt) {
+    return { eligible: false, label: "영구 삭제 대상이 아닙니다." };
+  }
+  const availableAt = new Date(asset.permanentDeleteAvailableAt);
+  if (Number.isNaN(availableAt.getTime())) {
+    return { eligible: false, label: "영구 삭제 가능일을 확인할 수 없습니다." };
+  }
+  return availableAt.getTime() <= Date.now()
+    ? { eligible: true, label: "영구 삭제 가능" }
+    : { eligible: false, label: `영구 삭제 가능일 ${deleteDateFormatter.format(availableAt)}` };
 }
 
 function AssetCard({ asset, selected, disabled = false, onSelect }: {
@@ -82,12 +98,13 @@ function AssetCard({ asset, selected, disabled = false, onSelect }: {
   );
 }
 
-export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, protectedAssetIds, onSelect }: {
+export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, protectedAssetIds, replacement, onSelect }: {
   token: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   initialAssetId: string;
   protectedAssetIds: readonly string[];
+  replacement?: { deliveryUrl: string; altText: string };
   onSelect: (asset: WebsiteMediaAsset) => void;
 }) {
   const [assets, setAssets] = useState<WebsiteMediaAsset[]>([]);
@@ -109,6 +126,10 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
   const [savingMetadata, setSavingMetadata] = useState(false);
   const [changingStatus, setChangingStatus] = useState(false);
   const [archiveConfirmationOpen, setArchiveConfirmationOpen] = useState(false);
+  const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
+  const [replacementConfirmationOpen, setReplacementConfirmationOpen] = useState(false);
+  const [replacementAssetId, setReplacementAssetId] = useState<string | null>(null);
+  const uploadRequestGeneration = useRef(0);
   const catalogRequestGeneration = useRef(0);
   const usageRequestGeneration = useRef(0);
 
@@ -161,11 +182,15 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
 
   useEffect(() => {
     if (!open) return;
+    setReplacementAssetId(null);
+    setUploading(false);
+    setUploadError("");
+    setUploadNotice("");
     setSelectedAssetId(initialAssetId);
     setMetadataError("");
     setMetadataNotice("");
     void refreshCatalog(initialAssetId, true);
-    return () => { catalogRequestGeneration.current += 1; };
+    return () => { catalogRequestGeneration.current += 1; uploadRequestGeneration.current += 1; };
   }, [initialAssetId, open, refreshCatalog]);
 
   useEffect(() => {
@@ -203,28 +228,32 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
   }
 
   async function upload() {
+    setReplacementAssetId(null);
     if (!file || !displayName.trim() || !defaultAltText.trim()) {
       setUploadNotice("");
       setUploadError("이미지 파일, 자산명, 기본 대체 텍스트를 모두 입력해 주세요.");
       return;
     }
     setUploading(true);
+    const requestGeneration = ++uploadRequestGeneration.current;
     setUploadError("");
     setUploadNotice("");
     try {
       const asset = await uploadWebsiteMedia(token, { file, displayName: displayName.trim(), defaultAltText: defaultAltText.trim() });
+      if (uploadRequestGeneration.current !== requestGeneration) return;
       catalogRequestGeneration.current += 1;
       setAssets((current) => [asset, ...current.filter((item) => item.id !== asset.id)]);
       setSelectedAssetId(asset.id);
+      setReplacementAssetId(asset.id);
       setFile(null);
       setDisplayName("");
       setDefaultAltText("");
       setUploadNotice("이미지가 업로드되었습니다. 선택 후 이 페이지의 대체 텍스트를 확인해 주세요.");
       void refreshCatalog(asset.id, false);
     } catch (cause) {
-      setUploadError(cause instanceof Error ? cause.message : "이미지를 업로드하지 못했습니다.");
+      if (uploadRequestGeneration.current === requestGeneration) setUploadError(cause instanceof Error ? cause.message : "이미지를 업로드하지 못했습니다.");
     } finally {
-      setUploading(false);
+      if (uploadRequestGeneration.current === requestGeneration) setUploading(false);
     }
   }
 
@@ -292,15 +321,47 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
     }
   }
 
+  async function permanentlyDeleteSelected() {
+    if (!selectedAsset) return;
+    setChangingStatus(true);
+    setMetadataError("");
+    setMetadataNotice("");
+    try {
+      await deleteWebsiteMedia(token, selectedAsset.id, { expectedVersion: selectedAsset.version });
+      const remaining = assets.filter((asset) => asset.id !== selectedAsset.id);
+      const nextSelected = remaining.find((asset) => asset.status === "ACTIVE") ?? remaining[0] ?? null;
+      setAssets(remaining);
+      setSelectedAssetId(nextSelected?.id ?? null);
+      setMetadataDisplayName(nextSelected?.displayName ?? "");
+      setMetadataAltText(nextSelected?.defaultAltText ?? "");
+      setUsages([]);
+      setMetadataNotice("자산을 영구 삭제했습니다. 이 작업은 되돌릴 수 없습니다.");
+      if (nextSelected) void refreshUsages(nextSelected.id);
+    } catch (cause) {
+      if (isMediaConflict(cause)) await recoverFromMediaConflict(selectedAsset.id);
+      else setMetadataError(cause instanceof Error ? cause.message : "자산을 영구 삭제하지 못했습니다.");
+    } finally {
+      setChangingStatus(false);
+      setDeleteConfirmationOpen(false);
+    }
+  }
+
   function handleOpenChange(nextOpen: boolean) {
     if (!nextOpen) {
       catalogRequestGeneration.current += 1;
       usageRequestGeneration.current += 1;
+      uploadRequestGeneration.current += 1;
+      setReplacementConfirmationOpen(false);
+      setReplacementAssetId(null);
+      setFile(null);
+      setDisplayName("");
+      setDefaultAltText("");
       setMetadataDisplayName("");
       setMetadataAltText("");
       setMetadataError("");
       setMetadataNotice("");
       setArchiveConfirmationOpen(false);
+      setDeleteConfirmationOpen(false);
     }
     onOpenChange(nextOpen);
   }
@@ -311,15 +372,15 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="flex max-h-[90vh] max-w-[calc(100%-1rem)] flex-col gap-0 p-0 sm:max-w-5xl" showCloseButton>
         <DialogHeader className="shrink-0 border-b p-5 pr-12">
-          <DialogTitle>미디어 선택</DialogTitle>
-          <DialogDescription>활성 자산을 선택하거나 PNG/JPEG 파일을 업로드합니다. 선택은 하단 버튼을 눌러야 현재 페이지에 적용됩니다.</DialogDescription>
+          <DialogTitle>{replacement ? "미디어 파일 교체" : "미디어 선택"}</DialogTitle>
+          <DialogDescription>{replacement ? "새 PNG/JPEG 파일을 업로드한 뒤 교체를 확인합니다. 기존 파일은 유지하며, 현재 편집 위치만 바꿉니다. 업로드 후 취소한 자산은 카탈로그에 남습니다." : "활성 자산을 선택하거나 PNG/JPEG 파일을 업로드합니다. 선택은 하단 버튼을 눌러야 현재 페이지에 적용됩니다."}</DialogDescription>
         </DialogHeader>
 
         <div className="min-h-0 overflow-y-auto p-5">
           <section className="rounded-xl border bg-muted/20 p-4">
             <div className="grid gap-3 md:grid-cols-[1.15fr_1fr_1fr_auto] md:items-end">
               <label className="grid gap-1 text-sm font-medium">이미지 파일
-                <Input aria-label="이미지 파일" type="file" accept="image/png,image/jpeg" disabled={savingMetadata || changingStatus} onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
+                <Input aria-label="이미지 파일" type="file" accept="image/png,image/jpeg" disabled={uploading || savingMetadata || changingStatus} onChange={(event) => { setFile(event.target.files?.[0] ?? null); setReplacementAssetId(null); }} />
               </label>
               <label className="grid gap-1 text-sm font-medium">자산명
                 <Input aria-label="자산명" value={displayName} maxLength={160} disabled={savingMetadata || changingStatus} onChange={(event) => setDisplayName(event.target.value)} />
@@ -354,7 +415,7 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
             </div>
 
             <aside className="grid h-fit gap-4 rounded-xl border bg-muted/20 p-4">
-              <section>
+              {!replacement && <section>
                 <h3 className="font-medium">자산 정보</h3>
                 {!selectedAsset ? <p className="mt-3 text-sm text-muted-foreground">자산을 선택하면 메타데이터와 사용 위치를 표시합니다.</p> : <div className="mt-3 grid gap-3">
                   <p className="text-xs text-muted-foreground">{assetStatusLabel(selectedAsset.status)} · 버전 {selectedAsset.version} · 사용 위치 {selectedAsset.usageCount}곳</p>
@@ -369,19 +430,23 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
                     <Button type="button" variant="outline" onClick={() => setArchiveConfirmationOpen(true)} disabled={savingMetadata || changingStatus || selectedAsset.usageCount > 0 || selectedByCurrentDraft}>보관</Button>
                     {selectedAsset.usageCount > 0 && <p className="text-xs text-muted-foreground">사용 위치가 있어 보관할 수 없습니다.</p>}
                     {selectedAsset.usageCount === 0 && selectedByCurrentDraft && <p className="text-xs text-muted-foreground">현재 페이지의 저장되지 않은 초안에서 선택되어 보관할 수 없습니다.</p>}
-                  </> : <Button type="button" variant="outline" onClick={() => void restoreSelected()} disabled={savingMetadata || changingStatus}>{changingStatus ? "복원 중" : "복원"}</Button>}
+                  </> : <>
+                    <Button type="button" variant="outline" onClick={() => void restoreSelected()} disabled={savingMetadata || changingStatus}>{changingStatus ? "복원 중" : "복원"}</Button>
+                    <p className="text-xs text-muted-foreground">{permanentDeleteState(selectedAsset).label}</p>
+                    <Button type="button" variant="destructive" onClick={() => setDeleteConfirmationOpen(true)} disabled={savingMetadata || changingStatus || !permanentDeleteState(selectedAsset).eligible}>영구 삭제</Button>
+                  </>}
                   {metadataNotice && <p role="status" className="text-sm text-emerald-700">{metadataNotice}</p>}
                   {metadataError && <p role="alert" className="text-sm text-destructive">{metadataError}</p>}
                 </div>}
-              </section>
+              </section>}
 
               <section className="border-t pt-4">
                 <h3 className="font-medium">사용 위치</h3>
                 {!selectedAsset ? <p className="mt-3 text-sm text-muted-foreground">자산을 선택하면 초안과 발행 사용 위치를 표시합니다.</p> : loadingUsages ? <p className="mt-3 text-sm text-muted-foreground">사용 위치를 불러오는 중입니다.</p> : usages.length === 0 ? <p className="mt-3 text-sm text-muted-foreground">현재 등록된 사용 위치가 없습니다.</p> : (
                   <ul className="mt-3 grid gap-3">
                     {usages.map((usage) => (
-                      <li key={`${usage.pageId}-${usage.documentState}-${usage.fieldPath}`} className="rounded-lg border bg-background p-3 text-sm">
-                        <p className="font-medium">{usage.pageLabel} · {usageStateLabel(usage.documentState)}</p>
+                      <li key={`${usage.pageId}-${usage.locale ?? "ko"}-${usage.documentState}-${usage.fieldPath}`} className="rounded-lg border bg-background p-3 text-sm">
+                        <p className="font-medium">{usage.pageLabel} · {usage.locale === "en" ? "영어" : "한국어"} · {usageStateLabel(usage.documentState)}</p>
                         <p className="mt-1 break-all text-xs text-muted-foreground">{usage.pagePath} · {usage.fieldPath}</p>
                         <p className="mt-1 text-xs text-muted-foreground">대체 텍스트: {usage.altText}</p>
                       </li>
@@ -395,7 +460,7 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
 
         <DialogFooter className="shrink-0">
           <Button type="button" variant="outline" onClick={close}>취소</Button>
-          <Button type="button" disabled={!selectedAsset || selectedAsset.status !== "ACTIVE" || loading || uploading || savingMetadata || changingStatus} onClick={() => { if (selectedAsset?.status === "ACTIVE") { onSelect(selectedAsset); close(); } }}>선택</Button>
+          <Button type="button" disabled={!selectedAsset || selectedAsset.status !== "ACTIVE" || loading || uploading || savingMetadata || changingStatus || Boolean(replacement && selectedAsset.id !== replacementAssetId)} onClick={() => { if (selectedAsset?.status === "ACTIVE") { if (replacement) setReplacementConfirmationOpen(true); else { onSelect(selectedAsset); close(); } } }}>{replacement ? "교체 확인" : "선택"}</Button>
         </DialogFooter>
       </DialogContent>
       <AlertDialog open={archiveConfirmationOpen} onOpenChange={setArchiveConfirmationOpen}>
@@ -407,6 +472,35 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
           <AlertDialogFooter>
             <AlertDialogCancel>취소</AlertDialogCancel>
             <AlertDialogAction disabled={savingMetadata || changingStatus} onClick={() => void archiveSelected()}>보관하기</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog open={deleteConfirmationOpen} onOpenChange={setDeleteConfirmationOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>보관 자산을 영구 삭제할까요?</AlertDialogTitle>
+            <AlertDialogDescription><strong>{selectedAsset?.displayName}</strong> 자산과 저장된 원본 파일을 영구 삭제합니다. 이 작업은 되돌릴 수 없습니다.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={changingStatus}>취소</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" disabled={changingStatus} onClick={(event) => { event.preventDefault(); void permanentlyDeleteSelected(); }}>영구 삭제</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog open={replacementConfirmationOpen} onOpenChange={setReplacementConfirmationOpen}>
+        <AlertDialogContent className="max-h-[90vh] overflow-y-auto">
+          <AlertDialogHeader>
+            <AlertDialogTitle>현재 이미지 파일을 교체할까요?</AlertDialogTitle>
+            <AlertDialogDescription>현재 편집 위치만 새 자산으로 교체합니다. 다른 사용 위치와 발행본은 바뀌지 않습니다. 기존 파일과 발행 이력은 유지하며, 고객 공개에는 초안 저장 후 발행이 필요합니다. 페이지별 대체 텍스트는 유지하므로 새 이미지에 맞는지 확인해 주세요.</AlertDialogDescription>
+          </AlertDialogHeader>
+          {replacement && selectedAsset && <div className="grid gap-4 sm:grid-cols-2">
+            <figure className="min-w-0"><img src={previewUrl(replacement.deliveryUrl)} alt="기존 이미지" className="aspect-video w-full rounded-md object-cover" /><figcaption className="mt-2 text-sm">기존 이미지</figcaption></figure>
+            <figure className="min-w-0"><img src={previewUrl(selectedAsset.deliveryUrl)} alt="새 이미지" className="aspect-video w-full rounded-md object-cover" /><figcaption className="mt-2 break-words text-sm">새 이미지 · {selectedAsset.displayName}</figcaption></figure>
+            <p className="text-sm text-muted-foreground sm:col-span-2">이 위치의 대체 텍스트: {replacement.altText}</p>
+          </div>}
+          <AlertDialogFooter>
+            <AlertDialogCancel>취소</AlertDialogCancel>
+            <AlertDialogAction disabled={!selectedAsset || selectedAsset.status !== "ACTIVE" || selectedAsset.id !== replacementAssetId || uploading || loading} onClick={() => { if (selectedAsset?.status === "ACTIVE" && selectedAsset.id === replacementAssetId) { onSelect(selectedAsset); close(); } }}>교체하기</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

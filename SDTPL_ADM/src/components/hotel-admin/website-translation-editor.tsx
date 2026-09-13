@@ -12,7 +12,7 @@ import { WebsiteTranslationReviewActions } from "@/components/hotel-admin/websit
 import {
   getWebsitePage, getWebsiteTranslation, getWebsiteTranslationReview, getWebsiteTranslationVersions, initializeWebsiteTranslation,
   publishWebsiteTranslation, saveWebsiteTranslation,
-  type ContentReferenceCatalog, type WebContentVersion, type WebsitePageDocument, type WebsitePageDraftMetadata,
+  type ContentReferenceCatalog, type StaffPrincipal, type WebContentVersion, type WebsitePageDocument, type WebsitePageDraftMetadata,
   type WebsiteTranslationReviewEvent, type WebsiteTranslationReviewState,
 } from "@/lib/staff-api";
 
@@ -95,8 +95,8 @@ function LandingTranslationEditor({ token, document, externalBusy, onDirtyChange
   </CardContent></Card>;
 }
 
-export function WebsiteTranslationEditor({ token, pageId, catalog, onDirtyChange, onBusyChange }: {
-  token: string; pageId: string; catalog: ContentReferenceCatalog; onDirtyChange: (dirty: boolean) => void; onBusyChange: (busy: boolean) => void;
+export function WebsiteTranslationEditor({ token, pageId, catalog, staff, onDirtyChange, onBusyChange }: {
+  token: string; pageId: string; catalog: ContentReferenceCatalog; staff: StaffPrincipal; onDirtyChange: (dirty: boolean) => void; onBusyChange: (busy: boolean) => void;
 }) {
   const [document, setDocument] = useState<WebsitePageDocument | null>(null);
   const [source, setSource] = useState<WebsitePageDocument | null>(null);
@@ -111,6 +111,7 @@ export function WebsiteTranslationEditor({ token, pageId, catalog, onDirtyChange
   const [initializing, setInitializing] = useState(false);
   const [reload, setReload] = useState(0);
   const historyRequestId = useRef(0);
+  const canEdit = staff.role === "HQ_ADMIN" || staff.role === "HQ_EDITOR";
   const changeDirty = useCallback((dirty: boolean) => { setEditorDirty(dirty); onDirtyChange(dirty); }, [onDirtyChange]);
   const changeBusy = useCallback((busy: boolean) => { setEditorBusy(busy); onBusyChange(busy); }, [onBusyChange]);
   const refreshHistory = useCallback(async () => {
@@ -171,10 +172,10 @@ export function WebsiteTranslationEditor({ token, pageId, catalog, onDirtyChange
   return <div className="grid min-w-0 gap-5 lg:grid-cols-[minmax(0,1fr)_240px]">
     <div className="grid min-w-0 content-start gap-4">
       <p role="status" className="rounded-lg border bg-muted/20 p-3 text-sm">영어 · {document.publishedVersion ? (Object.keys(document.publishedContent).length ? `발행본 v${document.publishedVersion}` : '공개 중단') : '미발행'} · 초안 v{document.draftVersion} — 한국어를 가져온 내용은 직접 번역하고 검토한 뒤 발행해 주세요.</p>
-      {document.draftVersion === 0 ? <Card><CardHeader><CardTitle>영어 번역 초안이 없습니다.</CardTitle><CardDescription>한국어 초안을 가져와 제목·본문·SEO·이미지 설명을 번역합니다. 고객 웹에는 자동으로 공개되지 않습니다.</CardDescription></CardHeader><CardContent><Button disabled={initializing || document.lifecycleStatus !== "ACTIVE"} onClick={() => void initialize()}>한국어 초안을 가져오기</Button>{error && <p role="alert" className="mt-3 text-sm text-destructive">{error} <Button variant="link" onClick={retry}>다시 불러오기</Button></p>}</CardContent></Card>
-        : <><WebsiteTranslationReviewActions token={token} pageId={document.id} draftVersion={document.draftVersion} state={reviewState} reviewReady={reviewReady} dirty={editorDirty} busy={editorBusy} archived={document.lifecycleStatus === "ARCHIVED"} onStateChange={applyReviewState} onPublish={publish} onBusyChange={changeBusy} onHistoryRefresh={refreshHistory} />
-          {document.pageType === "HOTEL_LANDING" ? <LandingTranslationEditor token={token} document={document} externalBusy={editorBusy} onDirtyChange={changeDirty} onBusyChange={changeBusy} onApplied={saved} />
-            : <ContentPageEditor token={token} document={document} catalog={catalog} locale="en" showPublishAction={false} externalBusy={editorBusy} onDirtyChange={changeDirty} onBusyChange={changeBusy} onSaved={saved} onPublished={saved} onLifecycleChanged={saved} onDeleted={() => undefined} />}</>}
+      {document.draftVersion === 0 ? <Card><CardHeader><CardTitle>영어 번역 초안이 없습니다.</CardTitle><CardDescription>한국어 초안을 가져와 제목·본문·SEO·이미지 설명을 번역합니다. 고객 웹에는 자동으로 공개되지 않습니다.</CardDescription></CardHeader><CardContent><Button disabled={!canEdit || initializing || document.lifecycleStatus !== "ACTIVE"} onClick={() => void initialize()}>한국어 초안을 가져오기</Button>{error && <p role="alert" className="mt-3 text-sm text-destructive">{error} <Button variant="link" onClick={retry}>다시 불러오기</Button></p>}</CardContent></Card>
+        : <><WebsiteTranslationReviewActions token={token} pageId={document.id} draftVersion={document.draftVersion} state={reviewState} staff={staff} reviewReady={reviewReady} dirty={editorDirty} busy={editorBusy} archived={document.lifecycleStatus === "ARCHIVED"} onStateChange={applyReviewState} onPublish={publish} onBusyChange={changeBusy} onHistoryRefresh={refreshHistory} />
+          {document.pageType === "HOTEL_LANDING" ? <LandingTranslationEditor token={token} document={document} externalBusy={editorBusy || !canEdit} onDirtyChange={changeDirty} onBusyChange={changeBusy} onApplied={saved} />
+            : <ContentPageEditor token={token} document={document} catalog={catalog} locale="en" showPublishAction={false} externalBusy={editorBusy || !canEdit} onDirtyChange={changeDirty} onBusyChange={changeBusy} onSaved={saved} onPublished={saved} onLifecycleChanged={saved} onDeleted={() => undefined} />}</>}
       {document.lifecycleStatus === "ARCHIVED" && <p className="text-sm text-muted-foreground">페이지가 보관되어 두 언어 모두 공개되지 않습니다. 한국어 화면에서 페이지를 복원한 뒤 언어별로 다시 발행해 주세요.</p>}
     </div>
     <Card className="min-w-0 self-start"><CardHeader><CardTitle className="text-base">검토·발행 이력</CardTitle><CardDescription>서버의 최근 기록 최대 50건을 최신순으로 표시합니다.</CardDescription></CardHeader><CardContent className="space-y-5 text-sm">

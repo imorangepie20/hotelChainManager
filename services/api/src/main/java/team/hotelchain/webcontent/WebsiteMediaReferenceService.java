@@ -46,18 +46,18 @@ public class WebsiteMediaReferenceService {
     }
 
     public void synchronizeDraft(UUID pageId, String pageType, Map<String, Object> content) {
-        synchronize(pageId, pageType, "DRAFT", content);
+        synchronize(pageId, pageType, "ko", "DRAFT", content);
     }
 
     public void synchronizePublished(UUID pageId, String pageType, Map<String, Object> content) {
-        synchronize(pageId, pageType, "PUBLISHED", content);
+        synchronize(pageId, pageType, "ko", "PUBLISHED", content);
     }
 
-    private void synchronize(UUID pageId, String pageType, String state, Map<String, Object> content) {
-        jdbc.update("delete from website_media_usage where page_id = ? and document_state = ?", pageId, state);
+    public void synchronize(UUID pageId, String pageType, String locale, String state, Map<String, Object> content) {
+        jdbc.update("delete from website_media_usage where page_id = ? and locale = ? and document_state = ?", pageId, locale, state);
         if (content == null || content.isEmpty()) return;
         if ("HOTEL_LANDING".equals(pageType)) {
-            insertUsage(pageId, state, "heroAssetId", assetId(content.get("heroAssetId"), "heroAssetId"),
+            insertUsage(pageId, locale, state, "heroAssetId", assetId(content.get("heroAssetId"), "heroAssetId"),
                     text(content.get("heroAlt"), "heroAlt"));
             return;
         }
@@ -67,11 +67,11 @@ public class WebsiteMediaReferenceService {
         for (int index = 0; index < blocks.size(); index++) {
             if (!(blocks.get(index) instanceof Map<?, ?> block)) continue;
             if ("HERO".equals(block.get("type"))) {
-                insertUsage(pageId, state, "blocks[" + index + "].imageAssetId",
+                insertUsage(pageId, locale, state, "blocks[" + index + "].imageAssetId",
                         assetId(block.get("imageAssetId"), "blocks[" + index + "].imageAssetId"),
                         text(block.get("imageAlt"), "blocks[" + index + "].imageAlt"));
             } else if ("IMAGE_GALLERY".equals(block.get("type"))) {
-                synchronizeGalleryUsages(pageId, state, block, index);
+                synchronizeGalleryUsages(pageId, locale, state, block, index);
             }
         }
     }
@@ -86,22 +86,22 @@ public class WebsiteMediaReferenceService {
         }
     }
 
-    private void synchronizeGalleryUsages(UUID pageId, String state, Map<?, ?> block, int blockIndex) {
+    private void synchronizeGalleryUsages(UUID pageId, String locale, String state, Map<?, ?> block, int blockIndex) {
         Object value = block.get("items");
         if (!(value instanceof List<?> items)) return;
         for (int itemIndex = 0; itemIndex < items.size(); itemIndex++) {
             if (!(items.get(itemIndex) instanceof Map<?, ?> item)) continue;
             String path = "blocks[" + blockIndex + "].items[" + itemIndex + "]";
-            insertUsage(pageId, state, path + ".imageAssetId", assetId(item.get("imageAssetId"), path + ".imageAssetId"),
+            insertUsage(pageId, locale, state, path + ".imageAssetId", assetId(item.get("imageAssetId"), path + ".imageAssetId"),
                     text(item.get("imageAlt"), path + ".imageAlt"));
         }
     }
 
-    private void insertUsage(UUID pageId, String state, String fieldPath, UUID assetId, String altText) {
+    private void insertUsage(UUID pageId, String locale, String state, String fieldPath, UUID assetId, String altText) {
         jdbc.update("""
-                insert into website_media_usage (asset_id, page_id, document_state, field_path, alt_text)
-                values (?, ?, ?, ?, ?)
-                """, assetId, pageId, state, fieldPath, altText);
+                insert into website_media_usage (asset_id, page_id, locale, document_state, field_path, alt_text)
+                values (?, ?, ?, ?, ?, ?)
+                """, assetId, pageId, locale, state, fieldPath, altText);
     }
 
     private void normalizeHero(Map<String, Object> target, String assetKey, String pathKey, String path) {

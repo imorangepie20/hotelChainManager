@@ -9,5 +9,6 @@ public record WebsiteMediaUsage(
         String pageType,
         String documentState,
         String fieldPath,
-        String altText) {
+        String altText,
+        String locale) {
 }

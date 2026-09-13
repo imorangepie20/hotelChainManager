@@ -1,5 +1,6 @@
 package team.hotelchain.webcontent;
 
+import java.time.OffsetDateTime;
 import java.util.UUID;
 
 public record WebsiteMediaAsset(
@@ -13,5 +14,7 @@ public record WebsiteMediaAsset(
         String defaultAltText,
         int usageCount,
         String status,
-        int version) {
+        int version,
+        OffsetDateTime archivedAt,
+        OffsetDateTime permanentDeleteAvailableAt) {
 }

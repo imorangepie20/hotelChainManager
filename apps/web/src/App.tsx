@@ -34,6 +34,8 @@ export default function App() {
   const [homeContentPage, setHomeContentPage] = useState<ContentPageDocument | null>(null)
   const [websiteNavigation, setWebsiteNavigation] = useState<WebsiteNavigationItem[]>([])
   const [pathname, setPathname] = useState(() => window.location.pathname)
+  const locale = resolveCustomerRoute(pathname)?.locale ?? 'ko'
+  const [websiteLoading, setWebsiteLoading] = useState(true)
   const [pageUnavailable, setPageUnavailable] = useState(false)
   const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [notice, setNotice] = useState(''); const [mobileMenuOpen, setMobileMenuOpen] = useState(false); const reservationPanelRef = useRef<HTMLElement>(null); const bookingFormRef = useRef<HTMLElement>(null)
   const currentAvailabilityKey = availabilityCriteriaKey({ hotelId, checkIn, checkOut, adults, children, rooms, breakfastOnly, roomTypeId })
@@ -46,8 +48,13 @@ export default function App() {
   }, [])
   useEffect(() => {
     api.hotels().then(data => setHotels(data)).catch(showError)
-    api.websiteNavigation().then(setWebsiteNavigation).catch(() => setWebsiteNavigation([]))
   }, [])
+  useEffect(() => {
+    let active = true
+    setWebsiteNavigation([])
+    api.websiteNavigation(locale).then(items => { if (active) setWebsiteNavigation(items) }).catch(() => { if (active) setWebsiteNavigation([]) })
+    return () => { active = false }
+  }, [locale])
   useEffect(() => {
     let active = true
     const route = resolveCustomerRoute(pathname)
@@ -55,13 +62,14 @@ export default function App() {
     setContentPage(null)
     setHomeContentPage(null)
     setPageUnavailable(false)
+    setWebsiteLoading(true)
     if (!route) {
       setPageUnavailable(true)
     } else if (route.kind === 'page') {
-      api.websitePage(route.pathname)
+      api.websitePage(route.pathname, locale)
         .then(page => {
           if (page.type === 'CONTENT_PAGE') {
-            const parsed = parseContentPage(page)
+            const parsed = parseContentPage(page, locale)
             if (!parsed) throw new Error('콘텐츠 페이지 형식이 올바르지 않습니다.')
             if (active) setContentPage(parsed)
             return
@@ -72,17 +80,23 @@ export default function App() {
           if (!hotel) throw new Error('페이지에 연결된 호텔을 찾을 수 없습니다.')
           if (!active) return
           setHotelId(hotel.id)
-          setPublishedDestination(destinationContentFromPublished(hotel.region, page.content))
+          const destination = locale === 'en' ? destinationContentFromPublished(hotel.region, page.content, 'en') : destinationContentFromPublished(hotel.region, page.content)
+          if (!destination) throw new Error('영어 콘텐츠 문서가 올바르지 않습니다.')
+          setPublishedDestination(destination)
         })
         .catch(() => { if (active) setPageUnavailable(true) })
+        .finally(() => { if (active) setWebsiteLoading(false) })
     } else if (route.kind === 'home') {
-      api.websitePage('/')
+      api.websitePage(route.pathname, locale)
         .then(page => {
-          if (page.type !== 'HOME_PAGE' || page.hotelId !== null) return
-          const parsed = parseContentPage(page.content)
-          if (active && parsed) setHomeContentPage(parsed)
+          if (page.type !== 'HOME_PAGE' || page.hotelId !== null) throw new Error('홈페이지 형식이 올바르지 않습니다.')
+          const parsed = parseContentPage(page, locale)
+          if (!parsed) throw new Error('홈페이지 콘텐츠를 읽을 수 없습니다.')
+          if (active) setHomeContentPage(parsed)
         })
-        .catch(() => { if (active) setHomeContentPage(null) })
+        .catch(() => { if (active) { setHomeContentPage(null); if (locale === 'en') setPageUnavailable(true) } })
+        .finally(() => { if (active) setWebsiteLoading(false) })
+      if (locale === 'en') return () => { active = false }
       if (!hotels.length) return () => { active = false }
       const fallbackHotelId = hotelId || hotels.find(item => item.region === '속초')?.id || hotels[0]?.id || ''
       const hotel = hotels.find(item => item.id === fallbackHotelId)
@@ -93,7 +107,7 @@ export default function App() {
         .catch(() => { if (active) setPublishedDestination(null) })
     }
     return () => { active = false }
-  }, [pathname, hotels])
+  }, [pathname, hotels, locale])
   useEffect(() => { const id = sessionStorage.getItem('latestReservation'); const token = id && sessionStorage.getItem(`reservation:${id}`); if (id && token) api.getReservation(id, token).then(setReservation).catch(showError) }, [])
   useEffect(() => {
     if (!availabilityRequests.current?.criteriaChanged(currentAvailabilityKey)) return
@@ -102,8 +116,9 @@ export default function App() {
     setBusy(false)
   }, [currentAvailabilityKey])
   const selectedHotel = useMemo(() => hotels.find(h => h.id === hotelId), [hotels, hotelId]); const destination = publishedDestination ?? destinationContentByRegion(selectedHotel?.region ?? '속초')
-  const pageSeo = contentPage?.seo ?? homeContentPage?.seo ?? destination.seo
+  const pageSeo = contentPage?.seo ?? homeContentPage?.seo ?? (locale === 'en' ? publishedDestination?.seo ?? { title: 'STAY HANEUL | English content', description: 'English content is not yet available.' } : destination.seo)
   useEffect(() => {
+    document.documentElement.lang = locale
     document.title = pageSeo.title
     let description = document.querySelector('meta[name="description"]')
     if (!description) {
@@ -171,7 +186,7 @@ export default function App() {
     requestAnimationFrame(() => reservationPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }))
 
   }
-  const pageNavigation = websiteNavigation.flatMap(item => item.children).flatMap(item => {
+  const pageNavigation = (locale === 'en' ? websiteNavigation.flatMap(item => [item, ...item.children]) : websiteNavigation.flatMap(item => item.children)).flatMap(item => {
     const route = resolveCustomerRoute(item.path)
     return route?.kind === 'page' ? [{ ...item, path: route.pathname }] : []
   })
@@ -199,7 +214,22 @@ export default function App() {
       .catch(() => setPublishedDestination(null))
   }
   function renderHeader(contentOnly: boolean) {
-    return <header className="topbar"><a className="brand" href={contentOnly ? '/' : '#top'}><span>STAY</span> HANEUL</a><nav className={mobileMenuOpen ? 'open' : ''} aria-label="주요 메뉴">{!contentOnly && <a onClick={closeMenu} href="#stays">객실</a>}{pageNavigation.map(item => <a key={item.id} onClick={event => { event.preventDefault(); navigateToPath(item.path) }} href={item.path}>{item.label}</a>)}{!contentOnly && <><a onClick={closeMenu} href="#experiences">경험</a><a onClick={closeMenu} href="#offers">오퍼</a><a onClick={closeMenu} href="#booking">예약</a></>}</nav><div className="header-actions"><a href="/#reservation-management" className="manage-link">예약 조회</a><span className="lang" aria-label="현재 언어 한국어">KO <span>/ EN</span></span><button className="menu" aria-label="메뉴" aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen(open => !open)}>{mobileMenuOpen ? <X size={20} /> : <Menu size={20} />}</button></div></header>
+    return <header className="topbar"><a className="brand" href={locale === 'en' ? '/en' : contentOnly ? '/' : '#top'}><span>STAY</span> HANEUL</a><nav className={mobileMenuOpen ? 'open' : ''} aria-label={locale === 'en' ? 'Main navigation' : '주요 메뉴'}>{!contentOnly && <a onClick={closeMenu} href="#stays">객실</a>}{pageNavigation.map(item => <a key={item.id} onClick={event => { event.preventDefault(); navigateToPath(item.path) }} href={item.path}>{item.label}</a>)}{!contentOnly && <><a onClick={closeMenu} href="#experiences">경험</a><a onClick={closeMenu} href="#offers">오퍼</a><a onClick={closeMenu} href="#booking">예약</a></>}</nav><div className="header-actions"><a href="/#reservation-management" className="manage-link">{locale === 'en' ? 'Booking (Korean)' : '예약 조회'}</a><span className="lang"><a href={locale === 'en' ? pathname.slice(3) || '/' : pathname} lang="ko" aria-current={locale === 'ko' ? 'page' : undefined}>KO</a><span> / </span><a href={locale === 'en' ? pathname : pathname === '/' ? '/en' : '/en' + pathname} lang="en" aria-current={locale === 'en' ? 'page' : undefined}>EN</a></span><button className="menu" aria-label={locale === 'en' ? 'Menu' : '메뉴'} aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen(open => !open)}>{mobileMenuOpen ? <X size={20} /> : <Menu size={20} />}</button></div></header>
+  }
+  if (locale === 'en') {
+    const route = resolveCustomerRoute(pathname)
+    const englishFooter = <footer><div className="brand"><span>STAY</span> HANEUL</div><p>Fictional hotel chain · Portfolio demo</p><p>© 2026 HOTEL CHAIN PROJECT</p></footer>
+    if (pageUnavailable) return <>{renderHeader(true)}<main id="top"><section className="content-section"><h1>English content is not available.</h1><p>This page has not been published in English, or its address has changed.</p><a className="text-link dark" href="/en">English home <ArrowRight size={18} /></a><p><a href={pathname.slice(3) || '/'} lang="ko">View the Korean website</a></p></section></main>{englishFooter}</>
+    if (route?.kind === 'collection') return <>{renderHeader(true)}<ContentCollectionPage key={pathname} locale="en" contentKind={route.contentKind} hotelSlug={route.hotelSlug} />{englishFooter}</>
+    if (websiteLoading || (!contentPage && !homeContentPage && !publishedDestination)) return <>{renderHeader(true)}<main className="content-section" aria-live="polite"><p>Loading English content…</p></main></>
+    const page = contentPage ?? homeContentPage
+    if (page) return <>{renderHeader(true)}<main id="top"><ContentPage page={page} locale="en" onBookingIntent={applyContentBookingIntent} /></main>{englishFooter}</>
+    if (publishedDestination) return <>{renderHeader(true)}<main id="top">
+      <section className="hero"><img src={publishedDestination.heroImage} alt={publishedDestination.heroAlt} /><div className="hero-shade" /><div className="hero-copy"><p>{publishedDestination.eyebrow}</p><h1>{publishedDestination.title}</h1><p>{publishedDestination.description}</p><a href="/#booking" className="text-link">Book a room (Korean) <ArrowRight size={18} /></a></div></section>
+      <section className="content-section editorial"><h2>Experiences</h2><div className="experience-grid">{publishedDestination.experiences.map((item, index) => <article className={`experience-card experience-${index}`} key={index}><p>{item.category}</p><h3>{item.title}</h3><span>{item.description}</span></article>)}</div></section>
+      <section className="offers-band"><div className="content-section"><h2>Offers</h2><div className="story-offers">{publishedDestination.offers.map((item, index) => <article key={index}><h3>{item.title}</h3><p>{item.detail}</p><dl><div><dt>Booking period</dt><dd>{item.bookingPeriod}</dd></div><div><dt>Stay period</dt><dd>{item.stayPeriod}</dd></div></dl></article>)}</div></div></section>
+      <section className="arrival-section"><div><h2>Arrival guide</h2><p>{publishedDestination.arrival.highlight}</p></div><dl><div><dt>Address</dt><dd>{publishedDestination.arrival.address}</dd></div><div><dt>Check-in / Check-out</dt><dd>{publishedDestination.arrival.checkInOut}</dd></div></dl></section>
+    </main>{englishFooter}</>
   }
   if (pageUnavailable) return <>{renderHeader(true)}<main id="top"><section className="content-section"><p className="section-kicker">PAGE NOT FOUND</p><h1>요청한 페이지를 찾을 수 없습니다.</h1><p>발행되지 않았거나 주소가 변경되었습니다.</p><a className="text-link dark" href="/">메인으로 돌아가기 <ArrowRight size={18} /></a></section></main></>
   const activeRoute = resolveCustomerRoute(pathname)

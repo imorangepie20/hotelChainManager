@@ -18,6 +18,7 @@ import {
   approveWebsiteTranslationReview,
   rejectWebsiteTranslationReview,
   requestWebsiteTranslationReview,
+  type StaffPrincipal,
   type WebsiteTranslationReviewState,
 } from "@/lib/staff-api";
 
@@ -35,6 +36,7 @@ export function WebsiteTranslationReviewActions({
   pageId,
   draftVersion,
   state,
+  staff,
   reviewReady,
   dirty,
   busy,
@@ -48,6 +50,7 @@ export function WebsiteTranslationReviewActions({
   pageId: string;
   draftVersion: number;
   state: WebsiteTranslationReviewState;
+  staff: StaffPrincipal;
   reviewReady: boolean;
   dirty: boolean;
   busy: boolean;
@@ -67,6 +70,10 @@ export function WebsiteTranslationReviewActions({
   const rejectButtonRef = useRef<HTMLButtonElement>(null);
   const requestButtonRef = useRef<HTMLButtonElement>(null);
   const blocked = !reviewReady || dirty || busy || archived || activeAction !== null;
+  const canEdit = staff.role === "HQ_ADMIN" || staff.role === "HQ_EDITOR";
+  const canPublish = staff.role === "HQ_ADMIN" || staff.role === "HQ_PUBLISHER";
+  const requesterId = state.events.find((event) => event.action === "REVIEW_REQUESTED" && event.draftVersion === state.reviewedDraftVersion)?.actorId ?? null;
+  const selfApproval = requesterId !== null && requesterId === staff.id;
 
   function restoreRejectFocus() {
     window.setTimeout(() => rejectButtonRef.current?.focus(), 0);
@@ -148,14 +155,16 @@ export function WebsiteTranslationReviewActions({
         {dirty && <p className="text-sm text-muted-foreground">검토 작업 전에 변경사항을 초안으로 저장해 주세요.</p>}
         {archived && <p className="text-sm text-muted-foreground">보관된 페이지에서는 검토 작업을 진행할 수 없습니다.</p>}
         {!reviewReady && <p className="text-sm text-muted-foreground">검토 상태와 이력을 확인한 뒤 작업할 수 있습니다.</p>}
+        {state.status === "IN_REVIEW" && selfApproval && <p className="text-sm text-muted-foreground">본인이 요청한 초안은 다른 승인자가 승인해야 합니다.</p>}
+        {state.status === "IN_REVIEW" && !canPublish && <p className="text-sm text-muted-foreground">승인 권한이 있는 담당자의 검토를 기다리고 있습니다.</p>}
       </div>
       <div className="flex flex-wrap gap-2">
-        {state.status === "DRAFT" && <Button ref={requestButtonRef} type="button" disabled={blocked || draftVersion === 0} onClick={() => void requestReview()}>{activeAction === "request" ? actionLabel : "검토 요청"}</Button>}
-        {state.status === "IN_REVIEW" && <>
-          <Button type="button" disabled={blocked} onClick={() => void approveReview()}>{activeAction === "approve" ? actionLabel : "승인"}</Button>
+        {state.status === "DRAFT" && canEdit && <Button ref={requestButtonRef} type="button" disabled={blocked || draftVersion === 0} onClick={() => void requestReview()}>{activeAction === "request" ? actionLabel : "검토 요청"}</Button>}
+        {state.status === "IN_REVIEW" && canPublish && <>
+          {!selfApproval && <Button type="button" disabled={blocked} onClick={() => void approveReview()}>{activeAction === "approve" ? actionLabel : "승인"}</Button>}
           <Button ref={rejectButtonRef} type="button" variant="outline" disabled={blocked} onClick={() => { setRejectionError(""); setRejectOpen(true); }}>반려</Button>
         </>}
-        {state.status === "APPROVED" && <Button type="button" disabled={blocked} onClick={() => void publish()}>{activeAction === "publish" ? actionLabel : "발행"}</Button>}
+        {state.status === "APPROVED" && canPublish && <Button type="button" disabled={blocked} onClick={() => void publish()}>{activeAction === "publish" ? actionLabel : "발행"}</Button>}
       </div>
       {error && <p role="alert" className="text-sm text-destructive sm:col-span-2">{error}</p>}
       {notice && <p role="status" className="text-sm text-emerald-700 sm:col-span-2">{notice}</p>}

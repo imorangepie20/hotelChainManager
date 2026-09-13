@@ -23,7 +23,9 @@ export default function LoginPage() {
       const session = await loginStaff(email, password)
       window.localStorage.setItem("hotel-chain-staff-session", session.token)
       window.localStorage.setItem("hotel-chain-staff", JSON.stringify(session.staff))
-      window.location.assign("/dashboard/default")
+      window.location.assign(session.staff.role === "HQ_EDITOR" || session.staff.role === "HQ_PUBLISHER"
+        ? "/dashboard/website"
+        : "/dashboard/default")
     } catch (reason) {
       setError(reason instanceof StaffApiError ? reason.message : "\uB85C\uADF8\uC778 \uC694\uCCAD\uC744 \uCC98\uB9AC\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.")
     } finally {

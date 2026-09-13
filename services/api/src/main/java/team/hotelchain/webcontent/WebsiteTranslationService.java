@@ -43,14 +43,14 @@ public class WebsiteTranslationService {
 
     @Transactional(readOnly = true)
     public WebsitePageDocument draft(String token, UUID pageId) {
-        WebsitePageDocument source = pages.pageDraft(token, pageId);
+        WebsitePageDocument source = pages.translationSourceDraft(token, pageId);
         requireEditableType(source);
         return document(source, translation(pageId));
     }
 
     @Transactional(readOnly = true)
     public WebsiteTranslationReviewState review(String token, UUID pageId) {
-        WebsitePageDocument source = pages.pageDraft(token, pageId);
+        WebsitePageDocument source = pages.translationSourceDraft(token, pageId);
         requireEditableType(source);
         return jdbc.query("""
                 select review_status, reviewed_draft_version
@@ -82,7 +82,7 @@ public class WebsiteTranslationService {
     @Transactional
     public WebsiteTranslationReviewState requestReview(String token, UUID pageId,
             WebsiteTranslationReviewActionRequest request) {
-        UUID actor = access.requireHeadquarters(token).id();
+        UUID actor = access.requireContentEditor(token).id();
         WebsitePageDocument source = lockedSource(token, pageId);
         Translation current = requiredLockedTranslation(pageId);
         String comment = optionalReviewComment(request);
@@ -103,7 +103,7 @@ public class WebsiteTranslationService {
     @Transactional
     public WebsiteTranslationReviewState approveReview(String token, UUID pageId,
             WebsiteTranslationReviewActionRequest request) {
-        UUID actor = access.requireHeadquarters(token).id();
+        UUID actor = access.requireContentPublisher(token).id();
         lockedSource(token, pageId);
         Translation current = requiredLockedTranslation(pageId);
         String comment = optionalReviewComment(request);
@@ -111,6 +111,11 @@ public class WebsiteTranslationService {
         requireReviewStatus(current, WebsiteTranslationReviewStatus.IN_REVIEW);
         if (!Integer.valueOf(current.draftVersion()).equals(current.reviewedDraftVersion())) {
             throw reviewStale();
+        }
+        UUID requester = reviewRequester(pageId, current.draftVersion());
+        if (requester == null || requester.equals(actor)) {
+            throw new BusinessConflictException("WEBSITE_TRANSLATION_SELF_APPROVAL_FORBIDDEN",
+                    "검토 요청자는 자신의 영어 번역을 승인할 수 없습니다. 다른 승인자에게 요청해 주세요.");
         }
         jdbc.update("""
                 update website_page_translation
@@ -124,7 +129,7 @@ public class WebsiteTranslationService {
     @Transactional
     public WebsiteTranslationReviewState rejectReview(String token, UUID pageId,
             WebsiteTranslationReviewActionRequest request) {
-        UUID actor = access.requireHeadquarters(token).id();
+        UUID actor = access.requireContentPublisher(token).id();
         lockedSource(token, pageId);
         Translation current = requiredLockedTranslation(pageId);
         String comment = requiredRejectionComment(request);
@@ -145,7 +150,7 @@ public class WebsiteTranslationService {
 
     @Transactional
     public WebsitePageDocument initialize(String token, UUID pageId, int sourceVersion, int lifecycleVersion) {
-        UUID actor = access.requireHeadquarters(token).id();
+        UUID actor = access.requireContentEditor(token).id();
         WebsitePageDocument source = lockedSource(token, pageId);
         if (sourceVersion <= 0 || lifecycleVersion <= 0) throw new IllegalArgumentException("원본 초안과 상태 버전이 필요합니다.");
         if (source.draftVersion() != sourceVersion || source.lifecycleVersion() != lifecycleVersion || translation(pageId) != null) throw stale();
@@ -167,7 +172,7 @@ public class WebsiteTranslationService {
 
     @Transactional
     public WebsitePageDocument save(String token, UUID pageId, SaveWebsitePageRequest request) {
-        UUID actor = access.requireHeadquarters(token).id();
+        UUID actor = access.requireContentEditor(token).id();
         WebsitePageDocument source = lockedSource(token, pageId);
         Translation current = requiredLockedTranslation(pageId);
         if (request.expectedDraftVersion() <= 0) throw new IllegalArgumentException("초안 버전은 1 이상이어야 합니다.");
@@ -202,7 +207,7 @@ public class WebsiteTranslationService {
 
     @Transactional
     public WebsitePageDocument publish(String token, UUID pageId, PublishWebsitePageRequest request) {
-        UUID actor = access.requireHeadquarters(token).id();
+        UUID actor = access.requireContentPublisher(token).id();
         WebsitePageDocument source = lockedSource(token, pageId);
         Translation current = requiredLockedTranslation(pageId);
         if (request.expectedDraftVersion() <= 0 || request.expectedPublishedVersion() < 0) throw new IllegalArgumentException("언어별 초안·발행 버전이 올바르지 않습니다.");
@@ -333,10 +338,9 @@ public class WebsiteTranslationService {
     }
 
     private WebsitePageDocument lockedSource(String token, UUID id) {
-        access.requireHeadquarters(token);
         UUID found = jdbc.query("select id from website_page where id = ? for update", rs -> rs.next() ? rs.getObject(1, UUID.class) : null, id);
         if (found == null) throw new WebsitePageNotFoundException(id.toString());
-        var source = pages.pageDraft(token, id);
+        var source = pages.translationSourceDraft(token, id);
         requireEditableType(source);
         if (!source.lifecycleStatus().equals("ACTIVE")) throw new BusinessConflictException("WEBSITE_PAGE_ARCHIVED", "보관된 페이지는 번역을 저장·발행할 수 없습니다.");
         return source;
@@ -477,6 +481,14 @@ public class WebsiteTranslationService {
                     (page_id, locale, action, draft_version, actor_id, comment)
                 values (?, 'en', ?, ?, ?, ?)
                 """, pageId, action, draftVersion, actor, comment);
+    }
+
+    private UUID reviewRequester(UUID pageId, int draftVersion) {
+        return jdbc.query("""
+                select actor_id from website_translation_review_event
+                where page_id = ? and locale = 'en' and action = 'REVIEW_REQUESTED' and draft_version = ?
+                order by created_at desc, id desc limit 1
+                """, rs -> rs.next() ? rs.getObject(1, UUID.class) : null, pageId, draftVersion);
     }
 
     private BusinessConflictException reviewStale() {

@@ -53,7 +53,7 @@ public class WebsitePageService {
 
     @Transactional
     public WebsitePageDocument landingDraft(String token, UUID hotelId) {
-        access.requireHeadquarters(token);
+        access.requireContentStaff(token);
         return document(ensureLanding(hotelId));
     }
 
@@ -76,13 +76,13 @@ public class WebsitePageService {
 
     @Transactional
     public List<WebContentVersion> landingVersions(String token, UUID hotelId) {
-        access.requireHeadquarters(token);
+        access.requireContentStaff(token);
         return versions(ensureLanding(hotelId).id());
     }
 
     @Transactional(readOnly = true)
     public WebsitePageDocument homeDraft(String token) {
-        access.requireHeadquarters(token);
+        access.requireContentStaff(token);
         return document(requiredHome());
     }
 
@@ -102,7 +102,7 @@ public class WebsitePageService {
 
     @Transactional(readOnly = true)
     public List<WebContentVersion> homeVersions(String token) {
-        access.requireHeadquarters(token);
+        access.requireContentStaff(token);
         return versions(requiredHome().id());
     }
 
@@ -152,7 +152,15 @@ public class WebsitePageService {
 
     @Transactional(readOnly = true)
     public WebsitePageDocument pageDraft(String token, UUID pageId) {
-        access.requireHeadquarters(token);
+        access.requireContentStaff(token);
+        PageRow page = page(pageId);
+        if (page == null) throw new IllegalArgumentException("페이지를 찾을 수 없습니다.");
+        return document(page);
+    }
+
+    @Transactional(readOnly = true)
+    WebsitePageDocument translationSourceDraft(String token, UUID pageId) {
+        access.requireContentStaff(token);
         PageRow page = page(pageId);
         if (page == null) throw new IllegalArgumentException("페이지를 찾을 수 없습니다.");
         return document(page);
@@ -189,6 +197,80 @@ public class WebsitePageService {
         WebsitePageDocument saved = saveDraft(actor, current, expectedDraftVersion, metadata, normalized, path);
         replaceConnections(current.id(), "DRAFT", nextConnections);
         return document(page(saved.id()));
+    }
+
+    @Transactional(readOnly = true)
+    public WebsitePageMoveImpact moveImpact(String token, UUID pageId, UUID parentId, String slug) {
+        access.requireHeadquarters(token);
+        return movePlan(page(pageId), page(parentId), slug, true).impact();
+    }
+
+    @Transactional
+    public WebsitePageDocument moveContentPage(String token, UUID pageId, MoveWebsitePageRequest request) {
+        StaffPrincipal actor = access.requireHeadquarters(token);
+        if (request == null || request.expectedDraftVersion() <= 0 || request.expectedLifecycleVersion() <= 0) {
+            throw new IllegalArgumentException("페이지 이동 버전이 필요합니다.");
+        }
+        PageRow root = lockedPageForUpdate(pageId);
+        if (root == null || !"CONTENT_PAGE".equals(root.pageType())) throw new WebsitePageNotFoundException(pageId.toString());
+        if (root.draftVersion() != request.expectedDraftVersion() || root.lifecycleVersion() != request.expectedLifecycleVersion()) {
+            throw staleDraft();
+        }
+        MovePlan plan = movePlan(root, lockedPageForUpdate(request.parentId()), request.slug(), false);
+        for (MoveRow row : plan.rows()) {
+            jdbc.update("""
+                    update website_page set parent_id = case when id = ? then ? else parent_id end,
+                        draft_slug = case when id = ? then ? else draft_slug end,
+                        draft_path = ?, draft_version = draft_version + 1, updated_at = current_timestamp, updated_by = ?
+                    where id = ?
+                    """, root.id(), plan.parentId(), root.id(), plan.slug(), row.nextPath(), actor.id(), row.page().id());
+            jdbc.update("""
+                    insert into website_page_audit (page_id, action, actor_id, details)
+                    values (?, 'PAGE_MOVED', ?, jsonb_build_object('oldParentId', ?, 'newParentId', ?,
+                        'oldDraftPath', ?, 'newDraftPath', ?, 'root', ?))
+                    """, row.page().id(), actor.id(), row.page().parentId(),
+                    row.page().id().equals(root.id()) ? plan.parentId() : row.page().parentId(), row.page().draftPath(),
+                    row.nextPath(), row.page().id().equals(root.id()));
+        }
+        return document(page(root.id()));
+    }
+
+    @Transactional
+    public WebsitePageDocument movePublishedContentPage(String token, UUID pageId, MoveWebsitePageRequest request) {
+        StaffPrincipal actor = access.requireHeadquarters(token);
+        if (request == null || request.expectedPublishedVersion() <= 0) throw new IllegalArgumentException("발행 버전이 필요합니다.");
+        PageRow root = lockedPageForUpdate(pageId);
+        if (root == null || !"CONTENT_PAGE".equals(root.pageType())) throw new WebsitePageNotFoundException(pageId.toString());
+        if (root.draftVersion() != request.expectedDraftVersion() || root.lifecycleVersion() != request.expectedLifecycleVersion()
+                || root.publishedVersion() != request.expectedPublishedVersion()) throw staleDraft();
+        PageRow parent = lockedPageForUpdate(request.parentId());
+        validateContentParent(parent, contentKind(root), root.hotelId());
+        String nextRoot = childPath(parent.draftPath(), request.slug());
+        validatePathDepth(nextRoot);
+        List<PageRow> rows = jdbc.query("select " + PAGE_COLUMNS + " from website_page where draft_path = ? or draft_path like ? order by draft_path for update",
+                (rs, index) -> row(rs), root.draftPath(), root.draftPath() + "/%");
+        for (PageRow row : rows) {
+            String next = nextRoot + row.draftPath().substring(root.draftPath().length());
+            rejectPublishedRedirectConflict(row.publishedPath(), next);
+            jdbc.update("update website_page set parent_id = case when id = ? then ? else parent_id end, draft_slug = case when id = ? then ? else draft_slug end, draft_path = ?, published_slug = case when id = ? then ? else published_slug end, published_path = ?, draft_version = draft_version + 1, published_version = published_version + 1, updated_by = ? where id = ?",
+                    root.id(), parent.id(), root.id(), request.slug(), next, root.id(), request.slug(), next, actor.id(), row.id());
+            if (row.id().equals(root.id())) {
+                jdbc.update("update website_page_version set page_snapshot = jsonb_set(jsonb_set(jsonb_set(page_snapshot, '{path}', to_jsonb(?::text), true), '{parentId}', to_jsonb(?::text), true), '{slug}', to_jsonb(?::text), true) where page_id = ?",
+                        next, parent.id().toString(), request.slug(), row.id());
+            } else {
+                jdbc.update("update website_page_version set page_snapshot = jsonb_set(page_snapshot, '{path}', to_jsonb(?::text), true) where page_id = ?",
+                        next, row.id());
+            }
+            jdbc.update("insert into website_redirect (source_path, target_path, page_id, created_by) values (?, ?, ?, ?)", row.publishedPath(), next, row.id(), actor.id());
+            jdbc.update("insert into website_page_audit (page_id, action, actor_id, details) values (?, 'PAGE_MOVED_WITH_REDIRECT', ?, jsonb_build_object('oldPath', ?, 'newPath', ?))",
+                    row.id(), actor.id(), row.publishedPath(), next);
+        }
+        return document(page(root.id()));
+    }
+
+    @Transactional(readOnly = true)
+    public String redirectTarget(String sourcePath) {
+        return jdbc.query("select target_path from website_redirect where source_path = ?", rs -> rs.next() ? rs.getString(1) : null, sourcePath);
     }
 
     @Transactional
@@ -228,6 +310,8 @@ public class WebsitePageService {
                 update website_page_translation set review_status = 'APPROVED'
                 where page_id = ? and locale = 'en' and review_status = 'PUBLISHED'
                 """, archived.id());
+        jdbc.update("update website_page_translation set published_content = '{}'::jsonb, published_connections = '{}'::jsonb, published_menu_visible = false where page_id = ?", archived.id());
+        jdbc.update("delete from website_media_usage where page_id = ? and locale = 'en' and document_state = 'PUBLISHED'", archived.id());
         jdbc.update("""
                 insert into website_page_audit (page_id, action, actor_id, details)
                 values (?, 'ARCHIVED', ?, jsonb_build_object('path', ?, 'lifecycleVersion', ?))
@@ -329,7 +413,7 @@ public class WebsitePageService {
 
     @Transactional(readOnly = true)
     public List<WebContentVersion> pageVersions(String token, UUID pageId) {
-        access.requireHeadquarters(token);
+        access.requireContentStaff(token);
         if (page(pageId) == null) throw new IllegalArgumentException("페이지를 찾을 수 없습니다.");
         return versions(pageId);
     }
@@ -391,8 +475,8 @@ public class WebsitePageService {
     }
 
     public List<WebsitePageTreeItem> staffTree(String token) {
-        access.requireHeadquarters(token);
-        List<PageRow> sections = jdbc.query("select " + PAGE_COLUMNS + " from website_page where page_type = 'SECTION' "
+        access.requireContentStaff(token);
+        List<PageRow> sections = jdbc.query("select " + PAGE_COLUMNS + " from website_page where page_type = 'SECTION' and parent_id is null "
                 + "order by draft_menu_order, draft_path", (rs, index) -> row(rs));
         PageRow home = homePage();
         Stream<WebsitePageTreeItem> homeItem = home == null ? Stream.empty() : Stream.of(treeItem(home, List.of()));
@@ -401,7 +485,7 @@ public class WebsitePageService {
 
     @Transactional(readOnly = true)
     public ContentReferenceCatalog contentReference(String token) {
-        access.requireHeadquarters(token);
+        access.requireContentStaff(token);
         List<ContentReferenceCatalog.Hotel> hotels = jdbc.query("select id, name, region from hotel order by name", (rs, rowNum) -> {
             UUID hotelId = rs.getObject("id", UUID.class);
             List<ContentReferenceCatalog.RoomType> roomTypes = jdbc.query("""
@@ -606,7 +690,10 @@ public class WebsitePageService {
 
     private List<WebsitePageTreeItem> staffTreeChildren(UUID parentId) {
         return jdbc.query("select " + PAGE_COLUMNS + " from website_page where parent_id = ? order by draft_menu_order, draft_path",
-                (rs, index) -> treeItem(row(rs), List.of()), parentId);
+                (rs, index) -> {
+                    PageRow child = row(rs);
+                    return treeItem(child, staffTreeChildren(child.id()));
+                }, parentId);
     }
 
     private WebsitePageTreeItem treeItem(PageRow page, List<WebsitePageTreeItem> children) {
@@ -760,8 +847,8 @@ public class WebsitePageService {
     }
 
     private void validateContentParent(PageRow parent, ContentKind kind, UUID hotelId) {
-        if (parent == null || !"SECTION".equals(parent.pageType())) {
-            throw new IllegalArgumentException("일반 페이지의 상위는 SECTION이어야 합니다.");
+        if (parent == null || !("SECTION".equals(parent.pageType()) || "CONTENT_PAGE".equals(parent.pageType()))) {
+            throw new IllegalArgumentException("일반 페이지의 상위는 SECTION 또는 일반 페이지여야 합니다.");
         }
         if (hotelId == null && parent.hotelId() != null) {
             throw new IllegalArgumentException("체인 공통 페이지는 체인 SECTION 아래에 만들어야 합니다.");
@@ -769,6 +856,48 @@ public class WebsitePageService {
         if (hotelId != null && !hotelId.equals(parent.hotelId())) {
             throw new IllegalArgumentException(kind + " 페이지의 소유 지점과 상위 SECTION 범위가 일치해야 합니다.");
         }
+    }
+
+    private MovePlan movePlan(PageRow root, PageRow parent, String slug, boolean allowPublished) {
+        if (root == null || parent == null || !"SECTION".equals(parent.pageType())) {
+            throw new IllegalArgumentException("이동할 페이지와 상위를 찾을 수 없습니다.");
+        }
+        if (!"ACTIVE".equals(root.lifecycleStatus()) || !"ACTIVE".equals(parent.lifecycleStatus())) {
+            throw new IllegalArgumentException("보관된 페이지는 이동할 수 없습니다.");
+        }
+        validateMetadata(new WebsitePageDraftMetadata(slug, root.draftMenuLabel(), root.draftMenuVisible(), root.draftMenuOrder()));
+        validateContentParent(parent, contentKind(root), root.hotelId());
+        if (root.id().equals(parent.id()) || (parent.id().equals(root.parentId()) && root.draftSlug().equals(slug))) {
+            throw new IllegalArgumentException("현재 위치와 같은 곳으로는 이동할 수 없습니다.");
+        }
+        String nextRootPath = childPath(parent.draftPath(), slug);
+        validatePathDepth(nextRootPath);
+        List<PageRow> descendants = jdbc.query("select " + PAGE_COLUMNS + " from website_page where draft_path = ? or draft_path like ? order by draft_path for update",
+                (rs, index) -> row(rs), root.draftPath(), root.draftPath() + "/%");
+        if (descendants.isEmpty()) throw new WebsitePageNotFoundException(root.id().toString());
+        List<MoveRow> rows = descendants.stream().map(page -> new MoveRow(page,
+                nextRootPath + page.draftPath().substring(root.draftPath().length()))).toList();
+        for (MoveRow row : rows) {
+            if (!"ACTIVE".equals(row.page().lifecycleStatus())) throw new IllegalArgumentException("보관된 하위 페이지가 있어 이동할 수 없습니다.");
+            if (!allowPublished && row.page().publishedFromDraftVersion() != null) throw movePublishedDescendantConflict();
+            validatePathDepth(row.nextPath());
+        }
+        List<UUID> ids = rows.stream().map(row -> row.page().id()).toList();
+        for (MoveRow row : rows) {
+            Integer count = jdbc.queryForObject("select count(*) from website_page where (draft_path = ? or published_path = ?) and id <> all (?::uuid[])",
+                    Integer.class, row.nextPath(), row.nextPath(), "{" + ids.stream().map(UUID::toString).collect(java.util.stream.Collectors.joining(",")) + "}");
+            if (count != null && count > 0) throw pathConflict();
+        }
+        return new MovePlan(root.id(), parent.id(), slug, nextRootPath, rows);
+    }
+
+    private BusinessConflictException movePublishedDescendantConflict() {
+        return new BusinessConflictException("WEBSITE_PAGE_MOVE_PUBLISHED_DESCENDANT", "발행된 페이지 또는 하위 페이지는 redirect 정책이 준비된 뒤 이동할 수 있습니다.");
+    }
+
+    private void rejectPublishedRedirectConflict(String source, String target) {
+        Integer count = jdbc.queryForObject("select count(*) from website_redirect where source_path = ? or target_path = ? or source_path = ?", Integer.class, source, source, target);
+        if ((count != null && count > 0) || source.equals(target)) throw pathConflict();
     }
 
     private void validatePathDepth(String path) {
@@ -959,6 +1088,20 @@ public class WebsitePageService {
     private record VersionRow(String snapshot, Instant publishedAt) { }
 
     private record VersionDocument(Map<String, Object> content, WebsitePageConnections connections) { }
+
+    private record MoveRow(PageRow page, String nextPath) { }
+
+    private record MovePlan(UUID pageId, UUID parentId, String slug, String nextRootPath, List<MoveRow> rows) {
+        WebsitePageMoveImpact impact() {
+            return new WebsitePageMoveImpact(pageId, parentId, nextRootPath, rows.stream()
+                    .map(row -> new WebsitePageMoveImpactItem(row.page().id(), row.page().draftPath(), row.nextPath(),
+                            row.page().publishedFromDraftVersion() == null ? null : row.page().publishedPath(),
+                            row.page().publishedFromDraftVersion() == null ? null : row.nextPath(),
+                            (int) Stream.of(row.nextPath().split("/", -1)).filter(segment -> !segment.isEmpty()).count(),
+                            row.page().publishedFromDraftVersion() != null))
+                    .toList());
+        }
+    }
 
     private record PageRow(UUID id, UUID hotelId, UUID parentId, String pageType, ContentKind contentKind,
             String draftSlug, String draftPath, String draftMenuLabel, boolean draftMenuVisible, int draftMenuOrder,

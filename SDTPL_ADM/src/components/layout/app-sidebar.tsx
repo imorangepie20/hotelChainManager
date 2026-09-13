@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Building2 } from "lucide-react";
-import { navGroups } from "@/lib/nav";
+import { useStaffNavigation } from "@/hooks/use-staff-navigation";
 import {
   Sidebar,
   SidebarContent,
@@ -18,6 +18,7 @@ import {
 
 export function AppSidebar() {
   const pathname = usePathname();
+  const navGroups = useStaffNavigation();
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader>
@@ -25,7 +26,7 @@ export function AppSidebar() {
           <div className="flex size-8 items-center justify-center rounded-md bg-primary text-primary-foreground">
             <Building2 className="size-4" />
           </div>
-          <span className="font-semibold group-data-[collapsible=icon]:hidden">Hotel Chain</span>
+          <span className="font-semibold group-data-[collapsible=icon]:hidden">STAY HANEUL</span>
         </div>
       </SidebarHeader>
       <SidebarContent>

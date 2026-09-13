@@ -5,26 +5,35 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.Iterator;
 import java.util.List;
 import java.util.UUID;
 import javax.imageio.ImageIO;
 import javax.imageio.ImageReader;
 import javax.imageio.stream.ImageInputStream;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 import team.hotelchain.staff.StaffAccessService;
 import team.hotelchain.staff.StaffPrincipal;
 
 @Service
 public class WebsiteMediaService {
+    private static final Logger log = LoggerFactory.getLogger(WebsiteMediaService.class);
     public static final UUID BUNDLED_ASSET_ID = UUID.fromString("14000000-0000-0000-0000-000000000001");
     public static final long MAX_UPLOAD_BYTES = 10_485_760L;
     public static final long MAX_IMAGE_PIXELS = 24_000_000L;
+    public static final int PERMANENT_DELETE_GRACE_DAYS = 30;
 
     private final JdbcTemplate jdbc;
     private final StaffAccessService access;
@@ -51,18 +60,21 @@ public class WebsiteMediaService {
         return jdbc.query("""
                 select asset.id, asset.display_name, asset.delivery_path, asset.mime_type, asset.byte_size,
                        asset.width, asset.height, asset.default_alt_text, asset.status, asset.version,
+                       asset.archived_at,
                        count(usage.asset_id) as usage_count
                   from website_media_asset asset
                   left join website_media_usage usage on usage.asset_id = asset.id
                 """ + activeOnly + """
                  group by asset.id, asset.display_name, asset.delivery_path, asset.mime_type, asset.byte_size,
-                          asset.width, asset.height, asset.default_alt_text, asset.status, asset.version, asset.created_at
+                          asset.width, asset.height, asset.default_alt_text, asset.status, asset.version, asset.created_at,
+                          asset.archived_at
                  order by asset.created_at desc, asset.display_name
                 """, (rs, index) -> new WebsiteMediaAsset(
                 rs.getObject("id", UUID.class), rs.getString("display_name"), rs.getString("delivery_path"),
                 rs.getString("mime_type"), rs.getLong("byte_size"), rs.getInt("width"), rs.getInt("height"),
                 rs.getString("default_alt_text"), rs.getInt("usage_count"), rs.getString("status"),
-                rs.getInt("version")));
+                rs.getInt("version"), rs.getObject("archived_at", OffsetDateTime.class),
+                permanentDeleteAvailableAt(rs.getObject("archived_at", OffsetDateTime.class))));
     }
 
     @Transactional
@@ -139,23 +151,52 @@ public class WebsiteMediaService {
         return changeStatus(token, mediaId, request, "ARCHIVED", "ACTIVE");
     }
 
+    @Transactional
+    public void permanentlyDelete(String token, UUID mediaId, WebsiteMediaVersionRequest request) {
+        access.requireHeadquarters(token);
+        if (request == null) throw invalid("미디어 버전이 필요합니다.");
+        MediaAssetRow current = requireAssetForUpdate(mediaId);
+        requireVersion(current, request.expectedVersion());
+        if (!"UPLOADED".equals(current.origin())) throw deleteConflict("번들 미디어는 영구 삭제할 수 없습니다.");
+        if (!"ARCHIVED".equals(current.status())) throw deleteConflict("보관된 미디어만 영구 삭제할 수 있습니다.");
+        if (usageCount(mediaId) > 0) throw assetInUse();
+        OffsetDateTime availableAt = permanentDeleteAvailableAt(current.archivedAt());
+        if (availableAt == null || availableAt.isAfter(OffsetDateTime.now(ZoneOffset.UTC))) {
+            throw deleteConflict("보관 후 30일이 지난 미디어만 영구 삭제할 수 있습니다.");
+        }
+
+        Path source = storedFile(current);
+        Path quarantine = quarantineFile(current);
+        moveToQuarantine(source, quarantine);
+        registerFileCompletion(source, quarantine);
+
+        int deleted = jdbc.update("delete from website_media_asset where id = ? and status = 'ARCHIVED' and version = ?",
+                mediaId, request.expectedVersion());
+        if (deleted == 0) throw versionConflict();
+    }
+
     @Transactional(readOnly = true)
     public List<WebsiteMediaUsage> usages(String token, UUID mediaId) {
         access.requireHeadquarters(token);
         if (asset(mediaId, false, "") == null) throw new WebsiteMediaNotFoundException(mediaId);
         return jdbc.query("""
                 select usage.page_id,
-                       case when usage.document_state = 'DRAFT' then page.draft_menu_label else page.published_menu_label end as page_label,
-                       case when usage.document_state = 'DRAFT' then page.draft_path else page.published_path end as page_path,
-                       page.page_type, usage.document_state, usage.field_path, usage.alt_text
+                       case when usage.locale = 'en' then
+                           case when usage.document_state = 'DRAFT' then translation.draft_menu_label else translation.published_menu_label end
+                           else case when usage.document_state = 'DRAFT' then page.draft_menu_label else page.published_menu_label end end as page_label,
+                       case when usage.locale = 'en' then
+                           case when usage.document_state = 'DRAFT' then translation.draft_path else translation.published_path end
+                           else case when usage.document_state = 'DRAFT' then page.draft_path else page.published_path end end as page_path,
+                       page.page_type, usage.document_state, usage.field_path, usage.alt_text, usage.locale
                   from website_media_usage usage
                   join website_page page on page.id = usage.page_id
+                  left join website_page_translation translation on translation.page_id = usage.page_id and translation.locale = usage.locale
                  where usage.asset_id = ?
                  order by usage.document_state, page_path, usage.field_path
                 """, (rs, index) -> new WebsiteMediaUsage(
                 rs.getObject("page_id", UUID.class), rs.getString("page_label"), rs.getString("page_path"),
                 rs.getString("page_type"), rs.getString("document_state"), rs.getString("field_path"),
-                rs.getString("alt_text")), mediaId);
+                rs.getString("alt_text"), rs.getString("locale")), mediaId);
     }
 
     @Transactional(readOnly = true)
@@ -184,17 +225,20 @@ public class WebsiteMediaService {
         return jdbc.query("""
                 select asset.id, asset.display_name, asset.delivery_path, asset.mime_type, asset.byte_size,
                        asset.width, asset.height, asset.default_alt_text, asset.status, asset.version,
+                       asset.archived_at,
                        count(usage.asset_id) as usage_count
                   from website_media_asset asset
                   left join website_media_usage usage on usage.asset_id = asset.id
                  where asset.id = ?
                  group by asset.id, asset.display_name, asset.delivery_path, asset.mime_type, asset.byte_size,
-                          asset.width, asset.height, asset.default_alt_text, asset.status, asset.version
+                          asset.width, asset.height, asset.default_alt_text, asset.status, asset.version,
+                          asset.archived_at
                 """, rs -> rs.next() ? new WebsiteMediaAsset(
                 rs.getObject("id", UUID.class), rs.getString("display_name"), rs.getString("delivery_path"),
                 rs.getString("mime_type"), rs.getLong("byte_size"), rs.getInt("width"), rs.getInt("height"),
                 rs.getString("default_alt_text"), rs.getInt("usage_count"), rs.getString("status"),
-                rs.getInt("version")) : null, mediaId);
+                rs.getInt("version"), rs.getObject("archived_at", OffsetDateTime.class),
+                permanentDeleteAvailableAt(rs.getObject("archived_at", OffsetDateTime.class))) : null, mediaId);
     }
 
     private WebsiteMediaAsset changeStatus(String token, UUID mediaId, WebsiteMediaVersionRequest request,
@@ -207,9 +251,10 @@ public class WebsiteMediaService {
         if ("ARCHIVED".equals(nextStatus) && usageCount(mediaId) > 0) throw assetInUse();
         int updated = jdbc.update("""
                 update website_media_asset
-                   set status = ?, version = version + 1, updated_at = current_timestamp, updated_by = ?
+                   set status = ?, archived_at = case when ? = 'ARCHIVED' then current_timestamp else null end,
+                       version = version + 1, updated_at = current_timestamp, updated_by = ?
                  where id = ? and status = ? and version = ?
-                """, nextStatus, actor.id(), mediaId, expectedStatus, request.expectedVersion());
+                """, nextStatus, nextStatus, actor.id(), mediaId, expectedStatus, request.expectedVersion());
         if (updated == 0) throw versionConflict();
         return catalogAsset(mediaId);
     }
@@ -237,17 +282,66 @@ public class WebsiteMediaService {
 
     private WebsiteMediaConflictException assetInUse() {
         return new WebsiteMediaConflictException("WEBSITE_MEDIA_IN_USE",
-                "초안 또는 발행 페이지에서 사용 중인 미디어는 보관할 수 없습니다.");
+                "초안 또는 발행 페이지에서 사용 중인 미디어는 보관하거나 영구 삭제할 수 없습니다.");
+    }
+
+    private WebsiteMediaConflictException deleteConflict(String message) {
+        return new WebsiteMediaConflictException("WEBSITE_MEDIA_DELETE_CONFLICT", message);
     }
 
     private MediaAssetRow asset(UUID mediaId, boolean activeOnly, String lockClause) {
         String status = activeOnly ? " and status = 'ACTIVE'" : "";
-        return jdbc.query("select id, origin, delivery_path, storage_key, mime_type, status, version from website_media_asset where id = ?"
+        return jdbc.query("select id, origin, delivery_path, storage_key, mime_type, status, version, archived_at from website_media_asset where id = ?"
                         + status + lockClause,
                 rs -> rs.next() ? new MediaAssetRow(rs.getObject("id", UUID.class), rs.getString("origin"),
                         rs.getString("delivery_path"), rs.getString("storage_key"), rs.getString("mime_type"),
-                        rs.getString("status"), rs.getInt("version")) : null,
+                        rs.getString("status"), rs.getInt("version"), rs.getObject("archived_at", OffsetDateTime.class)) : null,
                 mediaId);
+    }
+
+    private OffsetDateTime permanentDeleteAvailableAt(OffsetDateTime archivedAt) {
+        return archivedAt == null ? null : archivedAt.plusDays(PERMANENT_DELETE_GRACE_DAYS);
+    }
+
+    private Path storedFile(MediaAssetRow asset) {
+        Path root = storageDirectory.toAbsolutePath().normalize();
+        Path source = root.resolve(asset.storageKey()).normalize();
+        if (!source.startsWith(root) || !Files.isRegularFile(source)) {
+            throw new IllegalStateException("영구 삭제할 미디어 파일을 찾을 수 없습니다.");
+        }
+        return source;
+    }
+
+    private Path quarantineFile(MediaAssetRow asset) {
+        Path root = storageDirectory.toAbsolutePath().normalize();
+        return root.resolve(".trash").resolve(asset.storageKey() + "." + UUID.randomUUID() + ".delete").normalize();
+    }
+
+    private void moveToQuarantine(Path source, Path quarantine) {
+        try {
+            Files.createDirectories(quarantine.getParent());
+            Files.move(source, quarantine, StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException exception) {
+            throw new IllegalStateException("미디어 파일을 삭제 준비 상태로 옮기지 못했습니다.", exception);
+        }
+    }
+
+    private void registerFileCompletion(Path source, Path quarantine) {
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCompletion(int status) {
+                try {
+                    if (status == TransactionSynchronization.STATUS_COMMITTED) {
+                        Files.deleteIfExists(quarantine);
+                    } else if (Files.exists(quarantine)) {
+                        Files.move(quarantine, source, StandardCopyOption.REPLACE_EXISTING);
+                    }
+                } catch (IOException exception) {
+                    log.error("미디어 파일 삭제 상태를 정리하지 못했습니다. source={}, quarantine={}, transactionStatus={}",
+                            source, quarantine, status, exception);
+                }
+            }
+        });
     }
 
     private ImageInfo inspect(byte[] bytes) {
@@ -303,7 +397,7 @@ public class WebsiteMediaService {
     }
 
     record MediaAssetRow(UUID id, String origin, String deliveryPath, String storageKey, String mimeType,
-            String status, int version) {
+            String status, int version, OffsetDateTime archivedAt) {
     }
 
     private record ImageInfo(String mimeType, int width, int height) {
