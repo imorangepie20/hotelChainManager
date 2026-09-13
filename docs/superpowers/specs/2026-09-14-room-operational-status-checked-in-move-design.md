@@ -17,7 +17,7 @@
 
 ## 상태 모델
 
-`physical_room.housekeeping_status`는 기존과 같이 `CLEAN` 또는 `NEEDS_CLEANING`을 나타낸다. 별도 `operational_status`는 다음 값만 허용한다.
+V7의 `physical_room.housekeeping_status`는 현재 `CLEAN`, `NEEDS_CLEANING`, `OUT_OF_SERVICE`를 한 컬럼에서 허용한다. 신규 migration은 이를 청소 상태와 운영 상태로 분리하며, 이후 `housekeeping_status`는 `CLEAN` 또는 `NEEDS_CLEANING`만 나타낸다. 별도 `operational_status`는 다음 값만 허용한다.
 
 | 상태 | 의미 | 신규 배정 | 허용 조건 |
 |---|---|---:|---|
@@ -25,7 +25,7 @@
 | `INSPECTION_REQUIRED` | 점검 필요 | 불가 | 투숙 중에도 설정 가능 |
 | `OUT_OF_SERVICE` | 판매 중지 | 불가 | 현재 투숙 또는 미래 확정 배정이 없어야 함 |
 
-신규 migration은 모든 기존 객실을 `AVAILABLE`, version `0`으로 초기화한다. 운영 불가 상태의 사유는 필수이며 예상 복구 시각은 선택이다. `AVAILABLE`로 복구하면 현재 사유와 예상 복구 시각을 비우되 감사 이력에는 이전 값을 보존한다.
+신규 migration은 기존 `housekeeping_status='OUT_OF_SERVICE'` 행을 `operational_status='OUT_OF_SERVICE'`, `housekeeping_status='NEEDS_CLEANING'`으로 보수적으로 이관하고 나머지 객실은 `AVAILABLE`로 초기화한다. 모든 객실의 운영 version은 `0`에서 시작한다. 운영 불가 상태의 사유는 필수이며, 이관 행은 `기존 판매 중지 상태 이관`을 사용한다. 예상 복구 시각은 선택이다. `AVAILABLE`로 복구하면 현재 사유와 예상 복구 시각을 비우되 감사 이력에는 이전 값을 보존한다.
 
 청소 완료는 청소 상태만 `CLEAN`으로 바꾸며 운영 상태를 자동 복구하지 않는다. 점검 완료 또는 판매 재개는 직원이 명시적으로 실행한다. 객실 유형별 `inventory_night`는 실제 객실 상태 변경으로 자동 증감하지 않는다.
 
@@ -134,7 +134,7 @@ PostgreSQL 통합 테스트는 다음을 직접 검증한다.
 
 ## 배포와 롤백
 
-schema는 기존 행을 보존하는 additive migration으로 추가한다. API를 먼저 배포한 뒤 관리자 UI를 배포한다. 이전 API로 롤백해도 새 컬럼과 감사 테이블은 남기며 기존 객실 운영은 계속 가능하다. 이미 기록된 운영 상태를 무시하는 이전 API로 장기간 운영하지 않도록 롤백 시 신규 배정 API를 함께 제한하고, 복구 뒤 감사 이벤트를 기준으로 현재 상태를 재확인한다.
+schema는 감사 테이블과 운영 컬럼을 additive하게 추가하고, 기존 `housekeeping_status='OUT_OF_SERVICE'`만 보수적으로 두 상태로 이관한다. API를 먼저 배포한 뒤 관리자 UI를 배포한다. 이전 API로 롤백해도 새 컬럼과 감사 테이블은 남기며 `housekeeping_status`의 `CLEAN`·`NEEDS_CLEANING` 처리는 호환된다. 이전 API는 새 운영 상태를 배정 조건에 반영하지 않으므로 장기간 운영하지 않고, 롤백 시 신규 배정 API를 함께 제한한 뒤 복구 후 감사 이벤트를 기준으로 현재 상태를 재확인한다.
 
 ## 제외 범위
 
