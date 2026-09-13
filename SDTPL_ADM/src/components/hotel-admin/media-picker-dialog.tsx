@@ -16,11 +16,11 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { MediaDraftUsageReplacementDialog } from "@/components/hotel-admin/media-draft-usage-replacement-dialog";
+import { MediaStorageStatus } from "@/components/hotel-admin/media-storage-status";
 import {
   archiveWebsiteMedia,
   deleteWebsiteMedia,
   getWebsiteMedia,
-  getWebsiteMediaStorageAudit,
   getWebsiteMediaUsages,
   retryWebsiteMediaVariant,
   restoreWebsiteMedia,
@@ -28,7 +28,6 @@ import {
   updateWebsiteMedia,
   uploadWebsiteMedia,
   type WebsiteMediaAsset,
-  type WebsiteMediaStorageAudit,
   type WebsiteMediaUsage,
   type WebsiteMediaVariant,
 } from "@/lib/staff-api";
@@ -143,9 +142,6 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
   const [uploadError, setUploadError] = useState("");
   const [uploadNotice, setUploadNotice] = useState("");
   const [uploading, setUploading] = useState(false);
-  const [storageAudit, setStorageAudit] = useState<WebsiteMediaStorageAudit | null>(null);
-  const [storageAuditError, setStorageAuditError] = useState("");
-  const [auditingStorage, setAuditingStorage] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [displayName, setDisplayName] = useState("");
   const [defaultAltText, setDefaultAltText] = useState("");
@@ -166,7 +162,6 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
   const catalogRequestGeneration = useRef(0);
   const usageRequestGeneration = useRef(0);
   const pollRequestGeneration = useRef(0);
-  const storageAuditRequestGeneration = useRef(0);
   const variantContextGeneration = useRef(0);
   const retryRequestGenerations = useRef(new Map<string, number>());
   const selectedAssetIdRef = useRef(initialAssetId);
@@ -181,11 +176,6 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
   const selectedAssetIdForPolling = selectedAsset?.id ?? "";
   const selectedAssetHasActiveVariant = selectedAsset?.status === "ACTIVE"
     && selectedAsset.variants.some(isActiveVariant);
-  const storageAuditGroups = storageAudit ? [
-    { label: "누락된 참조 파일", storageKeys: storageAudit.missingStorageKeys },
-    { label: "참조 없는 파일", storageKeys: storageAudit.orphanStorageKeys },
-    { label: "오래된 임시 파일", storageKeys: storageAudit.staleTemporaryStorageKeys },
-  ] : [];
 
   function invalidateVariantContext() {
     variantContextGeneration.current += 1;
@@ -247,9 +237,6 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
     setUploading(false);
     setUploadError("");
     setUploadNotice("");
-    setStorageAudit(null);
-    setStorageAuditError("");
-    setAuditingStorage(false);
     selectedAssetIdRef.current = initialAssetId;
     setSelectedAssetId(initialAssetId);
     setMetadataError("");
@@ -258,7 +245,6 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
     return () => {
       catalogRequestGeneration.current += 1;
       uploadRequestGeneration.current += 1;
-      storageAuditRequestGeneration.current += 1;
     };
   }, [initialAssetId, open, refreshCatalog]);
 
@@ -390,23 +376,6 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
     }
   }
 
-  async function auditStorage() {
-    const requestGeneration = ++storageAuditRequestGeneration.current;
-    setAuditingStorage(true);
-    setStorageAuditError("");
-    try {
-      const result = await getWebsiteMediaStorageAudit(token);
-      if (storageAuditRequestGeneration.current === requestGeneration) setStorageAudit(result);
-    } catch (cause) {
-      if (storageAuditRequestGeneration.current === requestGeneration) {
-        setStorageAudit(null);
-        setStorageAuditError(cause instanceof Error ? cause.message : "미디어 저장소를 점검하지 못했습니다.");
-      }
-    } finally {
-      if (storageAuditRequestGeneration.current === requestGeneration) setAuditingStorage(false);
-    }
-  }
-
   async function saveMetadata() {
     if (!selectedAsset) return;
     setSavingMetadata(true);
@@ -503,7 +472,6 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
       usageRequestGeneration.current += 1;
       uploadRequestGeneration.current += 1;
       pollRequestGeneration.current += 1;
-      storageAuditRequestGeneration.current += 1;
       invalidateVariantContext();
       setReplacementConfirmationOpen(false);
       setReplacementAssetId(null);
@@ -514,9 +482,6 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
       setMetadataAltText("");
       setMetadataError("");
       setMetadataNotice("");
-      setStorageAudit(null);
-      setStorageAuditError("");
-      setAuditingStorage(false);
       setArchiveConfirmationOpen(false);
       setDeleteConfirmationOpen(false);
     }
@@ -534,30 +499,7 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
         </DialogHeader>
 
         <div className="min-h-0 overflow-y-auto p-5">
-          <section aria-label="미디어 저장소 점검" className="mb-5 border-b pb-5">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <h3 className="font-medium">미디어 저장소 점검</h3>
-                <p className="mt-1 text-sm text-muted-foreground">DB 참조와 실제 파일을 읽기 전용으로 비교합니다. 파일을 삭제하거나 복구하지 않습니다.</p>
-              </div>
-              <Button type="button" variant="outline" onClick={() => void auditStorage()} disabled={auditingStorage}>
-                {auditingStorage ? "점검 중" : "저장소 점검"}
-              </Button>
-            </div>
-            {storageAuditError && <p role="alert" className="mt-3 text-sm text-destructive">{storageAuditError}</p>}
-            {storageAudit?.healthy && <p role="status" className="mt-3 text-sm text-emerald-700">DB 참조와 저장 파일이 모두 일치합니다.</p>}
-            {storageAudit && !storageAudit.healthy && <div className="mt-4 text-sm">
-              <p role="status" className="font-medium">누락 {storageAudit.missingStorageKeys.length}개 · orphan {storageAudit.orphanStorageKeys.length}개 · 오래된 임시 파일 {storageAudit.staleTemporaryStorageKeys.length}개</p>
-              <div className="mt-3 grid gap-3 md:grid-cols-3">
-                {storageAuditGroups.map(({ label, storageKeys }) => <section key={label}>
-                  <h4 className="text-xs font-medium text-muted-foreground">{label}</h4>
-                  {storageKeys.length === 0
-                    ? <p className="mt-1 text-xs text-muted-foreground">없음</p>
-                    : <ul className="mt-1 grid gap-1">{storageKeys.map((storageKey) => <li key={storageKey}><code className="break-all text-xs">{storageKey}</code></li>)}</ul>}
-                </section>)}
-              </div>
-            </div>}
-          </section>
+          <MediaStorageStatus key={open ? "open" : "closed"} token={token} active={open} />
 
           <section className="rounded-xl border bg-muted/20 p-4">
             <div className="grid gap-3 md:grid-cols-[1.15fr_1fr_1fr_auto] md:items-end">

@@ -2120,6 +2120,7 @@ test("runs a read-only media storage audit and displays categorized storage keys
   await expect(audit.getByText("missing-original.png", { exact: true })).toBeVisible();
   await expect(audit.getByText("unreachable-orphan.jpg", { exact: true })).toBeVisible();
   await expect(audit.getByText("abandoned-variant.webp.tmp", { exact: true })).toBeVisible();
+  await expect(audit.getByRole("button", { name: "다음 100개 복사", exact: true })).toHaveCount(0);
 });
 
 test("shows healthy media storage and replaces it with a later audit error", async ({ page }) => {
@@ -2148,6 +2149,103 @@ test("shows healthy media storage and replaces it with a later audit error", asy
   await audit.getByRole("button", { name: "저장소 점검", exact: true }).click();
   await expect(audit.getByRole("alert")).toHaveText("저장소를 읽지 못했습니다.");
   await expect(audit.getByText("DB 참조와 저장 파일이 모두 일치합니다.", { exact: true })).toHaveCount(0);
+});
+
+test("manages storage migration and S3 backfill", async ({ page }) => {
+  let backfillMethod = "";
+  await page.route("**/api/staff/website/media/storage-audit", (route) => route.fulfill({ json: {
+    checkedAt: "2026-09-13T04:30:00Z",
+    healthy: false,
+    missingStorageKeys: [],
+    orphanStorageKeys: [],
+    staleTemporaryStorageKeys: [],
+    mode: "mirror",
+    stores: [
+      { storeName: "local", healthy: true, missingStorageKeys: [], orphanStorageKeys: [], staleTemporaryStorageKeys: [] },
+      { storeName: "s3", healthy: false, missingStorageKeys: ["one.png", "two.webp"], orphanStorageKeys: [], staleTemporaryStorageKeys: [] },
+    ],
+  } }));
+  await page.route("**/api/staff/website/media/storage-migration", (route) => route.fulfill({ json: {
+    mode: "mirror", total: 10, both: 8, localOnly: 2, s3Only: 0, mismatch: 0, missing: 0, fallbackCount: 0,
+  } }));
+  await page.route("**/api/staff/website/media/storage-migration/backfill", (route) => {
+    backfillMethod = route.request().method();
+    return route.fulfill({ json: {
+      examined: 2, copied: 2, skipped: 0, mismatch: 0, failed: 0, failedStorageKeys: [],
+    } });
+  });
+
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "미디어 선택" }).click();
+  const audit = page.getByRole("dialog", { name: "미디어 선택" }).getByLabel("미디어 저장소 점검");
+  await audit.getByRole("button", { name: "저장소 점검", exact: true }).click();
+
+  await expect(audit.getByText("mirror · 양쪽 일치 8개", { exact: true })).toBeVisible();
+  await expect(audit.getByText("S3에 없는 파일 2개", { exact: true })).toBeVisible();
+  await audit.getByRole("button", { name: "다음 100개 복사", exact: true }).click();
+  expect(backfillMethod).toBe("POST");
+  await expect(audit.getByRole("status")).toContainText("2개를 S3에 복사했습니다.");
+});
+
+test("disables S3 backfill and reports mismatch with a partial failure", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  let releaseBackfill!: () => void;
+  const backfillGate = new Promise<void>((resolve) => { releaseBackfill = resolve; });
+  await page.route("**/api/staff/website/media/storage-audit", (route) => route.fulfill({ json: {
+    checkedAt: "2026-09-13T04:30:00Z", healthy: false,
+    missingStorageKeys: [], orphanStorageKeys: [], staleTemporaryStorageKeys: [], mode: "mirror",
+    stores: [
+      { storeName: "local", healthy: true, missingStorageKeys: [], orphanStorageKeys: [], staleTemporaryStorageKeys: [] },
+      { storeName: "s3", healthy: false, missingStorageKeys: ["one.png"], orphanStorageKeys: [], staleTemporaryStorageKeys: [] },
+    ],
+  } }));
+  await page.route("**/api/staff/website/media/storage-migration", (route) => route.fulfill({ json: {
+    mode: "mirror", total: 10, both: 7, localOnly: 2, s3Only: 0, mismatch: 1, missing: 0, fallbackCount: 0,
+  } }));
+  await page.route("**/api/staff/website/media/storage-migration/backfill", async (route) => {
+    await backfillGate;
+    return route.fulfill({ json: {
+      examined: 3, copied: 1, skipped: 0, mismatch: 1, failed: 1, failedStorageKeys: ["too-long/path/failed.png"],
+    } });
+  });
+
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "미디어 선택" }).click();
+  const audit = page.getByRole("dialog", { name: "미디어 선택" }).getByLabel("미디어 저장소 점검");
+  await audit.getByRole("button", { name: "저장소 점검", exact: true }).click();
+  await expect(audit.getByRole("alert")).toContainText("체크섬이 다른 파일이 1개");
+
+  await audit.getByRole("button", { name: "다음 100개 복사", exact: true }).click();
+  const pending = audit.getByRole("button", { name: "복사 중", exact: true });
+  await expect(pending).toBeDisabled();
+  releaseBackfill();
+  await expect(audit.getByRole("alert")).toContainText("복사하지 못한 파일이 1개");
+  await expect(audit.getByRole("status")).toContainText("1개를 S3에 복사했습니다.");
+  await expect(audit).toBeVisible();
+});
+
+test("ignores a late media storage audit response after close", async ({ page }) => {
+  let releaseAudit!: () => void;
+  const auditGate = new Promise<void>((resolve) => { releaseAudit = resolve; });
+  await page.route("**/api/staff/website/media/storage-audit", async (route) => {
+    await auditGate;
+    return route.fulfill({ json: {
+      checkedAt: "2026-09-13T04:30:00Z", healthy: false,
+      missingStorageKeys: ["late.png"], orphanStorageKeys: [], staleTemporaryStorageKeys: [],
+    } });
+  });
+
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "미디어 선택" }).click();
+  const dialog = page.getByRole("dialog", { name: "미디어 선택" });
+  await dialog.getByRole("button", { name: "저장소 점검", exact: true }).click();
+  await page.keyboard.press("Escape");
+  releaseAudit();
+  await expect(dialog).toHaveCount(0);
+
+  await page.getByRole("button", { name: "미디어 선택" }).click();
+  const reopened = page.getByRole("dialog", { name: "미디어 선택" }).getByLabel("미디어 저장소 점검");
+  await expect(reopened.getByText("late.png", { exact: true })).toHaveCount(0);
 });
 
 test("shows the upload validation error without changing the selected page image", async ({ page }) => {

@@ -289,12 +289,39 @@ export type WebsiteMediaUsage = {
   fieldPath: string;
   altText: string;
 };
+export type WebsiteMediaStoreAudit = {
+  storeName: string;
+  healthy: boolean;
+  missingStorageKeys: string[];
+  orphanStorageKeys: string[];
+  staleTemporaryStorageKeys: string[];
+};
 export type WebsiteMediaStorageAudit = {
   checkedAt: string;
   healthy: boolean;
   missingStorageKeys: string[];
   orphanStorageKeys: string[];
   staleTemporaryStorageKeys: string[];
+  mode: "local" | "mirror" | "s3-primary";
+  stores: WebsiteMediaStoreAudit[];
+};
+export type WebsiteMediaStorageMigrationStatus = {
+  mode: "local" | "mirror" | "s3-primary";
+  total: number;
+  both: number;
+  localOnly: number;
+  s3Only: number;
+  mismatch: number;
+  missing: number;
+  fallbackCount: number;
+};
+export type WebsiteMediaStorageBackfillResult = {
+  examined: number;
+  copied: number;
+  skipped: number;
+  mismatch: number;
+  failed: number;
+  failedStorageKeys: string[];
 };
 export type UploadWebsiteMediaInput = {
   file: File;
@@ -404,8 +431,28 @@ export async function getWebsiteMedia(token: string, includeArchived = false): P
   const assets = await mediaRequest<WebsiteMediaAssetResponse[]>(`/api/staff/website/media${includeArchived ? "?includeArchived=true" : ""}`, token);
   return assets.map(normalizeWebsiteMediaAsset);
 }
-export function getWebsiteMediaStorageAudit(token: string) {
-  return mediaRequest<WebsiteMediaStorageAudit>("/api/staff/website/media/storage-audit", token);
+export async function getWebsiteMediaStorageAudit(token: string): Promise<WebsiteMediaStorageAudit> {
+  type AuditResponse = Omit<WebsiteMediaStorageAudit, "mode" | "stores"> & {
+    mode?: WebsiteMediaStorageAudit["mode"];
+    stores?: WebsiteMediaStoreAudit[];
+  };
+  const result = await mediaRequest<AuditResponse>("/api/staff/website/media/storage-audit", token);
+  const local = {
+    storeName: "local",
+    healthy: result.healthy,
+    missingStorageKeys: result.missingStorageKeys,
+    orphanStorageKeys: result.orphanStorageKeys,
+    staleTemporaryStorageKeys: result.staleTemporaryStorageKeys,
+  };
+  return { ...result, mode: result.mode ?? "local", stores: result.stores ?? [local] };
+}
+export function getWebsiteMediaStorageMigration(token: string) {
+  return mediaRequest<WebsiteMediaStorageMigrationStatus>("/api/staff/website/media/storage-migration", token);
+}
+export function backfillWebsiteMediaStorage(token: string) {
+  return mediaRequest<WebsiteMediaStorageBackfillResult>(
+    "/api/staff/website/media/storage-migration/backfill", token, { method: "POST" },
+  );
 }
 export function uploadWebsiteMedia(token: string, input: UploadWebsiteMediaInput) {
   const formData = new FormData();
