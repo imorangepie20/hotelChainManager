@@ -15,13 +15,10 @@ const payment = {
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.route('**/api/reservation-change-payments/current', async route => {
-    if (route.request().method() === 'POST') {
-      await route.fulfill({ json: { checkoutUrl: 'http://localhost:4000/fake-checkout' } })
-      return
-    }
-    await route.fulfill({ json: payment })
-  })
+  await page.route('**/api/reservation-change-payments/current', route => route.fulfill({ json: payment }))
+  await page.route('**/api/reservation-change-payments/current/checkout', route => route.fulfill({
+    json: { checkoutUrl: 'http://localhost:4000/fake-checkout' },
+  }))
   await page.route('**/fake-checkout', route => route.fulfill({
     contentType: 'text/html',
     body: '<main><h1>테스트 결제 화면</h1></main>',
@@ -60,9 +57,9 @@ test('390px에서 가로 넘침 없이 키보드로 결제를 연다', async ({ 
   await page.goto(`/reservation-change-payment#${token}`)
 
   const action = page.getByRole('button', { name: '100,000원 결제하기' })
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)
+  expect(overflow).toBe(false)
   await action.focus()
   await page.keyboard.press('Enter')
   await expect(page.getByRole('heading', { name: '테스트 결제 화면' })).toBeVisible()
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)
-  expect(overflow).toBe(false)
 })
