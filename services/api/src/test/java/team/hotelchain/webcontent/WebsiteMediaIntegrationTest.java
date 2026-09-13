@@ -443,6 +443,7 @@ class WebsiteMediaIntegrationTest {
         WebsiteMediaAsset uploaded = media.upload(headquarters.token(),
                 new MemoryMultipartFile("delete-me.png", "image/png", image("png")),
                 "영구 삭제 대상", "영구 삭제 대상 기본 alt");
+        Path variantFile = readyVariantFile(uploaded);
         WebsiteMediaAsset archived = media.archive(headquarters.token(), uploaded.id(),
                 new WebsiteMediaVersionRequest(uploaded.version()));
         jdbc.update("update website_media_asset set archived_at = current_timestamp - interval '31 days' where id = ?",
@@ -455,29 +456,74 @@ class WebsiteMediaIntegrationTest {
         assertThat(media.catalog(headquarters.token(), true)).extracting(WebsiteMediaAsset::id)
                 .doesNotContain(uploaded.id());
         assertThat(Files.exists(storedFile)).isFalse();
+        assertThat(Files.exists(variantFile)).isFalse();
+        assertThat(jdbc.queryForObject(
+                "select count(*) from website_media_variant where asset_id = ?", Integer.class, uploaded.id()))
+                .isZero();
     }
 
     @Test
-    void restoresTheStoredFileWhenTheDeleteTransactionRollsBack() throws IOException {
+    void restoresOriginalAndVariantFilesWhenDeleteVersionConflictRollsBack() throws IOException {
         StaffSessionView headquarters = staffAccess.login("media-hq@example.com", "hq-password");
         WebsiteMediaAsset uploaded = media.upload(headquarters.token(),
                 new MemoryMultipartFile("rollback.png", "image/png", image("png")),
                 "롤백 복구 대상", "롤백 복구 대상 기본 alt");
+        Path variantFile = readyVariantFile(uploaded);
         WebsiteMediaAsset archived = media.archive(headquarters.token(), uploaded.id(),
                 new WebsiteMediaVersionRequest(uploaded.version()));
         jdbc.update("update website_media_asset set archived_at = current_timestamp - interval '31 days' where id = ?",
                 uploaded.id());
         Path storedFile = Path.of(System.getProperty("java.io.tmpdir"), "hotel-chain-media", uploaded.id() + ".png");
+        jdbc.execute("""
+                create function pg_temp.prevent_task3_media_delete() returns trigger
+                language plpgsql as 'begin return null; end'
+                """);
+        jdbc.execute("""
+                create trigger prevent_task3_media_delete
+                before delete on website_media_asset
+                for each row execute function pg_temp.prevent_task3_media_delete()
+                """);
 
-        media.permanentlyDelete(headquarters.token(), uploaded.id(),
-                new WebsiteMediaVersionRequest(archived.version()));
+        assertThatThrownBy(() -> media.permanentlyDelete(headquarters.token(), uploaded.id(),
+                new WebsiteMediaVersionRequest(archived.version())))
+                .isInstanceOf(WebsiteMediaConflictException.class)
+                .extracting(error -> ((WebsiteMediaConflictException) error).code())
+                .isEqualTo("WEBSITE_MEDIA_VERSION_CONFLICT");
         assertThat(Files.exists(storedFile)).isFalse();
+        assertThat(Files.exists(variantFile)).isFalse();
 
         TestTransaction.flagForRollback();
         TestTransaction.end();
 
         assertThat(Files.exists(storedFile)).isTrue();
+        assertThat(Files.exists(variantFile)).isTrue();
         Files.deleteIfExists(storedFile);
+        Files.deleteIfExists(variantFile);
+    }
+
+    @Test
+    void rejectsPermanentDeletionWhenAReadyVariantFileIsMissing() throws IOException {
+        StaffSessionView headquarters = staffAccess.login("media-hq@example.com", "hq-password");
+        WebsiteMediaAsset uploaded = media.upload(headquarters.token(),
+                new MemoryMultipartFile("missing-variant.png", "image/png", image("png")),
+                "variant 누락 대상", "variant 누락 대상 기본 alt");
+        Path variantFile = readyVariantFile(uploaded);
+        WebsiteMediaAsset archived = media.archive(headquarters.token(), uploaded.id(),
+                new WebsiteMediaVersionRequest(uploaded.version()));
+        jdbc.update("update website_media_asset set archived_at = current_timestamp - interval '31 days' where id = ?",
+                uploaded.id());
+        Path storedFile = Path.of(System.getProperty("java.io.tmpdir"), "hotel-chain-media", uploaded.id() + ".png");
+        Files.delete(variantFile);
+
+        assertThatThrownBy(() -> media.permanentlyDelete(headquarters.token(), uploaded.id(),
+                new WebsiteMediaVersionRequest(archived.version())))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("영구 삭제할 미디어 파일");
+
+        assertThat(storedFile).exists();
+        assertThat(jdbc.queryForObject(
+                "select count(*) from website_media_asset where id = ?", Integer.class, uploaded.id()))
+                .isOne();
     }
 
     @Test
@@ -622,6 +668,20 @@ class WebsiteMediaIntegrationTest {
 
     private byte[] overPixelPng() {
         return Base64.getDecoder().decode("iVBORw0KGgoAAAANSUhEUgAAE4gAABOICAAAAAAK6Q0fAAAAAElFTkSuQmCC");
+    }
+
+    private Path readyVariantFile(WebsiteMediaAsset asset) throws IOException {
+        String storageKey = asset.id() + "-640-task3-ready.webp";
+        byte[] bytes = "task3-ready-webp".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        Path path = Path.of(System.getProperty("java.io.tmpdir"), "hotel-chain-media", storageKey);
+        Files.write(path, bytes);
+        jdbc.update("""
+                insert into website_media_variant (
+                    id, asset_id, format, target_width, status, storage_key, mime_type,
+                    byte_size, width, height, attempt_count
+                ) values (?, ?, 'WEBP', 640, 'READY', ?, 'image/webp', ?, 640, 360, 1)
+                """, UUID.randomUUID(), asset.id(), storageKey, (long) bytes.length);
+        return path;
     }
 
     private void deleteStorage() throws IOException {

@@ -20,11 +20,13 @@ import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import team.hotelchain.staff.StaffAccessService;
 
 @Service
 public class WebsiteMediaVariantService {
@@ -39,10 +41,20 @@ public class WebsiteMediaVariantService {
 
     private final JdbcTemplate jdbc;
     private final Clock clock;
+    private final StaffAccessService access;
+    private final Path storageDirectory;
 
-    public WebsiteMediaVariantService(JdbcTemplate jdbc, Clock clock) {
+    public WebsiteMediaVariantService(
+            JdbcTemplate jdbc,
+            Clock clock,
+            StaffAccessService access,
+            @Value("${website.media.storage-dir:}") String configuredStorageDirectory) {
         this.jdbc = jdbc;
         this.clock = clock;
+        this.access = access;
+        this.storageDirectory = configuredStorageDirectory == null || configuredStorageDirectory.isBlank()
+                ? Path.of(System.getProperty("java.io.tmpdir"), "hotel-chain-media")
+                : Path.of(configuredStorageDirectory);
     }
 
     @Transactional
@@ -85,6 +97,82 @@ public class WebsiteMediaVariantService {
             variantsByAsset.computeIfAbsent(assetId, ignored -> new ArrayList<>()).add(variant);
         }, assetIds.toArray());
         return variantsByAsset;
+    }
+
+    @Transactional(readOnly = true)
+    public WebsiteMediaContent publicContent(UUID mediaId, int targetWidth) {
+        String storageKey = jdbc.query("""
+                select variant.storage_key
+                  from website_media_variant variant
+                  join website_media_asset asset on asset.id = variant.asset_id
+                 where asset.id = ? and asset.status = 'ACTIVE' and asset.origin = 'UPLOADED'
+                   and variant.format = 'WEBP' and variant.target_width = ? and variant.status = 'READY'
+                """, rs -> rs.next() ? rs.getString("storage_key") : null, mediaId, targetWidth);
+        if (storageKey == null) throw new WebsiteMediaNotFoundException(mediaId);
+
+        Path root = storageDirectory.toAbsolutePath().normalize();
+        Path source = root.resolve(storageKey).normalize();
+        if (!source.startsWith(root) || !Files.isRegularFile(source)) {
+            throw new WebsiteMediaNotFoundException(mediaId);
+        }
+        try {
+            return new WebsiteMediaContent(Files.readAllBytes(source), "image/webp");
+        } catch (IOException exception) {
+            throw new WebsiteMediaNotFoundException(mediaId);
+        }
+    }
+
+    @Transactional
+    public void retry(String token, UUID mediaId, int targetWidth) {
+        access.requireHeadquarters(token);
+        if (!TARGET_WIDTHS.contains(targetWidth)) {
+            throw new IllegalArgumentException("미디어 variant 폭은 640 또는 1280이어야 합니다.");
+        }
+
+        List<RetryAsset> assets = jdbc.query("""
+                select status, origin
+                  from website_media_asset
+                 where id = ?
+                 for update
+                """, (rs, rowNumber) -> new RetryAsset(rs.getString("status"), rs.getString("origin")), mediaId);
+        if (assets.isEmpty()) throw new WebsiteMediaNotFoundException(mediaId);
+        RetryAsset asset = assets.getFirst();
+        if (!"ACTIVE".equals(asset.status()) || !"UPLOADED".equals(asset.origin())) throw retryConflict();
+
+        List<RetryVariant> retryVariants = jdbc.query("""
+                select id, status
+                  from website_media_variant
+                 where asset_id = ? and format = 'WEBP' and target_width = ?
+                 for update
+                """, (rs, rowNumber) -> new RetryVariant(
+                rs.getObject("id", UUID.class), rs.getString("status")), mediaId, targetWidth);
+        if (retryVariants.isEmpty()) throw new WebsiteMediaNotFoundException(mediaId);
+        RetryVariant variant = retryVariants.getFirst();
+        if (!"FAILED".equals(variant.status())) throw retryConflict();
+
+        int updated = jdbc.update("""
+                update website_media_variant
+                   set status = 'PENDING', storage_key = null, mime_type = null, byte_size = null,
+                       width = null, height = null, attempt_count = 0, next_attempt_at = null,
+                       lease_expires_at = null, last_error = null, updated_at = ?
+                 where id = ? and status = 'FAILED'
+                """, now(), variant.id());
+        if (updated != 1) throw retryConflict();
+    }
+
+    @Transactional
+    public List<String> storageKeys(UUID mediaId) {
+        return jdbc.query("""
+                select status, storage_key
+                  from website_media_variant
+                 where asset_id = ?
+                 order by target_width
+                 for update
+                """, (rs, rowNumber) -> new VariantStorage(
+                rs.getString("status"), rs.getString("storage_key")), mediaId).stream()
+                .filter(variant -> "READY".equals(variant.status()))
+                .map(VariantStorage::storageKey)
+                .toList();
     }
 
     @Transactional
@@ -193,6 +281,11 @@ public class WebsiteMediaVariantService {
         return ALLOWED_FAILURES.contains(errorSummary) ? errorSummary : GENERIC_FAILURE;
     }
 
+    private WebsiteMediaConflictException retryConflict() {
+        return new WebsiteMediaConflictException("WEBSITE_MEDIA_VARIANT_RETRY_CONFLICT",
+                "실패한 활성 업로드 미디어 variant만 다시 시도할 수 있습니다.");
+    }
+
     public record VariantClaim(
             UUID variantId,
             UUID assetId,
@@ -209,6 +302,15 @@ public class WebsiteMediaVariantService {
     }
 
     private record VariantState(String status, int attemptCount, String storageKey) {
+    }
+
+    private record RetryAsset(String status, String origin) {
+    }
+
+    private record RetryVariant(UUID id, String status) {
+    }
+
+    private record VariantStorage(String status, String storageKey) {
     }
 
     static final class ReadyFilePublication implements TransactionSynchronization {

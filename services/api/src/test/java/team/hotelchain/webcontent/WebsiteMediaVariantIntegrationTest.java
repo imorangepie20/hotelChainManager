@@ -1,11 +1,15 @@
 package team.hotelchain.webcontent;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.awt.Color;
 import java.awt.image.BufferedImage;
@@ -43,11 +47,15 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.SingleConnectionDataSource;
+import org.springframework.http.MediaType;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.web.context.WebApplicationContext;
 import org.springframework.web.multipart.MultipartFile;
+import team.hotelchain.staff.StaffAccessDeniedException;
 import team.hotelchain.staff.StaffAccessService;
 
 @SpringBootTest(properties = "website.media.variant-job-enabled=false")
@@ -55,6 +63,7 @@ import team.hotelchain.staff.StaffAccessService;
 @Import(WebsiteMediaVariantIntegrationTest.ClockConfiguration.class)
 class WebsiteMediaVariantIntegrationTest {
     private static final Instant START = Instant.parse("2026-09-13T00:00:00Z");
+    private static final UUID BRANCH_HOTEL = UUID.fromString("13000000-0000-0000-0000-000000000091");
 
     @org.springframework.beans.factory.annotation.Autowired JdbcTemplate jdbc;
     @org.springframework.beans.factory.annotation.Autowired DataSource dataSource;
@@ -62,6 +71,8 @@ class WebsiteMediaVariantIntegrationTest {
     @org.springframework.beans.factory.annotation.Autowired WebsiteMediaService media;
     @org.springframework.beans.factory.annotation.Autowired WebsiteMediaVariantService variants;
     @org.springframework.beans.factory.annotation.Autowired WebsiteMediaVariantEncoder encoder;
+    @org.springframework.beans.factory.annotation.Autowired PublicWebsiteMediaController publicMedia;
+    @org.springframework.beans.factory.annotation.Autowired WebApplicationContext context;
     @org.springframework.beans.factory.annotation.Autowired TestClock clock;
     WebsiteMediaVariantJob job;
 
@@ -70,9 +81,17 @@ class WebsiteMediaVariantIntegrationTest {
         removeCommittedWorkerFixtures();
         deleteStorage();
         clock.reset();
+        BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
+        jdbc.update("insert into hotel values (?, ?, ?, ?)",
+                BRANCH_HOTEL, "Variant 테스트 지점", "속초", "Asia/Seoul");
         jdbc.update("insert into staff_member (id, email, display_name, password_hash, role) values (?, ?, ?, ?, 'HQ_ADMIN')",
                 UUID.randomUUID(), "variant-hq@example.com", "Variant 본사 관리자",
-                new BCryptPasswordEncoder().encode("hq-password"));
+                passwordEncoder.encode("hq-password"));
+        jdbc.update("""
+                insert into staff_member (id, email, display_name, password_hash, role, hotel_id)
+                values (?, ?, ?, ?, 'BRANCH_STAFF', ?)
+                """, UUID.randomUUID(), "variant-branch@example.com", "Variant 지점 직원",
+                passwordEncoder.encode("branch-password"), BRANCH_HOTEL);
         job = new WebsiteMediaVariantJob(variants, encoder, storageDirectory().toString());
     }
 
@@ -199,6 +218,102 @@ class WebsiteMediaVariantIntegrationTest {
         assertThat(jdbc.queryForObject(
                 "select count(*) from website_media_variant where asset_id = ?", Integer.class, bundled.id()))
                 .isZero();
+    }
+
+    @Test
+    void deliversOnlyReadyVariantsOfActiveUploadedAssets() throws Exception {
+        WebsiteMediaAsset asset = uploadImage(640, 360);
+
+        assertThatThrownBy(() -> publicMedia.variant(asset.id(), 640))
+                .isInstanceOf(WebsiteMediaNotFoundException.class);
+        assertThat(job.processNext()).isTrue();
+
+        var response = publicMedia.variant(asset.id(), 640);
+        assertThat(response.getHeaders().getContentType()).isEqualTo(MediaType.parseMediaType("image/webp"));
+        assertThat(response.getHeaders().getCacheControl()).isEqualTo("public, max-age=31536000, immutable");
+        assertThat(response.getHeaders().getFirst("X-Content-Type-Options")).isEqualTo("nosniff");
+        assertThat(response.getBody()).isNotEmpty();
+
+        media.archive(headquartersToken(), asset.id(), new WebsiteMediaVersionRequest(asset.version()));
+
+        assertThatThrownBy(() -> publicMedia.variant(asset.id(), 640))
+                .isInstanceOf(WebsiteMediaNotFoundException.class);
+    }
+
+    @Test
+    void manualRetryResetsOnlyAFailedVariantToPending() throws IOException {
+        WebsiteMediaAsset asset = uploadImage(640, 360);
+        markFailed(asset.id(), 640);
+
+        variants.retry(headquartersToken(), asset.id(), 640);
+
+        RetryRow row = retryRow(asset.id(), 640);
+        assertThat(row.status()).isEqualTo("PENDING");
+        assertThat(row.attemptCount()).isZero();
+        assertThat(row.nextAttemptAt()).isNull();
+        assertThat(row.leaseExpiresAt()).isNull();
+        assertThat(row.lastError()).isNull();
+    }
+
+    @Test
+    void rejectsManualRetryForUnsupportedStateWidthAssetOriginAndRole() throws IOException {
+        String headquarters = headquartersToken();
+        WebsiteMediaAsset asset = uploadImage(640, 360);
+
+        assertThatThrownBy(() -> variants.retry(headquarters, asset.id(), 640))
+                .isInstanceOf(WebsiteMediaConflictException.class)
+                .extracting(error -> ((WebsiteMediaConflictException) error).code())
+                .isEqualTo("WEBSITE_MEDIA_VARIANT_RETRY_CONFLICT");
+        assertThatThrownBy(() -> variants.retry(headquarters, asset.id(), 800))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> variants.retry(branchToken(), asset.id(), 640))
+                .isInstanceOf(StaffAccessDeniedException.class);
+
+        WebsiteMediaAsset archived = media.archive(
+                headquarters, asset.id(), new WebsiteMediaVersionRequest(asset.version()));
+        assertThatThrownBy(() -> variants.retry(headquarters, archived.id(), 640))
+                .isInstanceOf(WebsiteMediaConflictException.class)
+                .extracting(error -> ((WebsiteMediaConflictException) error).code())
+                .isEqualTo("WEBSITE_MEDIA_VARIANT_RETRY_CONFLICT");
+        assertThatThrownBy(() -> variants.retry(headquarters, WebsiteMediaService.BUNDLED_ASSET_ID, 640))
+                .isInstanceOf(WebsiteMediaConflictException.class)
+                .extracting(error -> ((WebsiteMediaConflictException) error).code())
+                .isEqualTo("WEBSITE_MEDIA_VARIANT_RETRY_CONFLICT");
+    }
+
+    @Test
+    void retryEndpointMapsValidationConflictAndAuthorizationStatuses() throws Exception {
+        String headquarters = headquartersToken();
+        String branch = branchToken();
+        WebsiteMediaAsset asset = uploadImage(640, 360);
+        var mvc = MockMvcBuilders.webAppContextSetup(context).build();
+        String path = "/api/staff/website/media/" + asset.id() + "/variants/640/retry";
+
+        mvc.perform(post(path).header("X-Staff-Session", headquarters))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("WEBSITE_MEDIA_VARIANT_RETRY_CONFLICT"));
+        mvc.perform(post("/api/staff/website/media/" + asset.id() + "/variants/800/retry")
+                        .header("X-Staff-Session", headquarters))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+        mvc.perform(post(path).header("X-Staff-Session", branch))
+                .andExpect(status().isForbidden());
+
+        markFailed(asset.id(), 640);
+        mvc.perform(post(path).header("X-Staff-Session", headquarters))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.variants[0].status").value("PENDING"));
+
+        WebsiteMediaAsset archived = media.archive(
+                headquarters, asset.id(), new WebsiteMediaVersionRequest(asset.version()));
+        mvc.perform(post(path).header("X-Staff-Session", headquarters))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("WEBSITE_MEDIA_VARIANT_RETRY_CONFLICT"));
+        mvc.perform(post("/api/staff/website/media/" + WebsiteMediaService.BUNDLED_ASSET_ID
+                        + "/variants/640/retry").header("X-Staff-Session", headquarters))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("WEBSITE_MEDIA_VARIANT_RETRY_CONFLICT"));
+        assertThat(archived.status()).isEqualTo("ARCHIVED");
     }
 
     @Test
@@ -418,12 +533,17 @@ class WebsiteMediaVariantIntegrationTest {
             assertThat(uniqueFinalTarget).exists();
             assertThat(Files.readAllBytes(uniqueFinalTarget)).isEqualTo(encodedBytes);
         } finally {
+            removeCommittedWorkerFixtures();
             deleteStorage();
         }
     }
 
     private String headquartersToken() {
         return staffAccess.login("variant-hq@example.com", "hq-password").token();
+    }
+
+    private String branchToken() {
+        return staffAccess.login("variant-branch@example.com", "branch-password").token();
     }
 
     private WebsiteMediaAsset uploadImage(int width, int height) throws IOException {
@@ -437,9 +557,13 @@ class WebsiteMediaVariantIntegrationTest {
 
     private void removeCommittedWorkerFixtures() {
         jdbc.update("delete from website_media_asset where display_name like 'variant-worker-%'");
-        jdbc.update("delete from staff_session where staff_id in (select id from staff_member where email = ?)",
-                "variant-hq@example.com");
-        jdbc.update("delete from staff_member where email = ?", "variant-hq@example.com");
+        jdbc.update("""
+                delete from staff_session
+                 where staff_id in (select id from staff_member where email in (?, ?))
+                """, "variant-hq@example.com", "variant-branch@example.com");
+        jdbc.update("delete from staff_member where email in (?, ?)",
+                "variant-hq@example.com", "variant-branch@example.com");
+        jdbc.update("delete from hotel where id = ?", BRANCH_HOTEL);
     }
 
     private void resetBothRowsToPending(UUID assetId) {
@@ -450,6 +574,28 @@ class WebsiteMediaVariantIntegrationTest {
                        lease_expires_at = null, last_error = null
                  where asset_id = ?
                 """, assetId);
+    }
+
+    private void markFailed(UUID assetId, int targetWidth) {
+        jdbc.update("""
+                update website_media_variant
+                   set status = 'FAILED', storage_key = null, mime_type = null, byte_size = null,
+                       width = null, height = null, attempt_count = 3, next_attempt_at = null,
+                       lease_expires_at = null, last_error = '미디어 variant 생성에 실패했습니다.'
+                 where asset_id = ? and target_width = ?
+                """, assetId, targetWidth);
+    }
+
+    private RetryRow retryRow(UUID assetId, int targetWidth) {
+        return jdbc.queryForObject("""
+                select status, attempt_count, next_attempt_at, lease_expires_at, last_error
+                  from website_media_variant
+                 where asset_id = ? and target_width = ?
+                """, (rs, rowNumber) -> new RetryRow(
+                rs.getString("status"), rs.getInt("attempt_count"),
+                rs.getObject("next_attempt_at", OffsetDateTime.class),
+                rs.getObject("lease_expires_at", OffsetDateTime.class), rs.getString("last_error")),
+                assetId, targetWidth);
     }
 
     private void assertFailure(UUID assetId, int attemptCount, Instant nextAttemptAt) {
@@ -561,6 +707,14 @@ class WebsiteMediaVariantIntegrationTest {
     }
 
     private record FailureRow(String status, int attemptCount, OffsetDateTime nextAttemptAt, String lastError) {
+    }
+
+    private record RetryRow(
+            String status,
+            int attemptCount,
+            OffsetDateTime nextAttemptAt,
+            OffsetDateTime leaseExpiresAt,
+            String lastError) {
     }
 
     @TestConfiguration

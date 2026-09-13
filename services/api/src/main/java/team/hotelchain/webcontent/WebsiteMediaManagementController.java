@@ -21,12 +21,15 @@ import org.springframework.web.multipart.MultipartFile;
 @RequestMapping("/api/staff/website/media")
 public class WebsiteMediaManagementController {
     private final WebsiteMediaService media;
+    private final WebsiteMediaVariantService variants;
     private final WebsiteMediaDraftReplacementService replacements;
 
     public WebsiteMediaManagementController(
             WebsiteMediaService media,
+            WebsiteMediaVariantService variants,
             WebsiteMediaDraftReplacementService replacements) {
         this.media = media;
+        this.variants = variants;
         this.replacements = replacements;
     }
 
@@ -89,6 +92,15 @@ public class WebsiteMediaManagementController {
             @RequestBody WebsiteMediaVersionRequest request,
             @RequestHeader("X-Staff-Session") String token) {
         return media.restore(token, mediaId, request);
+    }
+
+    @PostMapping("/{mediaId}/variants/{targetWidth}/retry")
+    public WebsiteMediaAsset retryVariant(
+            @PathVariable UUID mediaId,
+            @PathVariable int targetWidth,
+            @RequestHeader("X-Staff-Session") String token) {
+        variants.retry(token, mediaId, targetWidth);
+        return media.catalogAssetForManagement(mediaId);
     }
 
     @DeleteMapping("/{mediaId}")

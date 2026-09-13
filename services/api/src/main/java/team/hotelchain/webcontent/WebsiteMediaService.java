@@ -5,10 +5,10 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -170,10 +170,12 @@ public class WebsiteMediaService {
             throw deleteConflict("보관 후 30일이 지난 미디어만 영구 삭제할 수 있습니다.");
         }
 
-        Path source = storedFile(current);
-        Path quarantine = quarantineFile(current);
-        moveToQuarantine(source, quarantine);
-        registerFileCompletion(source, quarantine);
+        List<String> storageKeys = new ArrayList<>();
+        storageKeys.add(current.storageKey());
+        storageKeys.addAll(variants.storageKeys(mediaId));
+        List<QuarantinedFile> files = storageKeys.stream().map(this::quarantinedFile).toList();
+        registerFileCompletion(files);
+        files.forEach(this::moveToQuarantine);
 
         int deleted = jdbc.update("delete from website_media_asset where id = ? and status = 'ARCHIVED' and version = ?",
                 mediaId, request.expectedVersion());
@@ -242,6 +244,10 @@ public class WebsiteMediaService {
     }
 
     WebsiteMediaAsset catalogAssetForReplacement(UUID mediaId) {
+        return catalogAsset(mediaId);
+    }
+
+    WebsiteMediaAsset catalogAssetForManagement(UUID mediaId) {
         return catalogAsset(mediaId);
     }
 
@@ -347,45 +353,54 @@ public class WebsiteMediaService {
         return archivedAt == null ? null : archivedAt.plusDays(PERMANENT_DELETE_GRACE_DAYS);
     }
 
-    private Path storedFile(MediaAssetRow asset) {
+    private QuarantinedFile quarantinedFile(String storageKey) {
+        Path source = storedFile(storageKey);
         Path root = storageDirectory.toAbsolutePath().normalize();
-        Path source = root.resolve(asset.storageKey()).normalize();
-        if (!source.startsWith(root) || !Files.isRegularFile(source)) {
+        Path trash = root.resolve(".trash").normalize();
+        Path quarantine = trash.resolve(UUID.randomUUID() + ".delete").normalize();
+        if (!quarantine.startsWith(trash)) throw new IllegalStateException("미디어 저장 경로가 올바르지 않습니다.");
+        return new QuarantinedFile(source, quarantine);
+    }
+
+    private Path storedFile(String storageKey) {
+        Path root = storageDirectory.toAbsolutePath().normalize();
+        Path source = storageKey == null ? root : root.resolve(storageKey).normalize();
+        if (storageKey == null || !source.startsWith(root) || !Files.isRegularFile(source)) {
             throw new IllegalStateException("영구 삭제할 미디어 파일을 찾을 수 없습니다.");
         }
         return source;
     }
 
-    private Path quarantineFile(MediaAssetRow asset) {
-        Path root = storageDirectory.toAbsolutePath().normalize();
-        return root.resolve(".trash").resolve(asset.storageKey() + "." + UUID.randomUUID() + ".delete").normalize();
-    }
-
-    private void moveToQuarantine(Path source, Path quarantine) {
+    private void moveToQuarantine(QuarantinedFile file) {
         try {
-            Files.createDirectories(quarantine.getParent());
-            Files.move(source, quarantine, StandardCopyOption.REPLACE_EXISTING);
+            Files.createDirectories(file.quarantine().getParent());
+            Files.move(file.source(), file.quarantine());
         } catch (IOException exception) {
             throw new IllegalStateException("미디어 파일을 삭제 준비 상태로 옮기지 못했습니다.", exception);
         }
     }
 
-    private void registerFileCompletion(Path source, Path quarantine) {
+    private void registerFileCompletion(List<QuarantinedFile> files) {
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCompletion(int status) {
-                try {
-                    if (status == TransactionSynchronization.STATUS_COMMITTED) {
-                        Files.deleteIfExists(quarantine);
-                    } else if (Files.exists(quarantine)) {
-                        Files.move(quarantine, source, StandardCopyOption.REPLACE_EXISTING);
-                    }
-                } catch (IOException exception) {
-                    log.error("미디어 파일 삭제 상태를 정리하지 못했습니다. source={}, quarantine={}, transactionStatus={}",
-                            source, quarantine, status, exception);
-                }
+                files.forEach(file -> restoreOrDelete(status, file));
             }
         });
+    }
+
+    private void restoreOrDelete(int status, QuarantinedFile file) {
+        try {
+            if (status == TransactionSynchronization.STATUS_COMMITTED) {
+                Files.deleteIfExists(file.quarantine());
+            } else if (Files.exists(file.quarantine())) {
+                Files.createDirectories(file.source().getParent());
+                Files.move(file.quarantine(), file.source());
+            }
+        } catch (IOException exception) {
+            log.error("미디어 파일 삭제 상태를 정리하지 못했습니다. source={}, quarantine={}, transactionStatus={}",
+                    file.source(), file.quarantine(), status, exception);
+        }
     }
 
     private ImageInfo inspect(byte[] bytes) {
@@ -445,5 +460,8 @@ public class WebsiteMediaService {
     }
 
     private record ImageInfo(String mimeType, int width, int height) {
+    }
+
+    private record QuarantinedFile(Path source, Path quarantine) {
     }
 }
