@@ -94,7 +94,10 @@ public class StaffAccessService {
     }
 
     public StaffPrincipal requireHotel(String token, UUID hotelId) {
-        StaffPrincipal principal = current(token);
+        return requireHotel(current(token), hotelId);
+    }
+
+    public StaffPrincipal requireHotel(StaffPrincipal principal, UUID hotelId) {
         if ("HQ_ADMIN".equals(principal.role()) || hotelId.equals(principal.hotelId())) {
             return principal;
         }

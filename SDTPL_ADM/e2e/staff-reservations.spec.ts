@@ -156,3 +156,88 @@ test("lets a branch employee search reservations and open the selected reservati
   expect(cancellationKeys[2]).not.toBe(cancellationKeys[1]);
   await expect(page.getByText("김하늘", { exact: true })).toHaveCount(0);
 });
+
+test("lets a branch employee correct confirmed reservation guest details", async ({ page }) => {
+  let guestName = "김하늘";
+  let guestEmail = "guest@example.com";
+  const requestKeys: string[] = [];
+  const requestBodies: unknown[] = [];
+  await page.addInitScript((hotelId) => {
+    localStorage.setItem("hotel-chain-staff-session", "test-session-token");
+    localStorage.setItem("hotel-chain-staff", JSON.stringify({
+      id: "staff",
+      email: "sokcho@hotel-chain.local",
+      displayName: "속초 직원",
+      role: "BRANCH_STAFF",
+      hotelId,
+    }));
+  }, SOKCHO);
+  await page.route("**/api/staff/me", (route) => route.fulfill({ status: 200, contentType: "application/json", body: "{}" }));
+  await page.route("**/api/staff/hotels/*/reservations?*", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      hotelId: SOKCHO,
+      date: "2026-09-13",
+      truncated: false,
+      reservations: [{
+        reservationId: "42000000-0000-0000-0000-000000000001",
+        guestName,
+        guestEmail,
+        roomTypeName: "디럭스 오션",
+        ratePlanName: "조식 포함",
+        checkIn: "2026-09-13",
+        checkOut: "2026-09-15",
+        adults: 2,
+        children: 1,
+        rooms: 1,
+        status: "CONFIRMED",
+        totalKrw: 420000,
+        currency: "KRW",
+        assignedRoomNumbers: [],
+      }],
+    }),
+  }));
+  await page.route("**/api/staff/reservations/*/guest", async (route) => {
+    requestKeys.push(route.request().headers()["idempotency-key"] ?? "");
+    requestBodies.push(route.request().postDataJSON());
+    if (requestKeys.length === 1) {
+      return route.fulfill({
+        status: 502,
+        contentType: "application/json",
+        body: JSON.stringify({ message: "응답을 확인하지 못했습니다. 다시 시도해 주세요." }),
+      });
+    }
+    guestName = "김하늘 수정";
+    guestEmail = "updated@example.com";
+    return route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        reservationId: "42000000-0000-0000-0000-000000000001",
+        guestName,
+        guestEmail,
+      }),
+    });
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/dashboard/reservations");
+  await page.getByRole("button", { name: "김하늘 예약 상세" }).press("Enter");
+  const detail = page.getByRole("dialog");
+  await detail.getByRole("button", { name: "예약자 정보 수정" }).press("Enter");
+  await detail.getByLabel("예약자 이름").fill("  김하늘 수정  ");
+  await detail.getByLabel("예약자 이메일").fill("updated@example.com");
+  const saveButton = detail.getByRole("button", { name: "예약자 정보 저장" });
+  await saveButton.press("Enter");
+  await expect(detail.getByRole("alert")).toContainText("응답을 확인하지 못했습니다");
+  await saveButton.press("Enter");
+
+  await expect(page.getByRole("status", { name: "예약 처리 결과" })).toContainText("예약자 정보를 수정했습니다");
+  await expect(page.getByRole("button", { name: "김하늘 수정 예약 상세" })).toBeVisible();
+  expect(requestKeys).toHaveLength(2);
+  expect(requestKeys[0]).not.toBe("");
+  expect(requestKeys[1]).toBe(requestKeys[0]);
+  expect(requestBodies).toEqual([
+    { guestName: "김하늘 수정", guestEmail: "updated@example.com" },
+    { guestName: "김하늘 수정", guestEmail: "updated@example.com" },
+  ]);
+});

@@ -30,8 +30,10 @@ import {
   StaffApiError,
   type StaffCancellationPreview,
   type StaffPrincipal,
+  type StaffReservationGuestUpdateResult,
   type StaffReservationSearchView,
   type StaffReservationSummary,
+  updateStaffReservationGuest,
 } from "@/lib/staff-api";
 
 const hotels = [
@@ -218,6 +220,12 @@ export function ReservationManagement() {
     }
   }
 
+  function guestDetailsUpdated(result: StaffReservationGuestUpdateResult) {
+    setNotice(`${result.guestName} 고객의 예약자 정보를 수정했습니다.`);
+    setSelectedReservation(null);
+    setRefreshVersion((version) => version + 1);
+  }
+
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-end">
@@ -311,6 +319,7 @@ export function ReservationManagement() {
         checkingCancellation={checkingCancellation}
         cancellationError={cancellationError}
         cancellationTriggerRef={cancellationTriggerRef}
+        onGuestDetailsUpdated={guestDetailsUpdated}
         onRequestCancellation={requestCancellation}
         onOpenChange={(open) => { if (!open) setSelectedReservation(null); }}
       />
@@ -358,6 +367,7 @@ function ReservationDetail({
   checkingCancellation,
   cancellationError,
   cancellationTriggerRef,
+  onGuestDetailsUpdated,
   onRequestCancellation,
   onOpenChange,
 }: {
@@ -365,6 +375,7 @@ function ReservationDetail({
   checkingCancellation: boolean;
   cancellationError: string | null;
   cancellationTriggerRef: RefObject<HTMLButtonElement | null>;
+  onGuestDetailsUpdated: (result: StaffReservationGuestUpdateResult) => void;
   onRequestCancellation: (reservation: StaffReservationSummary) => Promise<void>;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -385,20 +396,121 @@ function ReservationDetail({
             <Detail label="배정 객실" value={reservation.assignedRoomNumbers.length ? `${reservation.assignedRoomNumbers.join(", ")}호` : "아직 배정되지 않음"} />
             <Detail label="결제 금액" value={money(reservation.totalKrw, reservation.currency)} />
           </dl>
-          <p className="text-xs text-muted-foreground">예약 변경은 아직 지원하지 않습니다. 체크인·체크아웃은 오늘의 운영에서 처리하세요.</p>
+          <p className="text-xs text-muted-foreground">날짜·객실·인원 변경은 아직 지원하지 않습니다. 체크인·체크아웃은 오늘의 운영에서 처리하세요.</p>
           {cancellationError && (
             <p role="alert" className="text-sm text-destructive">{cancellationError}</p>
           )}
           {reservation.status === "CONFIRMED" && (
-            <div className="flex justify-end border-t pt-4">
-              <Button ref={cancellationTriggerRef} variant="destructive" disabled={checkingCancellation} onClick={() => void onRequestCancellation(reservation)}>
-                {checkingCancellation ? "취소 조건 확인 중" : "예약 취소"}
-              </Button>
+            <div className="flex flex-col gap-4 border-t pt-4">
+              <ReservationGuestEditor reservation={reservation} onUpdated={onGuestDetailsUpdated} />
+              <div className="flex justify-end">
+                <Button ref={cancellationTriggerRef} variant="destructive" disabled={checkingCancellation} onClick={() => void onRequestCancellation(reservation)}>
+                  {checkingCancellation ? "취소 조건 확인 중" : "예약 취소"}
+                </Button>
+              </div>
             </div>
           )}
         </DialogContent>
       )}
     </Dialog>
+  );
+}
+
+function ReservationGuestEditor({
+  reservation,
+  onUpdated,
+}: {
+  reservation: StaffReservationSummary;
+  onUpdated: (result: StaffReservationGuestUpdateResult) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [guestName, setGuestName] = useState(reservation.guestName);
+  const [guestEmail, setGuestEmail] = useState(reservation.guestEmail);
+  const [idempotencyKey, setIdempotencyKey] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const normalizedName = guestName.trim();
+  const normalizedEmail = guestEmail.trim();
+  const canSave = normalizedName.length > 0
+    && normalizedEmail.length > 0
+    && (normalizedName !== reservation.guestName || normalizedEmail !== reservation.guestEmail);
+
+  function beginEditing() {
+    setGuestName(reservation.guestName);
+    setGuestEmail(reservation.guestEmail);
+    setIdempotencyKey(window.crypto.randomUUID());
+    setError(null);
+    setEditing(true);
+  }
+
+  function stopEditing() {
+    if (saving) return;
+    setEditing(false);
+    setError(null);
+  }
+
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const token = window.localStorage.getItem("hotel-chain-staff-session");
+    if (!token || !idempotencyKey || !canSave) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const result = await updateStaffReservationGuest(
+        token,
+        reservation.reservationId,
+        idempotencyKey,
+        { guestName: normalizedName, guestEmail: normalizedEmail },
+      );
+      onUpdated(result);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "예약자 정보를 수정하지 못했습니다.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!editing) {
+    return (
+      <div className="flex justify-end">
+        <Button variant="outline" onClick={beginEditing}>예약자 정보 수정</Button>
+      </div>
+    );
+  }
+
+  return (
+    <form className="space-y-4" onSubmit={(event) => void save(event)}>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-2">
+          <Label htmlFor="reservation-guest-name">예약자 이름</Label>
+          <Input
+            id="reservation-guest-name"
+            value={guestName}
+            maxLength={100}
+            autoComplete="name"
+            required
+            onChange={(event) => setGuestName(event.target.value)}
+          />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="reservation-guest-email">예약자 이메일</Label>
+          <Input
+            id="reservation-guest-email"
+            type="email"
+            value={guestEmail}
+            maxLength={254}
+            autoComplete="email"
+            required
+            onChange={(event) => setGuestEmail(event.target.value)}
+          />
+        </div>
+      </div>
+      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+      <div className="flex flex-wrap justify-end gap-2">
+        <Button type="button" variant="ghost" disabled={saving} onClick={stopEditing}>수정 취소</Button>
+        <Button type="submit" disabled={!canSave || saving}>{saving ? "저장 중" : "예약자 정보 저장"}</Button>
+      </div>
+    </form>
   );
 }
 
