@@ -1,6 +1,6 @@
 # 고객 웹 CMS 기능 명세
 
-최종 갱신: 2026-09-12
+최종 갱신: 2026-09-13
 적용 대상: `STAY HANEUL` 고객 웹과 본사 관리자 `/dashboard/website`
 
 > 이 문서는 현재 구현된 CMS 기능을 기록한다. 롯데리조트급 콘텐츠 운영을 위한 재정의 목표와 이후 구현 경계는 [롯데리조트급 CMS 기능 설계](lotte-resort-level-cms-functional-design.md)를 따른다.
@@ -162,6 +162,18 @@
 - 관리자 홈·지점 랜딩·일반 페이지 영어 편집기는 공통 action bar와 상태 배지, 반려 dialog, 검토·기존 발행 이력을 사용한다. 미저장·처리 중·보관 상태에서는 전이를 막고, mutation 성공 뒤 이력 조회가 실패하면 성공 상태를 유지한 채 읽기만 다시 시도한다.
 - V23은 `HQ_EDITOR`와 `HQ_PUBLISHER`를 추가한다. 편집자와 `HQ_ADMIN`은 영어 초안 작성·검토 요청, 승인자와 `HQ_ADMIN`은 승인·반려·발행을 할 수 있다. 서버는 검토 요청 event의 행위자와 승인자를 비교해 자가 승인을 거부한다. 물리 장치 검증, 예약 발행, 알림·경보, 한국어 승인 workflow는 범위 밖이다. 상세 근거는 [영어 번역 검토·승인 변경 기록](../changes/2026-09-12-cms-translation-review.md)을 따른다.
 
+### 6.7 비동기 WebP variant
+
+- 활성 업로드 PNG/JPEG에는 원본 폭 이하인 640px·1280px WebP 작업을 같은 DB transaction에서 멱등 enqueue한다. 기존 활성 업로드도 V25에서 같은 조건으로 backfill하며 번들·보관·작은 원본은 제외한다.
+- PostgreSQL row가 `PENDING → PROCESSING → READY/FAILED` 큐와 결과 메타데이터를 함께 소유한다. worker는 `FOR UPDATE SKIP LOCKED`와 5분 lease로 한 건씩 선점하고, 30초·2분 backoff를 거쳐 최대 3회 시도한다. 만료된 attempt 3의 PROCESSING도 terminal FAILED다.
+- WebP는 원본 비율을 유지해 quality 0.82로 만들고 다시 decode해 규격을 확인한다. 완료 파일은 claim별 고유 immutable storage key를 사용하며 기존 파일을 덮어쓰지 않는다. attempt와 V27 claim token이 일치하는 현재 claim만 READY를 확정한다.
+- 파일·DB 경계는 transaction 결과에 맞춰 보상한다. rollback은 해당 claim 파일만 제거하고 commit만 잠금 중 확인한 이전 파일을 제거한다. 결과를 알 수 없는 `STATUS_UNKNOWN`에서는 파일을 보존한다.
+- 공개 variant는 활성 업로드 자산의 READY 파일만 `image/webp`와 1년 immutable cache로 전달한다. 다른 상태, 보관·번들 자산, 실제 파일 누락은 404이며 원본으로 fallback하지 않는다.
+- 관리자 미디어 선택기는 대기·처리·완료 규격과 용량·실패 원인·시도 횟수를 표시한다. 열린 대화상자의 현재 자산에 진행 중 작업이 있을 때만 2초 간격으로 해당 variant를 갱신하며, `HQ_ADMIN`은 FAILED 640·1280 작업을 폭별로 다시 시도할 수 있다.
+- 보관은 원본과 READY variant 공개 전달을 함께 중단하고 복원은 기존 READY를 다시 노출하며 누락 작업만 enqueue한다. 영구 삭제는 원본과 모든 READY 파일을 함께 격리해 commit 시 제거하고 rollback 시 복구한다.
+- V25·V26·V27은 additive expand migration이다. 이전 binary는 새 table·열·파일을 무시할 수 있지만, claim-token fencing은 새 코드의 claim부터 적용되므로 rolling 배포에서는 이전 worker를 drain하고 in-flight lease를 정리한 뒤 전환한다. 롤백은 이전 API image를 먼저 배포하고 table과 파일을 유지한다.
+- 기존 원본 URL과 한국어·영어 페이지 JSON, 고객 renderer는 유지한다. 고객 `<picture>`·`srcset`, CDN·객체 저장소와 storage audit은 후속 범위다. 상세 결과는 [비동기 미디어 variant 변경 기록](../changes/2026-09-13-async-media-variants.md)을 따른다.
+
 ## 7. 주요 API 계약
 
 | 구분 | API | 용도 |
@@ -169,6 +181,7 @@
 | 공개 | `GET /api/website/navigation` | 발행 메뉴 조회 |
 | 공개 | `GET /api/website/pages/resolve?path=...` | 발행 페이지와 신뢰 가능한 `hotelId` 조회 |
 | 공개 | `GET /api/website/media/{mediaId}/content` | 활성 업로드 이미지 전달 |
+| 공개 | `GET /api/website/media/{mediaId}/variants/{targetWidth}.webp` | 활성 업로드 READY WebP 640·1280 전달 |
 | 본사 | `GET/PUT /api/staff/website/home` | 홈 초안 조회·저장 |
 | 본사 | `POST /api/staff/website/home/publish` | 홈 발행 |
 | 본사 | `GET /api/staff/website/pages` | 페이지 트리 조회 |
@@ -189,6 +202,7 @@
 | 본사 | `GET /api/staff/website/pages/{pageId}/versions/compare?baseVersion=&compareVersion=` | 두 발행 snapshot 비교 |
 | 본사 | `GET/POST /api/staff/website/media` | 미디어 카탈로그·업로드 |
 | 본사 | `GET /api/staff/website/media/{mediaId}/usages` | 미디어 사용 위치 조회 |
+| 본사 관리자 | `POST /api/staff/website/media/{mediaId}/variants/{targetWidth}/retry` | FAILED WebP 640·1280 작업 수동 재시도 |
 | 본사 관리자 | `GET /api/staff/website/media/{mediaId}/draft-replacement-impact?targetMediaId=...` | 활성 한국어·영어 초안 교체 영향 조회 |
 | 본사 관리자 | `POST /api/staff/website/media/{mediaId}/draft-replacements` | 확인한 활성 초안 사용 위치 원자적 교체 |
 | 본사 | `PATCH /api/staff/website/media/{mediaId}` | 자산 이름·기본 alt 수정 |
@@ -198,6 +212,6 @@
 
 현재 CMS는 초안/발행 분리, 페이지 트리, 홈·지점·일반 페이지 편집, SEO, 안전한 이미지 카탈로그·업로드·참조 보호, 미디어 보관/복원, 일반 페이지 보관/복원/영구 삭제, 발행 이력 복원·비교, 저장 전 preview까지 구현했다.
 
-페이지 부모 이동·redirect·최대 4단계 트리, 보관된 업로드 자산의 30일 유예 영구 삭제, 현재 이미지 위치의 파일 교체, 활성 한국어·영어 초안 사용 위치 일괄 교체, 한국어·영어 독립 초안/발행과 영어 번역 검토·승인 첫 단계와 인증된 저장 초안 실제 URL 미리보기도 구현했다. 다음 단계는 언어별 임의 슬러그·SECTION 번역·영어 이력 복원/비교, 미디어 variant·변환·CDN·객체 저장소, canonical·OG·robots, 예약 발행·알림, 한국어 승인과 블록 이동 감지다.
+페이지 부모 이동·redirect·최대 4단계 트리, 보관된 업로드 자산의 30일 유예 영구 삭제, 현재 이미지 위치의 파일 교체, 활성 한국어·영어 초안 사용 위치 일괄 교체, 비동기 640px·1280px WebP variant, 한국어·영어 독립 초안/발행과 영어 번역 검토·승인 첫 단계와 인증된 저장 초안 실제 URL 미리보기도 구현했다. 다음 단계는 언어별 임의 슬러그·SECTION 번역·영어 이력 복원/비교, 고객 `<picture>`·`srcset`과 CDN·객체 저장소, canonical·OG·robots, 예약 발행·알림, 한국어 승인과 블록 이동 감지다.
 
 검증 기록과 테스트 범위는 [CMS 변경 기록](../changes/2026-09-10-web-content-management.md), 전체 제품 경계는 [전체 구현 설계서](full-site-implementation-design.md), 최신 진행 상태는 [현재 개발 상태](../overview/current-development-context.md)에 기록한다.
