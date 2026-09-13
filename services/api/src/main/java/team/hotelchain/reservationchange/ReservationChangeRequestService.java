@@ -29,6 +29,7 @@ public class ReservationChangeRequestService {
     private final ReservationStayQuoteService quoteService;
     private final ReservationChangePolicy policy;
     private final ReservationChangeViews views;
+    private final ReservationChangeHoldService holds;
     private final Clock clock;
 
     public ReservationChangeRequestService(
@@ -38,6 +39,7 @@ public class ReservationChangeRequestService {
             ReservationStayQuoteService quoteService,
             ReservationChangePolicy policy,
             ReservationChangeViews views,
+            ReservationChangeHoldService holds,
             Clock clock) {
         this.jdbc = jdbc;
         this.staffAccess = staffAccess;
@@ -45,6 +47,7 @@ public class ReservationChangeRequestService {
         this.quoteService = quoteService;
         this.policy = policy;
         this.views = views;
+        this.holds = holds;
         this.clock = clock;
     }
 
@@ -228,6 +231,16 @@ public class ReservationChangeRequestService {
                     newDirection, absoluteDifference, "재견적 승인");
         }
         insertEvent(requestId, "REQUEST_REPRICED", locked.status(), newStatus, staff.id(), dedupeKey, null);
+        if ("APPROVED".equals(newStatus) && "NONE".equals(newDirection)) {
+            ReservationChangeHoldService.HoldResult hold = holds.acquire(requestId, request.version() + 1);
+            jdbc.update("""
+                    update reservation_change_request
+                    set status = 'READY_TO_APPLY', version = version + 1, updated_at = ?
+                    where id = ? and version = ?
+                    """, Timestamp.from(clock.instant()), requestId, hold.requestVersion());
+            insertEvent(requestId, "ZERO_DIFFERENCE_READY", "APPROVED", "READY_TO_APPLY",
+                    staff.id(), dedupeKey + ":ready", null);
+        }
         return views.get(staff, requestId);
     }
 
