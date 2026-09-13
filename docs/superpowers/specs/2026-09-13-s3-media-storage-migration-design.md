@@ -61,7 +61,7 @@ storage key가 이미 provider 중립적인 UUID 기반 값이고 기존 URL이 
 
 - `LocalWebsiteMediaObjectStore`는 현재 `Files` 동작을 이동한다. 새 파일은 기존과 같이 덮어쓰지 않고 작성하며, 격리는 같은 root의 `.trash/{transactionId}/...`를 사용한다.
 - `S3WebsiteMediaObjectStore`는 AWS SDK for Java 2.x S3 client를 사용한다. custom endpoint, region, bucket, path-style 설정을 지원해 AWS S3·R2·MinIO에 같은 구현을 쓴다. bucket은 비공개이며 API만 자격 증명을 가진다.
-- `MirroredWebsiteMediaObjectStore`는 모드에 따라 쓰기·읽기·격리를 조정한다. 한 저장소 쓰기 후 다른 저장소 쓰기가 실패하면 성공한 신규 객체를 멱등 삭제한다. 보상 삭제도 실패하면 원래 오류와 함께 운영 로그에 남기며 storage audit이 orphan으로 표시한다.
+- `WebsiteMediaStorageGateway`는 모드에 따라 쓰기·읽기·격리를 조정한다. 한 저장소 쓰기 후 다른 저장소 쓰기가 실패하면 성공한 신규 객체를 멱등 삭제한다. 보상 삭제도 실패하면 원래 오류와 함께 운영 로그에 남기며 storage audit이 orphan으로 표시한다.
 
 ### 5.3 모드
 
@@ -71,7 +71,7 @@ storage key가 이미 provider 중립적인 UUID 기반 값이고 기존 URL이 
 | `mirror` | 로컬 + S3 | 로컬 | 양쪽 | backfill과 혼합 버전 배포 |
 | `s3-primary` | S3 + 로컬 | S3, 실패 시 로컬 fallback | 양쪽 | 전환 완료 후 운영 |
 
-이번 범위에는 `s3-only`를 두지 않는다. `mirror`와 `s3-primary`는 S3 설정이 하나라도 빠지면 애플리케이션 시작을 실패시킨다. `local`은 S3 client를 만들지 않으며 기존 환경 설정만으로 동일하게 동작한다.
+이번 범위에는 `s3-only`를 두지 않는다. `mirror`와 `s3-primary`는 region·bucket·자격 증명이 빠지면 애플리케이션 시작을 실패시킨다. custom endpoint는 AWS S3에서 생략할 수 있고 R2·MinIO 같은 호환 저장소에서만 지정한다. `local`은 S3 client를 만들지 않으며 기존 환경 설정만으로 동일하게 동작한다.
 
 ## 6. 데이터 흐름
 
@@ -125,9 +125,9 @@ CMS는 현재 미디어 선택기의 저장소 점검 영역에서 모드와 위
 
 ## 9. 설정과 비밀값
 
-설정 이름은 `website.media.storage.mode`, `local-directory`, `s3.endpoint`, `s3.region`, `s3.bucket`, `s3.path-style`로 구분한다. access key와 secret key는 표준 AWS credential provider chain 또는 환경 변수로만 주입한다. `.env.example`에는 값이 없는 변수 이름과 로컬 MinIO 사용법만 기록하고 실제 비밀값은 저장소에 넣지 않는다.
+기존 로컬 경로 설정 `website.media.storage-dir`과 `WEBSITE_MEDIA_STORAGE_DIR`은 그대로 유지하고, `website.media.storage.mode`, `website.media.storage.s3.endpoint`, `website.media.storage.s3.region`, `website.media.storage.s3.bucket`, `website.media.storage.s3.path-style`을 추가한다. access key와 secret key는 표준 AWS credential provider chain 또는 환경 변수로만 주입한다. `.env.example`에는 값이 없는 변수 이름과 로컬 S3Mock 사용법만 기록하고 실제 운영 비밀값은 저장소에 넣지 않는다.
 
-Docker Compose에는 명시적 profile에서만 실행되는 MinIO 개발 서비스를 추가한다. 기본 `docker compose up`은 현재 PostgreSQL·API·concierge 구성과 로컬 named volume을 그대로 사용한다. MinIO image는 구현 시점에 digest로 고정한다.
+Docker Compose에는 명시적 profile에서만 실행되는 Adobe S3Mock 개발 서비스를 추가한다. MinIO OSS repository는 보관 상태이고 공개된 보안 권고가 모든 최종 OSS release에 적용되므로 새 로컬 의존성으로 도입하지 않는다. 기본 `docker compose up`은 현재 PostgreSQL·API·concierge 구성과 로컬 named volume을 그대로 사용한다. S3Mock은 `adobe/s3mock:5.1.0@sha256:65cf60155a2e235fe7d5bf6c633747d6fc7ed93f9f5a6727d86470026b83c2a2`로 고정하고 `127.0.0.1`에만 노출한다.
 
 ## 10. CDN 경계
 
@@ -164,13 +164,13 @@ Docker Compose에는 명시적 profile에서만 실행되는 MinIO 개발 서비
 ## 14. 검증 전략
 
 - 로컬 구현 계약 테스트로 경로 검증, create-only write, read, list, 격리·복원, 멱등 삭제를 확인한다.
-- MinIO 실제 API 계약 테스트로 같은 동작과 metadata·pagination·custom endpoint·path-style을 확인한다.
+- Adobe S3Mock 5.1.0 실제 API 계약 테스트로 같은 동작과 metadata·pagination·custom endpoint·path-style을 확인한다. 운영 배포 전에는 선택한 AWS S3·R2·MinIO 대상에서도 같은 계약 검사를 실행한다.
 - fault-injection store로 mirror 두 번째 쓰기 실패, 보상 실패, S3 읽기 실패 후 로컬 fallback과 양쪽 읽기 실패를 재현한다.
-- 실제 PostgreSQL·MinIO 통합 테스트로 업로드 DB rollback, variant READY/rollback/재시도, 보관·복원, 영구 삭제 commit/rollback과 storage audit을 확인한다.
+- 실제 PostgreSQL·S3Mock 통합 테스트로 업로드 DB rollback, variant READY/rollback/재시도, 보관·복원, 영구 삭제 commit/rollback과 storage audit을 확인한다.
 - backfill 테스트는 100개 제한, 재실행, 기존 동일 객체 skip, mismatch 비덮어쓰기, DB 미참조 파일 제외를 확인한다.
 - 기존 `WebsiteMediaIntegrationTest`, `WebsiteMediaVariantIntegrationTest`, 공개 콘텐츠·페이지 resolve 테스트로 기존 URL·MIME·cache header와 페이지 JSON이 유지됨을 확인한다.
 - 관리자 Playwright는 local·mirror·s3-primary 상태, batch 실행 확인, loading·오류·부분 성공과 모바일 dialog를 검증한다.
-- 로컬 Compose MinIO에서 실제 원본 업로드, 640/1280 WebP 생성, backfill, S3 우선 읽기와 강제 fallback을 수행하고 원본·variant checksum을 비교한다.
+- 로컬 Compose S3Mock에서 실제 원본 업로드, 640/1280 WebP 생성, backfill, S3 우선 읽기와 강제 fallback을 수행하고 원본·variant checksum을 비교한다.
 
 ## 15. 완료 기준
 
