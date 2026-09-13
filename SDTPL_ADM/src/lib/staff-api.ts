@@ -96,6 +96,39 @@ export type StaffReservationPartyUpdateResult = {
   children: number;
 };
 
+export type StaffReservationStayChangeOffer = {
+  roomTypeId: string;
+  roomTypeName: string;
+  ratePlanId: string;
+  ratePlanName: string;
+  breakfastIncluded: boolean;
+  remaining: number;
+  nightlyPrices: Array<{ date: string; amount: number }>;
+  totalKrw: number;
+  differenceKrw: number;
+  currency: string;
+};
+
+export type StaffReservationStayChangePreview = {
+  reservationId: string;
+  checkIn: string;
+  checkOut: string;
+  currentTotalKrw: number;
+  currency: string;
+  offers: StaffReservationStayChangeOffer[];
+};
+
+export type StaffReservationStayChangeResult = {
+  reservationId: string;
+  checkIn: string;
+  checkOut: string;
+  roomTypeId: string;
+  ratePlanId: string;
+  totalKrw: number;
+  differenceKrw: number;
+  currency: string;
+};
+
 
 type SessionResponse = { token: string; staff: StaffPrincipal };
 
@@ -570,6 +603,51 @@ export async function updateStaffReservationParty(
     throw new StaffApiError(error.message ?? "투숙 인원을 변경하지 못했습니다.", response.status, error.code);
   }
   return response.json() as Promise<StaffReservationPartyUpdateResult>;
+}
+
+export async function previewStaffReservationStayChange(
+  token: string,
+  reservationId: string,
+  stay: { checkIn: string; checkOut: string },
+): Promise<StaffReservationStayChangePreview> {
+  const response = await fetch(`/api/staff/reservations/${reservationId}/stay-change-preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Staff-Session": token },
+    body: JSON.stringify(stay),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(error.message ?? "변경 가능한 숙박 조건을 조회하지 못했습니다.", response.status, error.code);
+  }
+  return response.json() as Promise<StaffReservationStayChangePreview>;
+}
+
+export async function updateStaffReservationStay(
+  token: string,
+  reservationId: string,
+  idempotencyKey: string,
+  stay: {
+    checkIn: string;
+    checkOut: string;
+    roomTypeId: string;
+    ratePlanId: string;
+    expectedTotal: number;
+  },
+): Promise<StaffReservationStayChangeResult> {
+  const response = await fetch(`/api/staff/reservations/${reservationId}/stay`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Staff-Session": token,
+      "Idempotency-Key": idempotencyKey,
+    },
+    body: JSON.stringify(stay),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(error.message ?? "숙박 조건을 변경하지 못했습니다.", response.status, error.code);
+  }
+  return response.json() as Promise<StaffReservationStayChangeResult>;
 }
 
 type WebsiteMediaAssetResponse = Omit<WebsiteMediaAsset, "variants"> & { variants?: WebsiteMediaVariant[] };

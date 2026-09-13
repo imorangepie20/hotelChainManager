@@ -1,0 +1,22 @@
+CREATE TABLE reservation_stay_change (
+    id UUID PRIMARY KEY,
+    reservation_id UUID NOT NULL REFERENCES reservation(id),
+    idempotency_key VARCHAR(100) NOT NULL,
+    request_hash CHAR(64) NOT NULL,
+    staff_id UUID NOT NULL REFERENCES staff_member(id),
+    previous_room_type_id UUID NOT NULL REFERENCES room_type(id),
+    room_type_id UUID NOT NULL REFERENCES room_type(id),
+    previous_rate_plan_id UUID NOT NULL REFERENCES rate_plan(id),
+    rate_plan_id UUID NOT NULL REFERENCES rate_plan(id),
+    previous_check_in DATE NOT NULL,
+    previous_check_out DATE NOT NULL,
+    check_in DATE NOT NULL,
+    check_out DATE NOT NULL,
+    previous_total_krw BIGINT NOT NULL CHECK (previous_total_krw >= 0),
+    total_krw BIGINT NOT NULL CHECK (total_krw >= 0),
+    difference_krw BIGINT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (previous_check_out > previous_check_in),
+    CHECK (check_out > check_in),
+    UNIQUE (reservation_id, idempotency_key)
+);

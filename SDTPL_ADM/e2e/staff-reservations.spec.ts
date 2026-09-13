@@ -539,3 +539,163 @@ test("lets a branch employee update the confirmed reservation party", async ({ p
   expect(requestKeys[1]).not.toBe(requestKeys[0]);
   expect(requestKeys[2]).toBe(requestKeys[1]);
 });
+
+test("lets a branch employee preview and change an unassigned confirmed reservation stay", async ({ page }) => {
+  let checkIn = "2026-10-10";
+  let checkOut = "2026-10-12";
+  let roomTypeName = "스탠다드 시티";
+  let ratePlanName = "룸 온리";
+  let totalKrw = 340000;
+  const previewBodies: unknown[] = [];
+  const requestBodies: unknown[] = [];
+  const requestKeys: string[] = [];
+  await page.addInitScript((hotelId) => {
+    localStorage.setItem("hotel-chain-staff-session", "test-session-token");
+    localStorage.setItem("hotel-chain-staff", JSON.stringify({
+      id: "staff",
+      email: "sokcho@hotel-chain.local",
+      displayName: "속초 직원",
+      role: "BRANCH_STAFF",
+      hotelId,
+    }));
+  }, SOKCHO);
+  await page.route("**/api/staff/me", (route) => route.fulfill({ status: 200, contentType: "application/json", body: "{}" }));
+  await page.route("**/api/staff/hotels/*/reservations?*", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      hotelId: SOKCHO,
+      date: "2026-09-13",
+      truncated: false,
+      reservations: [{
+        reservationId: "42000000-0000-0000-0000-000000000001",
+        guestName: "김하늘",
+        guestEmail: "guest@example.com",
+        roomTypeId: roomTypeName === "스탠다드 시티" ? "room-standard" : "room-suite",
+        roomTypeName,
+        ratePlanId: roomTypeName === "스탠다드 시티" ? "rate-room-only" : "rate-breakfast",
+        ratePlanName,
+        checkIn,
+        checkOut,
+        adults: 2,
+        children: 0,
+        rooms: 1,
+        status: "CONFIRMED",
+        totalKrw,
+        currency: "KRW",
+        assignedRoomNumbers: [],
+      }],
+    }),
+  }));
+  await page.route("**/api/staff/reservations/*/stay-change-preview", (route) => {
+    previewBodies.push(route.request().postDataJSON());
+    return route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        reservationId: "42000000-0000-0000-0000-000000000001",
+        checkIn: "2026-10-20",
+        checkOut: "2026-10-23",
+        currentTotalKrw: 340000,
+        currency: "KRW",
+        offers: [{
+          roomTypeId: "room-suite",
+          roomTypeName: "패밀리 스위트",
+          ratePlanId: "rate-breakfast",
+          ratePlanName: "패밀리 조식",
+          breakfastIncluded: true,
+          remaining: 3,
+          nightlyPrices: [
+            { date: "2026-10-20", amount: 180000 },
+            { date: "2026-10-21", amount: 190000 },
+            { date: "2026-10-22", amount: 190000 },
+          ],
+          totalKrw: 560000,
+          differenceKrw: 220000,
+          currency: "KRW",
+        }],
+      }),
+    });
+  });
+  await page.route("**/api/staff/reservations/*/stay", (route) => {
+    requestBodies.push(route.request().postDataJSON());
+    requestKeys.push(route.request().headers()["idempotency-key"] ?? "");
+    if (requestBodies.length === 1) {
+      return route.fulfill({
+        status: 502,
+        contentType: "application/json",
+        body: JSON.stringify({ message: "응답을 확인하지 못했습니다. 다시 시도해 주세요." }),
+      });
+    }
+    checkIn = "2026-10-20";
+    checkOut = "2026-10-23";
+    roomTypeName = "패밀리 스위트";
+    ratePlanName = "패밀리 조식";
+    totalKrw = 560000;
+    return route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        reservationId: "42000000-0000-0000-0000-000000000001",
+        checkIn,
+        checkOut,
+        roomTypeId: "room-suite",
+        ratePlanId: "rate-breakfast",
+        totalKrw,
+        differenceKrw: 220000,
+        currency: "KRW",
+      }),
+    });
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/dashboard/reservations");
+  await page.getByRole("button", { name: "김하늘 예약 상세" }).press("Enter");
+  const detail = page.getByRole("dialog");
+  await detail.getByRole("button", { name: "숙박 일정·객실 유형 변경" }).press("Enter");
+  await detail.getByLabel("변경 체크인").fill("2026-10-20");
+  await detail.getByLabel("변경 체크아웃").fill("2026-10-22");
+  await detail.getByRole("button", { name: "변경안 조회" }).press("Enter");
+  await expect(detail.getByLabel("변경할 객실·요금제")).toBeVisible();
+
+  await detail.getByLabel("변경 체크아웃").fill("2026-10-23");
+  await expect(detail.getByLabel("변경할 객실·요금제")).toHaveCount(0);
+  await detail.getByRole("button", { name: "변경안 조회" }).press("Enter");
+  await detail.getByLabel("변경할 객실·요금제").selectOption("room-suite:rate-breakfast");
+  await expect(detail).toContainText("추가 금액 220,000원");
+  await expect(detail).toContainText("실제 추가 결제나 부분 환불은 처리되지 않습니다");
+
+  const dialogBox = await detail.boundingBox();
+  expect(dialogBox).not.toBeNull();
+  expect(dialogBox!.y).toBeGreaterThanOrEqual(16);
+  expect(dialogBox!.y + dialogBox!.height).toBeLessThanOrEqual(828);
+
+  const submit = detail.getByRole("button", { name: "숙박 조건 변경 확정" });
+  await submit.press("Enter");
+  await expect(detail.getByRole("alert")).toContainText("응답을 확인하지 못했습니다");
+  await submit.press("Enter");
+
+  await expect(page.getByRole("status", { name: "예약 처리 결과" })).toContainText("숙박 조건을 변경했습니다");
+  await page.getByRole("button", { name: "김하늘 예약 상세" }).press("Enter");
+  await expect(page.getByRole("dialog")).toContainText("패밀리 스위트 · 패밀리 조식");
+  await expect(page.getByRole("dialog")).toContainText("560,000원");
+  expect(previewBodies).toEqual([
+    { checkIn: "2026-10-20", checkOut: "2026-10-22" },
+    { checkIn: "2026-10-20", checkOut: "2026-10-23" },
+  ]);
+  expect(requestBodies).toEqual([
+    {
+      checkIn: "2026-10-20",
+      checkOut: "2026-10-23",
+      roomTypeId: "room-suite",
+      ratePlanId: "rate-breakfast",
+      expectedTotal: 560000,
+    },
+    {
+      checkIn: "2026-10-20",
+      checkOut: "2026-10-23",
+      roomTypeId: "room-suite",
+      ratePlanId: "rate-breakfast",
+      expectedTotal: 560000,
+    },
+  ]);
+  expect(requestKeys[0]).not.toBe("");
+  expect(requestKeys[1]).toBe(requestKeys[0]);
+});
