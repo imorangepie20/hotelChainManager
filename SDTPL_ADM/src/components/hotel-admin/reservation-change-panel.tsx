@@ -1,7 +1,7 @@
 "use client";
 
-import { type FormEvent, useEffect, useState } from "react";
-import { Clock3, ShieldCheck } from "lucide-react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
+import { Clock3, Copy, CreditCard, RefreshCw, ShieldCheck } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,11 +10,15 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   cancelReservationChangeRequest,
+  createReservationChangePaymentLink,
   createReservationChangeRequest,
+  getReservationChangeRequest,
   getReservationChangePolicy,
   getReservationChangeRequests,
   previewStaffReservationStayChange,
   repriceReservationChangeRequest,
+  reconcileReservationChangeRequest,
+  startReservationChangeRefund,
   type ReservationChangePolicy,
   type ReservationChangeRequestView,
   type StaffPrincipal,
@@ -27,6 +31,12 @@ import {
 import { ReservationChangeTimeline, reservationChangeStatusLabel } from "@/components/hotel-admin/reservation-change-timeline";
 
 const terminalStatuses = new Set(["COMPLETED", "REJECTED", "CANCELLED", "EXPIRED"]);
+const pollingStatuses = new Set(["AWAITING_PAYMENT", "REFUND_PENDING", "READY_TO_APPLY", "APPLYING"]);
+
+function createPublicToken() {
+  const bytes = window.crypto.getRandomValues(new Uint8Array(32));
+  return btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+}
 
 function money(value: number, currency: string) {
   if (currency === "KRW") return `${new Intl.NumberFormat("ko-KR").format(value)}원`;
@@ -80,6 +90,9 @@ export function ReservationChangePanel({
   const [loadingFoundation, setLoadingFoundation] = useState(true);
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [customerUrl, setCustomerUrl] = useState("");
+  const settlementAttempt = useRef<{ requestId: string; key: string; publicToken: string } | null>(null);
+  const completedNotification = useRef<string | null>(null);
   const canPreview = checkIn.length > 0 && checkOut.length > 0 && checkOut > checkIn;
   const selectedOffer = preview?.offers.find((offer) => offerId(offer) === selectedOfferId) ?? null;
 
@@ -107,6 +120,37 @@ export function ReservationChangePanel({
     void loadFoundation();
     return () => { current = false; };
   }, [reservation.reservationId, staff?.hotelId]);
+
+  useEffect(() => {
+    if (!activeRequest || !pollingStatuses.has(activeRequest.status)) return;
+    const token = window.localStorage.getItem("hotel-chain-staff-session");
+    if (!token) return;
+    let current = true;
+    const refresh = async () => {
+      try {
+        const next = await getReservationChangeRequest(token, activeRequest.id);
+        if (!current) return;
+        setActiveRequest(next);
+        if (next.status === "COMPLETED" && completedNotification.current !== next.id) {
+          completedNotification.current = next.id;
+          onLegacyUpdated({
+            reservationId: next.reservationId,
+            checkIn: next.targetCheckIn,
+            checkOut: next.targetCheckOut,
+            roomTypeId: next.targetRoomTypeId,
+            ratePlanId: next.targetRatePlanId,
+            totalKrw: next.quote.totalKrw,
+            differenceKrw: next.quote.differenceKrw,
+            currency: next.quote.currency,
+          });
+        }
+      } catch (cause) {
+        if (current) setError(cause instanceof Error ? cause.message : "정산 상태를 갱신하지 못했습니다.");
+      }
+    };
+    const timer = window.setInterval(() => void refresh(), 2000);
+    return () => { current = false; window.clearInterval(timer); };
+  }, [activeRequest, onLegacyUpdated]);
 
   function beginEditing() {
     setCheckIn(reservation.checkIn);
@@ -207,6 +251,65 @@ export function ReservationChangePanel({
     }
   }
 
+  async function createPaymentLink() {
+    const token = window.localStorage.getItem("hotel-chain-staff-session");
+    if (!token || !activeRequest) return;
+    const attempt = settlementAttempt.current?.requestId === activeRequest.id
+      ? settlementAttempt.current
+      : { requestId: activeRequest.id, key: window.crypto.randomUUID(), publicToken: createPublicToken() };
+    settlementAttempt.current = attempt;
+    setSaving(true);
+    setError(null);
+    try {
+      const link = await createReservationChangePaymentLink(
+        token, activeRequest.id, attempt.key,
+        { version: activeRequest.version, publicToken: attempt.publicToken },
+      );
+      setCustomerUrl(link.customerUrl);
+      setActiveRequest(await getReservationChangeRequest(token, activeRequest.id));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "고객 결제 링크를 만들지 못했습니다.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function startRefund() {
+    const token = window.localStorage.getItem("hotel-chain-staff-session");
+    if (!token || !activeRequest) return;
+    if (!window.confirm("변경 차액을 원 결제 수단으로 부분 환불할까요?")) return;
+    setSaving(true);
+    setError(null);
+    try {
+      setActiveRequest(await startReservationChangeRefund(
+        token, activeRequest.id, window.crypto.randomUUID(), activeRequest.version,
+      ));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "부분 환불을 시작하지 못했습니다.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function reconcile(action: string) {
+    const token = window.localStorage.getItem("hotel-chain-staff-session");
+    if (!token || !activeRequest) return;
+    const reason = window.prompt("조정 사유를 입력해 주세요.")?.trim();
+    if (!reason) return;
+    setSaving(true);
+    setError(null);
+    try {
+      setActiveRequest(await reconcileReservationChangeRequest(
+        token, activeRequest.id, window.crypto.randomUUID(),
+        { action, version: activeRequest.version, reason },
+      ));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "정산 조정 작업을 처리하지 못했습니다.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   if (activeRequest && !terminalStatuses.has(activeRequest.status)) {
     return (
       <section aria-labelledby="reservation-change-title" className="space-y-4 border-b pb-4">
@@ -232,6 +335,16 @@ export function ReservationChangePanel({
           </dl>
         </div>
         <ReservationChangeTimeline events={activeRequest.events} />
+        {customerUrl && (
+          <div className="space-y-2 rounded-xl border p-4">
+            <Label htmlFor="reservation-change-customer-link">고객 결제 링크</Label>
+            <div className="flex min-w-0 gap-2">
+              <Input id="reservation-change-customer-link" readOnly value={customerUrl} className="min-w-0" />
+              <Button type="button" variant="outline" aria-label="고객 결제 링크 복사" onClick={() => void navigator.clipboard.writeText(customerUrl)}><Copy className="size-4" aria-hidden="true" /></Button>
+            </div>
+            <p className="text-xs text-muted-foreground">링크에는 예약 개인정보가 포함되지 않으며 15분 동안만 사용할 수 있습니다.</p>
+          </div>
+        )}
         <div className="flex flex-wrap justify-end gap-2">
           {activeRequest.actions.includes("REPRICE") && (
             <Button type="button" variant="outline" disabled={saving} onClick={() => void runRequestAction("REPRICE")}>최신 가격 다시 확인</Button>
@@ -239,6 +352,17 @@ export function ReservationChangePanel({
           {activeRequest.actions.includes("CANCEL") && (
             <Button type="button" variant="ghost" disabled={saving} onClick={() => void runRequestAction("CANCEL")}>변경 요청 취소</Button>
           )}
+          {activeRequest.actions.includes("PAYMENT_LINK") && (
+            <Button type="button" disabled={saving} onClick={() => void createPaymentLink()}><CreditCard className="size-4" aria-hidden="true" />고객 결제 링크 만들기</Button>
+          )}
+          {activeRequest.actions.includes("REFUND") && (
+            <Button type="button" disabled={saving} onClick={() => void startRefund()}>원 결제 수단으로 부분 환불</Button>
+          )}
+          {activeRequest.actions.filter((action) => ["QUERY_GATEWAY", "RETRY_APPLY", "RELEASE_AFTER_CONFIRMED_FAILURE", "REFUND_ADJUSTMENT_AND_CANCEL"].includes(action)).map((action) => (
+            <Button key={action} type="button" variant="outline" disabled={saving} onClick={() => void reconcile(action)}>
+              <RefreshCw className="size-4" aria-hidden="true" />{reconciliationLabel(action)}
+            </Button>
+          ))}
         </div>
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       </section>
@@ -333,4 +457,11 @@ export function ReservationChangePanel({
 
 function Detail({ label, value }: { label: string; value: string }) {
   return <div><dt className="text-xs font-medium text-muted-foreground">{label}</dt><dd className="mt-1 font-medium">{value}</dd></div>;
+}
+
+function reconciliationLabel(action: string) {
+  if (action === "QUERY_GATEWAY") return "결제사 상태 조회";
+  if (action === "RETRY_APPLY") return "예약 반영 재시도";
+  if (action === "RELEASE_AFTER_CONFIRMED_FAILURE") return "실패 확인 후 요청 종료";
+  return "추가 결제 환급 후 종료";
 }

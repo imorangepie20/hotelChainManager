@@ -153,8 +153,33 @@ public class ReservationChangeViews {
                 if ("CHARGE".equals(request.settlementDirection())) actions.add("PAYMENT_LINK");
                 if ("REFUND".equals(request.settlementDirection())) actions.add("REFUND");
             }
+        } else if ("RECONCILIATION_REQUIRED".equals(request.status())
+                && "HQ_ADMIN".equals(staff.role())) {
+            LatestAdjustment adjustment = jdbc.query("""
+                    select adjustment_type, status
+                    from payment_adjustment_attempt
+                    where request_id = ? order by created_at desc limit 1
+                    """, rs -> rs.next()
+                            ? new LatestAdjustment(rs.getString("adjustment_type"), rs.getString("status"))
+                            : null,
+                    request.id());
+            if (adjustment != null) {
+                actions.add("QUERY_GATEWAY");
+                if ("SUCCEEDED".equals(adjustment.status())) {
+                    actions.add("RETRY_APPLY");
+                    if ("CREATE_CHECKOUT".equals(adjustment.type())) {
+                        actions.add("REFUND_ADJUSTMENT_AND_CANCEL");
+                    }
+                }
+                if ("FAILED".equals(adjustment.status())) {
+                    actions.add("RELEASE_AFTER_CONFIRMED_FAILURE");
+                }
+            }
         }
         return Set.copyOf(actions);
+    }
+
+    private record LatestAdjustment(String type, String status) {
     }
 
     private void requireAccess(StaffPrincipal staff, UUID hotelId) {

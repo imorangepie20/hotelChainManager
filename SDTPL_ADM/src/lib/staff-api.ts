@@ -211,6 +211,14 @@ export type ReservationChangeRequestView = {
   events: ReservationChangeEvent[];
 };
 
+export type ReservationChangePaymentLinkView = {
+  requestId: string;
+  status: ReservationChangeStatus;
+  version: number;
+  customerUrl: string;
+  expiresAt: string;
+};
+
 
 type SessionResponse = { token: string; staff: StaffPrincipal };
 
@@ -821,6 +829,45 @@ export function repriceReservationChangeRequest(token: string, requestId: string
 
 export function cancelReservationChangeRequest(token: string, requestId: string, idempotencyKey: string, version: number) {
   return mutateReservationChangeRequest(token, requestId, "cancel", idempotencyKey, { version });
+}
+
+export function createReservationChangePaymentLink(
+  token: string,
+  requestId: string,
+  idempotencyKey: string,
+  input: { version: number; publicToken: string },
+) {
+  return reservationChangeRequest<ReservationChangePaymentLinkView>(
+    `/api/staff/reservation-change-requests/${requestId}/payment-link`,
+    token,
+    { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: JSON.stringify(input) },
+  );
+}
+
+export function startReservationChangeRefund(
+  token: string,
+  requestId: string,
+  idempotencyKey: string,
+  version: number,
+) {
+  return reservationChangeRequest<ReservationChangeRequestView>(
+    `/api/staff/reservation-change-requests/${requestId}/refund`,
+    token,
+    { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: JSON.stringify({ version }) },
+  );
+}
+
+export function reconcileReservationChangeRequest(
+  token: string,
+  requestId: string,
+  idempotencyKey: string,
+  input: { action: string; version: number; reason: string },
+) {
+  return reservationChangeRequest<ReservationChangeRequestView>(
+    `/api/staff/reservation-change-requests/${requestId}/reconcile`,
+    token,
+    { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: JSON.stringify(input) },
+  );
 }
 
 type WebsiteMediaAssetResponse = Omit<WebsiteMediaAsset, "variants"> & { variants?: WebsiteMediaVariant[] };

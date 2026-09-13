@@ -310,7 +310,12 @@ public class ReservationChangeSettlementService {
                             "PAYMENT_TRANSACTION_NOT_SETTLEABLE", "원 결제 거래의 환불 가능 금액이 부족합니다.");
                 }
             }
-            requestStatus = "READY_TO_APPLY";
+            if ("REFUND_ADJUSTMENT".equals(attempt.adjustmentType())) {
+                holds.release(attempt.requestId(), "ADJUSTMENT_REFUNDED");
+                requestStatus = "CANCELLED";
+            } else {
+                requestStatus = "READY_TO_APPLY";
+            }
         } else if (resultStatus == PaymentAdjustmentGateway.GatewayResultStatus.FAILED) {
             holds.release(attempt.requestId(), "PAYMENT_FAILED");
             requestStatus = "CANCELLED";

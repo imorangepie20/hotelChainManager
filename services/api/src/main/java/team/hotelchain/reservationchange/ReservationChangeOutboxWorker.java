@@ -51,7 +51,7 @@ public class ReservationChangeOutboxWorker {
 
         try {
             AttemptCommand command = loadCommand(claim.attemptId());
-            PaymentAdjustmentGateway.GatewayAdjustmentResult result = execute(command);
+            PaymentAdjustmentGateway.GatewayAdjustmentResult result = execute(claim.commandType(), command);
             Boolean accepted = transactions.execute(status -> completeClaim(claim, result));
             if (Boolean.TRUE.equals(accepted)
                     && result.status() != PaymentAdjustmentGateway.GatewayResultStatus.PENDING) {
@@ -111,16 +111,18 @@ public class ReservationChangeOutboxWorker {
         return command;
     }
 
-    private PaymentAdjustmentGateway.GatewayAdjustmentResult execute(AttemptCommand command) {
-        return switch (command.adjustmentType()) {
+    private PaymentAdjustmentGateway.GatewayAdjustmentResult execute(String commandType, AttemptCommand command) {
+        return switch (commandType) {
             case "CREATE_CHECKOUT" -> gateway.createCheckout(new PaymentAdjustmentGateway.GatewayCheckoutCommand(
                     command.id(), command.idempotencyKey(), command.amountKrw(), command.currency(),
                     URI.create("http://127.0.0.1:4000/reservation-change-payment")));
-            case "REFUND_ORIGINAL", "REFUND_ADJUSTMENT" -> gateway.refund(
+            case "REFUND" -> gateway.refund(
                     new PaymentAdjustmentGateway.GatewayRefundCommand(
                             command.id(), command.idempotencyKey(), command.originalGatewayTransactionId(),
                             command.amountKrw(), command.currency()));
-            default -> throw new IllegalStateException("지원하지 않는 정산 명령입니다: " + command.adjustmentType());
+            case "QUERY" -> gateway.query(new PaymentAdjustmentGateway.GatewayQueryCommand(
+                    command.id(), command.gatewayTransactionId()));
+            default -> throw new IllegalStateException("지원하지 않는 정산 명령입니다: " + commandType);
         };
     }
 

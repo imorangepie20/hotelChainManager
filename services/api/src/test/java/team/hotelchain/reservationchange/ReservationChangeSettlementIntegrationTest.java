@@ -284,6 +284,50 @@ class ReservationChangeSettlementIntegrationTest {
         assertThat(jdbc.queryForObject("select count(*) from reservation_change_outbox", Integer.class)).isZero();
     }
 
+    @Test
+    void headquartersCanQueueAnAuditedGatewayQueryForReconciliation() throws Exception {
+        ReservationView reservation = create("reconcile-charge", 0);
+        payments.pay(reservation.id(), TOKEN, "capture-reconcile", PaymentOutcome.SUCCESS);
+        LocalDate targetCheckIn = LocalDate.now().plusDays(42);
+        jdbc.update("""
+                update rate_day set amount_krw = 150000
+                where rate_plan_id = ? and stay_date >= ? and stay_date < ?
+                """, RATE_PLAN, targetCheckIn, targetCheckIn.plusDays(2));
+        String staffToken = staffAccess.login("settlement-hq@example.com", "password").token();
+        ReservationChangeRequestView request = changeRequests.create(
+                staffToken, reservation.id(), "create-reconcile-charge",
+                new CreateReservationChangeRequest(
+                        targetCheckIn, targetCheckIn.plusDays(2), ROOM_TYPE, RATE_PLAN, 300_000L));
+        settlement.createPaymentLink(staffToken, request.id(), "reconcile-link",
+                new ReservationChangePaymentLinkRequest(request.version(), token(12)));
+        assertThat(outboxWorker.processNext()).isTrue();
+        UUID attemptId = jdbc.queryForObject(
+                "select id from payment_adjustment_attempt where request_id = ?", UUID.class, request.id());
+        settlement.recordGatewayResult(
+                attemptId, "reconcile-unknown", PaymentAdjustmentGateway.GatewayResultStatus.UNKNOWN);
+        long version = jdbc.queryForObject(
+                "select version from reservation_change_request where id = ?", Long.class, request.id());
+
+        mockMvc.perform(post("/api/staff/reservation-change-requests/{id}/reconcile", request.id())
+                        .header("X-Staff-Session", staffToken)
+                        .header("Idempotency-Key", "query-reconciliation")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"action":"QUERY_GATEWAY","version":%d,"reason":"결제사 결과 재조회"}
+                                """.formatted(version)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("RECONCILIATION_REQUIRED"));
+
+        assertThat(jdbc.queryForObject("""
+                select count(*) from reservation_change_outbox
+                where request_id = ? and command_type = 'QUERY'
+                """, Integer.class, request.id())).isEqualTo(1);
+        assertThat(jdbc.queryForObject("""
+                select count(*) from reservation_change_event
+                where request_id = ? and event_type = 'RECONCILIATION_ACTION'
+                """, Integer.class, request.id())).isEqualTo(1);
+    }
+
     private ReservationView create(String key, int dayOffset) {
         LocalDate checkIn = LocalDate.now().plusDays(40 + dayOffset);
         return reservations.create(key, TOKEN, new ReservationRequest(

@@ -18,14 +18,17 @@ public class StaffReservationChangeController {
     private final ReservationChangeRequestService requests;
     private final ReservationChangeApprovalService approvals;
     private final ReservationChangeSettlementService settlements;
+    private final ReservationChangeReconciliationService reconciliation;
 
     public StaffReservationChangeController(
             ReservationChangeRequestService requests,
             ReservationChangeApprovalService approvals,
-            ReservationChangeSettlementService settlements) {
+            ReservationChangeSettlementService settlements,
+            ReservationChangeReconciliationService reconciliation) {
         this.requests = requests;
         this.approvals = approvals;
         this.settlements = settlements;
+        this.reconciliation = reconciliation;
     }
 
     @GetMapping("/reservation-change-policy")
@@ -110,6 +113,16 @@ public class StaffReservationChangeController {
             @RequestHeader("Idempotency-Key") String idempotencyKey,
             @RequestBody ReservationChangeVersionRequest request) {
         settlements.startRefund(token, requestId, idempotencyKey, request);
+        return requests.get(token, requestId);
+    }
+
+    @PostMapping("/reservation-change-requests/{requestId}/reconcile")
+    public ReservationChangeRequestView reconcile(
+            @PathVariable UUID requestId,
+            @RequestHeader("X-Staff-Session") String token,
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @RequestBody ReservationChangeReconciliationRequest request) {
+        reconciliation.reconcile(token, requestId, idempotencyKey, request);
         return requests.get(token, requestId);
     }
 }
