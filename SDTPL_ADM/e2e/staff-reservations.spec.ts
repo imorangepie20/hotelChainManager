@@ -3,6 +3,10 @@ import { expect, test } from "@playwright/test";
 const SOKCHO = "11000000-0000-0000-0000-000000000001";
 
 test("lets a branch employee search reservations and open the selected reservation details", async ({ page }) => {
+  let cancelled = false;
+  let previewShouldFail = true;
+  let cancellationMethod = "";
+  const cancellationKeys: string[] = [];
   await page.addInitScript((hotelId) => {
     localStorage.setItem("hotel-chain-staff-session", "test-session-token");
     localStorage.setItem("hotel-chain-staff", JSON.stringify({
@@ -17,7 +21,7 @@ test("lets a branch employee search reservations and open the selected reservati
   await page.route("**/api/staff/hotels/*/reservations?*", (route) => {
     const requestUrl = new URL(route.request().url());
     const query = requestUrl.searchParams.get("query") ?? "";
-    const reservations = query && query !== "김하늘" ? [] : [{
+    const reservations = cancelled || (query && query !== "김하늘") ? [] : [{
       reservationId: "42000000-0000-0000-0000-000000000001",
       guestName: "김하늘",
       guestEmail: "guest@example.com",
@@ -36,6 +40,55 @@ test("lets a branch employee search reservations and open the selected reservati
     return route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({ hotelId: SOKCHO, date: requestUrl.searchParams.get("date"), truncated: false, reservations }),
+    });
+  });
+  await page.route("**/api/staff/reservations/*/cancellation-preview", (route) => {
+    if (previewShouldFail) {
+      return route.fulfill({
+        status: 502,
+        contentType: "application/json",
+        body: JSON.stringify({ message: "취소 조건을 불러오지 못했습니다." }),
+      });
+    }
+    return route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        reservationId: "42000000-0000-0000-0000-000000000001",
+        status: "CONFIRMED",
+        cancellable: true,
+        refundAmount: 420000,
+        currency: "KRW",
+        cutoffAt: "2026-09-14T09:00:00Z",
+        unavailableReason: null,
+      }),
+    });
+  });
+  await page.route("**/api/staff/reservations/*/cancel", (route) => {
+    cancellationMethod = route.request().method();
+    cancellationKeys.push(route.request().headers()["idempotency-key"] ?? "");
+    if (cancellationKeys.length === 1) {
+      return route.fulfill({
+        status: 502,
+        contentType: "application/json",
+        body: JSON.stringify({ message: "응답을 확인하지 못했습니다. 다시 시도해 주세요." }),
+      });
+    }
+    if (cancellationKeys.length === 2) {
+      return route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({ code: "REFUND_FAILED", message: "환불 처리에 실패했습니다. 잠시 후 다시 시도해 주세요." }),
+      });
+    }
+    cancelled = true;
+    return route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        reservationId: "42000000-0000-0000-0000-000000000001",
+        status: "CANCELLED",
+        refundAmount: 420000,
+        currency: "KRW",
+      }),
     });
   });
 
@@ -72,4 +125,34 @@ test("lets a branch employee search reservations and open the selected reservati
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByLabel("예약 검색")).toBeVisible();
   await expect(detailButton).toBeVisible();
+
+  await detailButton.click();
+  const cancellationButton = page.getByRole("button", { name: "예약 취소", exact: true });
+  await cancellationButton.press("Enter");
+  await expect(page.getByRole("dialog").getByRole("alert")).toContainText("취소 조건을 불러오지 못했습니다");
+  previewShouldFail = false;
+  await cancellationButton.press("Enter");
+  const confirmation = page.getByRole("alertdialog");
+  await expect(confirmation).toContainText("예상 환불액 420,000원");
+  await page.keyboard.press("Escape");
+  await expect(confirmation).toBeHidden();
+  await expect(cancellationButton).toBeFocused();
+
+  await cancellationButton.press("Enter");
+  await expect(confirmation).toBeVisible();
+  const confirmButton = confirmation.getByRole("button", { name: "예약 취소 확정" });
+  await confirmButton.press("Enter");
+
+  await expect(confirmation.getByRole("alert")).toContainText("응답을 확인하지 못했습니다");
+  await confirmButton.press("Enter");
+  await expect(confirmation.getByRole("alert")).toContainText("환불 처리에 실패했습니다");
+  await confirmButton.press("Enter");
+
+  await expect(page.getByRole("status", { name: "예약 처리 결과" })).toContainText("예약이 취소되었습니다");
+  expect(cancellationMethod).toBe("POST");
+  expect(cancellationKeys).toHaveLength(3);
+  expect(cancellationKeys[0]).not.toBe("");
+  expect(cancellationKeys[1]).toBe(cancellationKeys[0]);
+  expect(cancellationKeys[2]).not.toBe(cancellationKeys[1]);
+  await expect(page.getByText("김하늘", { exact: true })).toHaveCount(0);
 });

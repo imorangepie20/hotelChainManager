@@ -53,6 +53,23 @@ export type StaffReservationSearchView = {
   reservations: StaffReservationSummary[];
 };
 
+export type StaffCancellationPreview = {
+  reservationId: string;
+  status: string;
+  cancellable: boolean;
+  refundAmount: number;
+  currency: string;
+  cutoffAt: string;
+  unavailableReason: string | null;
+};
+
+export type StaffCancellationResult = {
+  reservationId: string;
+  status: string;
+  refundAmount: number;
+  currency: string;
+};
+
 
 type SessionResponse = { token: string; staff: StaffPrincipal };
 
@@ -419,6 +436,33 @@ export async function getStaffReservations(
   });
   if (!response.ok) throw new StaffApiError("예약 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.");
   return response.json() as Promise<StaffReservationSearchView>;
+}
+
+export async function getStaffCancellationPreview(token: string, reservationId: string): Promise<StaffCancellationPreview> {
+  const response = await fetch(`/api/staff/reservations/${reservationId}/cancellation-preview`, {
+    headers: { "X-Staff-Session": token },
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(error.message ?? "예약 취소 조건을 확인하지 못했습니다.", response.status, error.code);
+  }
+  return response.json() as Promise<StaffCancellationPreview>;
+}
+
+export async function cancelStaffReservation(
+  token: string,
+  reservationId: string,
+  idempotencyKey: string,
+): Promise<StaffCancellationResult> {
+  const response = await fetch(`/api/staff/reservations/${reservationId}/cancel`, {
+    method: "POST",
+    headers: { "X-Staff-Session": token, "Idempotency-Key": idempotencyKey },
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(error.message ?? "예약을 취소하지 못했습니다.", response.status, error.code);
+  }
+  return response.json() as Promise<StaffCancellationResult>;
 }
 
 type WebsiteMediaAssetResponse = Omit<WebsiteMediaAsset, "variants"> & { variants?: WebsiteMediaVariant[] };

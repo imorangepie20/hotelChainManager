@@ -230,6 +230,8 @@ CMS는 본사가 개발자 도움 없이 지점 랜딩, 오퍼, 안내, 캠페�
 | GET | `/api/staff/me` | 활성 세션 |
 | GET | `/api/staff/hotels/{hotelId}/operations` | 본사 또는 소속 지점 |
 | GET | `/api/staff/hotels/{hotelId}/reservations?date=&query=&status=` | 본사 또는 소속 지점. 기준일 관련 예약을 최대 200건 조회 |
+| GET | `/api/staff/reservations/{id}/cancellation-preview` | 본사 또는 예약 지점. 저장 정책 기준 취소 가능 여부·예상 환불 조회 |
+| POST | `/api/staff/reservations/{id}/cancel` | 본사 또는 예약 지점. 멱등 키로 취소·환불·재고 복구 후 직원 감사 기록 |
 | POST | `/api/staff/reservations/{id}/assignments` | 본사 또는 소속 지점 |
 | PUT | `/api/staff/web-content/hotels/{hotelId}` | 본사만 |
 | POST | `/api/staff/web-content/hotels/{hotelId}/publish` | 본사만 |

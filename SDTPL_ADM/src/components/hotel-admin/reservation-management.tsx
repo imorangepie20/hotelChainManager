@@ -1,11 +1,21 @@
 "use client";
 
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import { format } from "date-fns";
 import { ko } from "date-fns/locale";
 import { CalendarSearch, Search } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,7 +24,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
+  cancelStaffReservation,
+  getStaffCancellationPreview,
   getStaffReservations,
+  StaffApiError,
+  type StaffCancellationPreview,
   type StaffPrincipal,
   type StaffReservationSearchView,
   type StaffReservationSummary,
@@ -58,6 +72,17 @@ function money(value: number, currency: string) {
   return new Intl.NumberFormat("ko-KR", { style: "currency", currency }).format(value);
 }
 
+function displayDateTime(value: string) {
+  return new Intl.DateTimeFormat("ko-KR", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
 function dateInTimeZone(timeZone: string) {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone,
@@ -83,6 +108,15 @@ export function ReservationManagement() {
   const [selectedReservation, setSelectedReservation] = useState<StaffReservationSummary | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [refreshVersion, setRefreshVersion] = useState(0);
+  const [cancellationTarget, setCancellationTarget] = useState<StaffReservationSummary | null>(null);
+  const [cancellationPreview, setCancellationPreview] = useState<StaffCancellationPreview | null>(null);
+  const [cancellationKey, setCancellationKey] = useState("");
+  const [cancellationError, setCancellationError] = useState<string | null>(null);
+  const [checkingCancellation, setCheckingCancellation] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const cancellationTriggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     function loadStoredStaff() {
@@ -124,7 +158,7 @@ export function ReservationManagement() {
     }
     void loadReservations();
     return () => { current = false; };
-  }, [date, hotelId, query, status]);
+  }, [date, hotelId, query, refreshVersion, status]);
 
   const availableHotels = useMemo(
     () => staff?.role === "BRANCH_STAFF" ? hotels.filter((hotel) => hotel.id === staff.hotelId) : hotels,
@@ -142,6 +176,46 @@ export function ReservationManagement() {
   function submitSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setQuery(queryInput.trim());
+  }
+
+  async function requestCancellation(reservation: StaffReservationSummary) {
+    const token = window.localStorage.getItem("hotel-chain-staff-session");
+    if (!token) return;
+    setCheckingCancellation(true);
+    setError(null);
+    setCancellationError(null);
+    try {
+      const preview = await getStaffCancellationPreview(token, reservation.reservationId);
+      setCancellationTarget(reservation);
+      setCancellationPreview(preview);
+      setCancellationKey(window.crypto.randomUUID());
+    } catch (cause) {
+      setCancellationError(cause instanceof Error ? cause.message : "예약 취소 조건을 확인하지 못했습니다.");
+    } finally {
+      setCheckingCancellation(false);
+    }
+  }
+
+  async function confirmCancellation() {
+    const token = window.localStorage.getItem("hotel-chain-staff-session");
+    if (!token || !cancellationTarget || !cancellationPreview?.cancellable || !cancellationKey) return;
+    setCancelling(true);
+    setCancellationError(null);
+    try {
+      const result = await cancelStaffReservation(token, cancellationTarget.reservationId, cancellationKey);
+      setNotice(`예약이 취소되었습니다. 환불 예정 금액은 ${money(result.refundAmount, result.currency)}입니다.`);
+      setCancellationTarget(null);
+      setCancellationPreview(null);
+      setSelectedReservation(null);
+      setRefreshVersion((version) => version + 1);
+    } catch (cause) {
+      setCancellationError(cause instanceof Error ? cause.message : "예약을 취소하지 못했습니다.");
+      if (cause instanceof StaffApiError && cause.code === "REFUND_FAILED") {
+        setCancellationKey(window.crypto.randomUUID());
+      }
+    } finally {
+      setCancelling(false);
+    }
   }
 
   return (
@@ -162,6 +236,7 @@ export function ReservationManagement() {
       </div>
 
       {error && <p role="alert" className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
+      {notice && <p role="status" aria-label="예약 처리 결과" className="rounded-xl border border-emerald-600/20 bg-emerald-500/10 p-3 text-sm text-emerald-800 dark:text-emerald-300">{notice}</p>}
 
       <div className="grid items-start gap-4 xl:grid-cols-[20rem_minmax(0,1fr)]">
         <Card aria-label="예약 날짜 달력" role="group">
@@ -231,12 +306,68 @@ export function ReservationManagement() {
         </Card>
       </div>
 
-      <ReservationDetail reservation={selectedReservation} onOpenChange={(open) => { if (!open) setSelectedReservation(null); }} />
+      <ReservationDetail
+        reservation={selectedReservation}
+        checkingCancellation={checkingCancellation}
+        cancellationError={cancellationError}
+        cancellationTriggerRef={cancellationTriggerRef}
+        onRequestCancellation={requestCancellation}
+        onOpenChange={(open) => { if (!open) setSelectedReservation(null); }}
+      />
+      <AlertDialog open={cancellationTarget !== null} onOpenChange={(open) => {
+        if (!open && !cancelling) {
+          setCancellationTarget(null);
+          setCancellationPreview(null);
+          setCancellationKey("");
+          setCancellationError(null);
+          window.requestAnimationFrame(() => cancellationTriggerRef.current?.focus());
+        }
+      }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{cancellationTarget?.guestName} 고객 예약을 취소할까요?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {cancellationPreview?.cancellable
+                ? `예상 환불액 ${money(cancellationPreview.refundAmount, cancellationPreview.currency)} · 취소 마감 ${displayDateTime(cancellationPreview.cutoffAt)}`
+                : cancellationPreview?.unavailableReason ?? "현재 이 예약을 취소할 수 없습니다."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="rounded-lg bg-muted/60 p-3 text-sm">
+            취소가 완료되면 객실 유형별 확정 재고가 즉시 복구되며 이 화면에서는 되돌릴 수 없습니다.
+          </div>
+          {cancellationError && (
+            <p role="alert" className="text-sm text-destructive">{cancellationError}</p>
+          )}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={cancelling}>돌아가기</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" disabled={!cancellationPreview?.cancellable || cancelling} onClick={(event) => {
+              event.preventDefault();
+              void confirmCancellation();
+            }}>
+              {cancelling ? "취소 처리 중" : "예약 취소 확정"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
 
-function ReservationDetail({ reservation, onOpenChange }: { reservation: StaffReservationSummary | null; onOpenChange: (open: boolean) => void }) {
+function ReservationDetail({
+  reservation,
+  checkingCancellation,
+  cancellationError,
+  cancellationTriggerRef,
+  onRequestCancellation,
+  onOpenChange,
+}: {
+  reservation: StaffReservationSummary | null;
+  checkingCancellation: boolean;
+  cancellationError: string | null;
+  cancellationTriggerRef: RefObject<HTMLButtonElement | null>;
+  onRequestCancellation: (reservation: StaffReservationSummary) => Promise<void>;
+  onOpenChange: (open: boolean) => void;
+}) {
   return (
     <Dialog open={Boolean(reservation)} onOpenChange={onOpenChange}>
       {reservation && (
@@ -254,7 +385,17 @@ function ReservationDetail({ reservation, onOpenChange }: { reservation: StaffRe
             <Detail label="배정 객실" value={reservation.assignedRoomNumbers.length ? `${reservation.assignedRoomNumbers.join(", ")}호` : "아직 배정되지 않음"} />
             <Detail label="결제 금액" value={money(reservation.totalKrw, reservation.currency)} />
           </dl>
-          <p className="text-xs text-muted-foreground">예약 변경과 운영 처리는 별도 권한이 필요한 기능입니다. 체크인·체크아웃은 오늘의 운영에서 처리하세요.</p>
+          <p className="text-xs text-muted-foreground">예약 변경은 아직 지원하지 않습니다. 체크인·체크아웃은 오늘의 운영에서 처리하세요.</p>
+          {cancellationError && (
+            <p role="alert" className="text-sm text-destructive">{cancellationError}</p>
+          )}
+          {reservation.status === "CONFIRMED" && (
+            <div className="flex justify-end border-t pt-4">
+              <Button ref={cancellationTriggerRef} variant="destructive" disabled={checkingCancellation} onClick={() => void onRequestCancellation(reservation)}>
+                {checkingCancellation ? "취소 조건 확인 중" : "예약 취소"}
+              </Button>
+            </div>
+          )}
         </DialogContent>
       )}
     </Dialog>
