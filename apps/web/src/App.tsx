@@ -10,6 +10,7 @@ import { WebsitePreviewBanner } from './components/website-preview-banner'
 import { resolveCustomerRoute } from './lib/customer-route'
 import { applyBookingIntent, availabilityRequestFields, filterOffersForRoomType, LatestAvailabilityRequest, type BookingIntent, type SearchState } from './lib/latest-availability-request'
 import { ContentPage, ContentPageAfterHero, ContentPageHero } from './components/content-page'
+import { ResponsiveCmsImage } from './components/responsive-cms-image'
 import { ContentCollectionPage } from './components/content-collection-page'
 import { GuestSelector } from './components/guest-selector'
 import { HotelSelector } from './components/hotel-selector'
@@ -98,7 +99,8 @@ export default function App() {
 
           const hotel = hotels.find(item => item.id === page.hotelId)
           if (!hotel) throw new Error('호텔 연결이 올바르지 않습니다.')
-          const draft = locale === 'en' ? destinationContentFromPublished(hotel.region, page.content, 'en') : destinationContentFromPublished(hotel.region, page.content)
+          const draftContent = { ...page.content, mediaVariants: page.mediaVariants }
+          const draft = locale === 'en' ? destinationContentFromPublished(hotel.region, draftContent, 'en') : destinationContentFromPublished(hotel.region, draftContent)
           if (!draft) throw new Error('콘텐츠를 읽을 수 없습니다.')
           setHotelId(hotel.id); setPublishedDestination(draft)
         }
@@ -122,7 +124,8 @@ export default function App() {
           if (!hotel) throw new Error('페이지에 연결된 호텔을 찾을 수 없습니다.')
           if (!active) return
           setHotelId(hotel.id)
-          const destination = locale === 'en' ? destinationContentFromPublished(hotel.region, page.content, 'en') : destinationContentFromPublished(hotel.region, page.content)
+          const publishedContent = { ...page.content, mediaVariants: page.mediaVariants }
+          const destination = locale === 'en' ? destinationContentFromPublished(hotel.region, publishedContent, 'en') : destinationContentFromPublished(hotel.region, publishedContent)
           if (!destination) throw new Error('영어 콘텐츠 문서가 올바르지 않습니다.')
           setPublishedDestination(destination)
         })
@@ -310,7 +313,7 @@ export default function App() {
     const page = contentPage ?? homeContentPage
     if (page) return <>{renderHeader(true)}<main id="top"><ContentPage page={page} previewMode={previewMode} locale="en" onBookingIntent={applyContentBookingIntent} /></main>{englishFooter}</>
     if (publishedDestination) return <>{renderHeader(true)}<main id="top">
-      <section className="hero"><img src={publishedDestination.heroImage} alt={publishedDestination.heroAlt} /><div className="hero-shade" /><div className="hero-copy"><p>{publishedDestination.eyebrow}</p><h1>{publishedDestination.title}</h1><p>{publishedDestination.description}</p><a href="/#booking" className="text-link">Book a room (Korean) <ArrowRight size={18} /></a></div></section>
+      <section className="hero"><ResponsiveCmsImage src={publishedDestination.heroImage} imageVariants={publishedDestination.heroVariants} sizes="100vw" alt={publishedDestination.heroAlt} /><div className="hero-shade" /><div className="hero-copy"><p>{publishedDestination.eyebrow}</p><h1>{publishedDestination.title}</h1><p>{publishedDestination.description}</p><a href="/#booking" className="text-link">Book a room (Korean) <ArrowRight size={18} /></a></div></section>
       <section className="content-section editorial"><h2>Experiences</h2><div className="experience-grid">{publishedDestination.experiences.map((item, index) => <article className={`experience-card experience-${index}`} key={index}><p>{item.category}</p><h3>{item.title}</h3><span>{item.description}</span></article>)}</div></section>
       <section className="offers-band"><div className="content-section"><h2>Offers</h2><div className="story-offers">{publishedDestination.offers.map((item, index) => <article key={index}><h3>{item.title}</h3><p>{item.detail}</p><dl><div><dt>Booking period</dt><dd>{item.bookingPeriod}</dd></div><div><dt>Stay period</dt><dd>{item.stayPeriod}</dd></div></dl></article>)}</div></div></section>
       <section className="arrival-section"><div><h2>Arrival guide</h2><p>{publishedDestination.arrival.highlight}</p></div><dl><div><dt>Address</dt><dd>{publishedDestination.arrival.address}</dd></div><div><dt>Check-in / Check-out</dt><dd>{publishedDestination.arrival.checkInOut}</dd></div></dl></section>
@@ -321,7 +324,7 @@ export default function App() {
   if (activeRoute?.kind === 'collection') return <>{renderHeader(true)}<ContentCollectionPage contentKind={activeRoute.contentKind} hotelSlug={activeRoute.hotelSlug} /><footer><div className="brand"><span>STAY</span> HANEUL</div><p>가상의 호텔 체인 예약·운영 플랫폼 포트폴리오</p><p>© 2026 HOTEL CHAIN PROJECT</p></footer></>
   if (contentPage) return <>{renderHeader(true)}<main id="top"><ContentPage page={contentPage} previewMode={previewMode} onBookingIntent={applyContentBookingIntent} /></main><footer><div className="brand"><span>STAY</span> HANEUL</div><p>가상의 호텔 체인 예약·운영 플랫폼 포트폴리오</p><p>© 2026 HOTEL CHAIN PROJECT</p></footer></>
   return <>{renderHeader(false)}
-    <main id="top">{homeContentPage ? <ContentPageHero page={homeContentPage} previewMode={previewMode} headingId="hero-title" /> : <section className="hero" aria-labelledby="hero-title"><img src={destination.heroImage} alt={destination.heroAlt} /><div className="hero-shade" /><div className="hero-copy" key={destination.title}><p className="eyebrow">{destination.eyebrow}</p><h1 id="hero-title">{destination.title.split('\n').map((line, index) => <span key={line}>{index > 0 && <br />}{line}</span>)}</h1><p>{destination.description}</p><a href="#booking" className="text-link">객실 예약하기 <ArrowRight size={18} /></a></div><div className="fiction">PORTFOLIO DEMO · 가상의 호텔입니다</div></section>}
+    <main id="top">{homeContentPage ? <ContentPageHero page={homeContentPage} previewMode={previewMode} headingId="hero-title" /> : <section className="hero" aria-labelledby="hero-title"><ResponsiveCmsImage src={destination.heroImage} imageVariants={destination.heroVariants} sizes="100vw" alt={destination.heroAlt} /><div className="hero-shade" /><div className="hero-copy" key={destination.title}><p className="eyebrow">{destination.eyebrow}</p><h1 id="hero-title">{destination.title.split('\n').map((line, index) => <span key={line}>{index > 0 && <br />}{line}</span>)}</h1><p>{destination.description}</p><a href="#booking" className="text-link">객실 예약하기 <ArrowRight size={18} /></a></div><div className="fiction">PORTFOLIO DEMO · 가상의 호텔입니다</div></section>}
       <section id="booking" ref={bookingFormRef} className="booking-shell" aria-labelledby="booking-title" tabIndex={-1}><div className="booking-heading"><div><p className="section-kicker">BOOK YOUR STAY</p><h2 id="booking-title">여정을 예약하세요</h2></div><ConciergePanel previewMode={previewMode} criteria={{ region: selectedHotel?.region, checkIn, checkOut, adults, children, rooms, breakfastIncluded: breakfastOnly }} onApply={applyConciergeCriteria} /></div><form onSubmit={search}><fieldset className="search-grid" disabled={previewMode} aria-label="예약 검색 조건"><HotelSelector hotels={hotels} value={hotelId} onChange={selectHotelForStay} /><StayDatePicker checkIn={checkIn} checkOut={checkOut} onChange={(nextCheckIn, nextCheckOut) => { if (previewMode) return; setCheckIn(nextCheckIn); setCheckOut(nextCheckOut) }} /><GuestSelector adults={adults} children={children} rooms={rooms} onChange={({ adults: nextAdults, children: nextChildren, rooms: nextRooms }) => { if (previewMode) return; setAdults(nextAdults); setChildren(nextChildren); setRooms(nextRooms) }} /><button className="primary search-button" disabled={previewMode || busy || !hotelId}>{busy ? '확인 중…' : '객실 검색'} <ArrowRight size={18} /></button></fieldset></form>{(error || notice) && <div role="status" className={error ? 'message error' : 'message'}>{error || notice}<button aria-label="알림 닫기" onClick={() => { setError(''); setNotice('') }}><X size={16} /></button></div>}</section>
       {homeContentPage && <ContentPageAfterHero page={homeContentPage} previewMode={previewMode} />}
       <section id="experiences" className="content-section editorial"><div className="section-head"><div><p className="section-kicker">A STAY TO REMEMBER</p><h2>{selectedHotel?.region ?? '속초'}에서 만나는 세 가지 장면</h2></div><p>머무는 시간에 따라<br />장소는 더 깊어집니다.</p></div><div className="experience-grid">{destination.experiences.map((item, index) => <article className={`experience-card experience-${index}`} key={item.title}><p>{item.category}</p><h3>{item.title}</h3><span>{item.description}</span><a href="#booking">{item.title}로 예약하기 <ArrowRight size={15} /></a></article>)}</div></section>

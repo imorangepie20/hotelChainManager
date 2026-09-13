@@ -298,7 +298,8 @@ public class WebsiteTranslationService {
         if (matches.isEmpty()) throw new WebsitePageNotFoundException(canonical);
         PublishedRow row = matches.getFirst();
         return new PublishedWebsitePage(row.id(), row.type(), row.kind(), canonical, row.hotelId(),
-                row.translation().publishedContent(), row.translation().publishedConnections());
+                row.translation().publishedContent(), row.translation().publishedConnections(),
+                media.publicVariants(row.type(), row.translation().publishedContent()));
     }
 
     PublishedWebsitePage previewDraft(UUID pageId, int draftVersion, String previewPath) {
@@ -316,7 +317,8 @@ public class WebsiteTranslationService {
                             rs.getObject("hotel_id", UUID.class), draft.draftContent(), draft.draftConnections());
                 }, pageId, draftVersion, previewPath);
         if (page == null) throw new WebsitePreviewUnavailableException();
-        return page;
+        return new PublishedWebsitePage(page.id(), page.type(), page.contentKind(), page.path(), page.hotelId(),
+                page.content(), page.connections(), media.publicVariants(page.type(), page.content()));
     }
 
     @Transactional(readOnly = true)

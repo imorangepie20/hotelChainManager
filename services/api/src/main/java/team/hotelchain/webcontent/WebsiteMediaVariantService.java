@@ -100,6 +100,30 @@ public class WebsiteMediaVariantService {
     }
 
     @Transactional(readOnly = true)
+    public Map<UUID, List<PublicWebsiteMediaVariant>> findPublicReadyByAssetIds(List<UUID> assetIds) {
+        if (assetIds.isEmpty()) return Map.of();
+        String placeholders = String.join(", ", Collections.nCopies(assetIds.size(), "?"));
+        Map<UUID, List<PublicWebsiteMediaVariant>> variantsByAsset = new LinkedHashMap<>();
+        jdbc.query("""
+                select variant.asset_id, variant.target_width
+                  from website_media_variant variant
+                  join website_media_asset asset on asset.id = variant.asset_id
+                 where variant.asset_id in (%s)
+                   and asset.status = 'ACTIVE' and asset.origin = 'UPLOADED'
+                   and variant.format = 'WEBP' and variant.status = 'READY'
+                 order by variant.target_width
+                """.formatted(placeholders), rs -> {
+            UUID assetId = rs.getObject("asset_id", UUID.class);
+            int targetWidth = rs.getInt("target_width");
+            variantsByAsset.computeIfAbsent(assetId, ignored -> new ArrayList<>())
+                    .add(new PublicWebsiteMediaVariant(targetWidth,
+                            "/api/website/media/" + assetId + "/variants/" + targetWidth + ".webp",
+                            "image/webp"));
+        }, assetIds.toArray());
+        return variantsByAsset;
+    }
+
+    @Transactional(readOnly = true)
     public WebsiteMediaContent publicContent(UUID mediaId, int targetWidth) {
         String storageKey = jdbc.query("""
                 select variant.storage_key

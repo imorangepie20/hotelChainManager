@@ -28,7 +28,7 @@ CMS에 업로드한 활성 PNG/JPEG 원본의 요청 처리를 지연시키지 �
 - `POST /api/staff/website/media/{mediaId}/variants/{targetWidth}/retry`는 `HQ_ADMIN`만 호출할 수 있다. 640·1280의 FAILED row만 시도 횟수·lease·claim token·오류를 비우고 PENDING으로 되돌린다. 잘못된 폭은 400, 없는 대상은 404, 상태·수명주기 충돌은 409다.
 - 관리자 미디어 선택기는 대기·처리·READY 규격/용량/링크·FAILED 시도/오류/재시도를 표시한다. 대화상자가 열려 있고 선택 자산이 ACTIVE이며 PENDING/PROCESSING 또는 FAILED 1·2회 variant가 있을 때만 앞 요청이 끝난 뒤 2초 polling을 반복한다. polling과 수동 재시도 응답은 variants만 병합해 입력 중 메타데이터·expectedVersion·카드·초점을 보존한다. 닫기·선택 전환·보관·terminal 상태에서는 중단하고 늦은 retry 응답도 자산·폭 문맥이 일치할 때만 반영한다.
 - 보관하면 원본과 READY variant 공개 전달이 즉시 404가 되지만 row와 파일은 복원을 위해 유지한다. 복원은 기존 READY를 다시 전달하고 eligible 누락 row만 멱등 enqueue한다. 영구 삭제는 원본과 모든 READY 파일을 고유 `.trash` 경로로 함께 격리하며 DB commit이면 제거하고 rollback이면 각각 복원한다.
-- 기존 `/api/website/media/{id}/content`, `WebsiteMediaAsset.deliveryUrl`, 한국어·영어 페이지 JSON과 고객 renderer는 바꾸지 않았다. 고객 화면은 아직 variant endpoint를 자동 선택하지 않는다.
+- 이 단계에서는 기존 `/api/website/media/{id}/content`, `WebsiteMediaAsset.deliveryUrl`, 한국어·영어 페이지 JSON과 고객 renderer를 바꾸지 않았다. 이후 [고객 반응형 미디어 작업](2026-09-13-customer-responsive-media.md)에서 응답 전용 READY variant map과 HERO·갤러리 `<picture>`·`srcset` 연결을 추가했다.
 
 ## 호환성, 배포와 롤백
 
@@ -77,6 +77,6 @@ cd services/api
 ## 미검증과 다음 작업
 
 - 실제 운영의 다중 인스턴스 rolling 배포와 장시간 CPU·메모리·큐 부하, 운영 알림, 실패·orphan storage audit은 검증하지 않았다.
-- 고객 `<picture>`·`srcset` 전환과 브라우저별 선택·fallback은 구현·검증하지 않았다.
+- 고객 `<picture>`·`srcset` 전환은 후속 [변경 기록](2026-09-13-customer-responsive-media.md)에서 구현·검증했다.
 - CDN과 S3 호환 객체 저장소, AVIF, crop·초점·관리자 지정 규격, variant 일괄 재생성은 후속 범위다.
 - 변경 경로 밖 전체 backend suite, 전체 관리자 E2E, 고객 예약·결제 회귀는 실행하지 않았다.

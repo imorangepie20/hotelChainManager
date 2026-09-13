@@ -3,6 +3,7 @@ import { ArrowLeft, ArrowRight, ChevronDown, ChevronUp } from 'lucide-react'
 import type { ContentPageBlock, ContentPageDocument, ContentPageGalleryItem } from '../lib/content-page'
 import type { BookingIntent } from '../lib/latest-availability-request'
 import { gallerySwipeOffset, galleryTransition, type GalleryTransitionDirection } from '../lib/gallery-swipe'
+import { ResponsiveCmsImage } from './responsive-cms-image'
 
 type ContentPageHeroProps = {
   page: ContentPageDocument
@@ -15,7 +16,7 @@ export function ContentPageHero({ page, headingId = 'content-page-title', previe
   if (!hero || hero.type !== 'HERO') return null
 
   return <section className="hero content-page-hero" aria-labelledby={headingId}>
-    <img src={hero.imageSrc} alt={hero.imageAlt} />
+    <ResponsiveCmsImage src={hero.imageSrc} imageVariants={hero.imageVariants} sizes="100vw" alt={hero.imageAlt} />
     <div className="hero-shade" />
     <div className="hero-copy">
       {page.contentKind && <p className="content-kind-label">{page.contentKind}</p>}
@@ -146,13 +147,13 @@ function ContentPageGallery({ block, index, locale }: { block: Extract<ContentPa
     <BlockHeading block={block} id={`gallery-${index}`} />
     <div className={`content-gallery-stage${outgoing ? ' is-transitioning' : ''}`} data-direction={outgoing?.direction} onPointerDown={startSwipe} onPointerUp={finishSwipe} onPointerCancel={cancelSwipe}>
       <div className="content-gallery-media">
-        {outgoing && <img className="content-gallery-image content-gallery-image-exit" src={outgoing.item.imageSrc} alt="" aria-hidden="true" onAnimationEnd={() => setOutgoing(current => current?.key === outgoing.key ? null : current)} />}
-        <img key={`${selected}-${motionKey}`} className="content-gallery-image content-gallery-image-enter" src={item.imageSrc} alt={item.imageAlt} />
+        {outgoing && <ResponsiveCmsImage className="content-gallery-image content-gallery-image-exit" src={outgoing.item.imageSrc} imageVariants={outgoing.item.imageVariants} sizes="(max-width: 760px) 90vw, 1180px" alt="" aria-hidden="true" onAnimationEnd={() => setOutgoing(current => current?.key === outgoing.key ? null : current)} />}
+        <ResponsiveCmsImage key={`${selected}-${motionKey}`} className="content-gallery-image content-gallery-image-enter" src={item.imageSrc} imageVariants={item.imageVariants} sizes="(max-width: 760px) 90vw, 1180px" alt={item.imageAlt} />
       </div>
       <div className="content-gallery-controls"><button type="button" aria-label={locale === 'en' ? 'Previous image' : '이전 이미지'} onClick={() => selectByOffset(-1)}><ArrowLeft size={20} /></button><span key={`position-${motionKey}`} className="content-gallery-position" aria-live="polite">{selected + 1} / {block.items.length}</span><button type="button" aria-label={locale === 'en' ? 'Next image' : '다음 이미지'} onClick={() => selectByOffset(1)}><ArrowRight size={20} /></button></div>
       {item.caption && <p key={`caption-${motionKey}`} className="content-gallery-caption">{item.caption}</p>}
     </div>
-    <div className="content-gallery-thumbnails" aria-label={locale === 'en' ? 'Select gallery image' : '갤러리 이미지 선택'}>{block.items.map((thumbnail, thumbnailIndex) => <button type="button" aria-label={locale === 'en' ? `View image ${thumbnailIndex + 1}` : `${thumbnailIndex + 1}번 이미지 보기`} aria-pressed={thumbnailIndex === selected} onClick={() => selectThumbnail(thumbnailIndex)} key={thumbnailIndex}><img src={thumbnail.imageSrc} alt="" /></button>)}</div>
+    <div className="content-gallery-thumbnails" aria-label={locale === 'en' ? 'Select gallery image' : '갤러리 이미지 선택'}>{block.items.map((thumbnail, thumbnailIndex) => <button type="button" aria-label={locale === 'en' ? `View image ${thumbnailIndex + 1}` : `${thumbnailIndex + 1}번 이미지 보기`} aria-pressed={thumbnailIndex === selected} onClick={() => selectThumbnail(thumbnailIndex)} key={thumbnailIndex}><ResponsiveCmsImage src={thumbnail.imageSrc} imageVariants={thumbnail.imageVariants} sizes="80px" alt="" /></button>)}</div>
   </section>
 }
 

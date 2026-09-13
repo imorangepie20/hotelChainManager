@@ -488,8 +488,9 @@ public class WebsitePageService {
                 + "and published_content <> '{}'::jsonb",
                 rs -> rs.next() ? row(rs) : null, path);
         if (page == null) throw new WebsitePageNotFoundException(path);
+        Map<String, Object> content = responseContent(page, page.publishedContent(), page.publishedVersion());
         return new PublishedWebsitePage(page.id(), page.pageType(), contentKind(page), page.publishedPath(), page.hotelId(),
-                responseContent(page, page.publishedContent(), page.publishedVersion()), pageConnections(page.id(), "PUBLISHED"));
+                content, pageConnections(page.id(), "PUBLISHED"), mediaReferences.publicVariants(page.pageType(), content));
     }
 
     PublishedWebsitePage previewDraft(UUID pageId, int draftVersion, String previewPath) {
@@ -498,8 +499,9 @@ public class WebsitePageService {
                 + "and draft_version = ? and draft_path = ?",
                 rs -> rs.next() ? row(rs) : null, pageId, draftVersion, previewPath);
         if (page == null) throw new WebsitePreviewUnavailableException();
+        Map<String, Object> content = responseContent(page, page.draftContent(), page.draftVersion());
         return new PublishedWebsitePage(page.id(), page.pageType(), contentKind(page), page.draftPath(), page.hotelId(),
-                responseContent(page, page.draftContent(), page.draftVersion()), pageConnections(page.id(), "DRAFT"));
+                content, pageConnections(page.id(), "DRAFT"), mediaReferences.publicVariants(page.pageType(), content));
     }
 
     public List<WebsiteContentCollectionItem> publishedCollection(String hotelSlug, ContentKind kind) {

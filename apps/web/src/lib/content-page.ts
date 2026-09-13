@@ -3,9 +3,10 @@ export type ContentKind = 'ROOM' | 'DINING' | 'FACILITY' | 'EXPERIENCE' | 'PROMO
 export type ContentPageConnections = { roomTypeIds: string[]; targetHotelIds: string[]; relatedPages: ContentPageRelation[] }
 export type ContentPageRelation = { targetPageId: string; relationType: 'RELATED' | 'MANUAL_CARD'; displayOrder: number }
 type WithBlockId = { blockId?: string; eyebrow?: string; description?: string; cta?: ContentPageCta }
+export type ResponsiveMediaVariant = { targetWidth: 640 | 1280; deliveryUrl: string; mimeType: 'image/webp' }
 
 export type ContentPageBlock =
-  | (WithBlockId & { type: 'HERO'; eyebrow?: string; title: string; description?: string; imageAssetId: string; imageSrc: string; imageAlt: string; cta?: ContentPageCta })
+  | (WithBlockId & { type: 'HERO'; eyebrow?: string; title: string; description?: string; imageAssetId: string; imageSrc: string; imageAlt: string; imageVariants?: ResponsiveMediaVariant[]; cta?: ContentPageCta })
   | (WithBlockId & { type: 'TEXT'; eyebrow?: string; title: string; paragraphs: string[] })
   | (WithBlockId & { type: 'CTA'; eyebrow?: string; title: string; description?: string; cta: ContentPageCta })
   | (WithBlockId & { type: 'IMAGE_GALLERY'; eyebrow?: string; title: string; description?: string; items: ContentPageGalleryItem[] })
@@ -22,7 +23,7 @@ export type ContentPageBlock =
 
 export type ContentPageDocument = { seo: ContentPageSeo; blocks: ContentPageBlock[]; contentKind?: ContentKind; hotelId?: string | null; connections?: ContentPageConnections }
 export type ContentPageCta = { label: string; href: string }
-export type ContentPageGalleryItem = { imageAssetId: string; imageSrc: string; imageAlt: string; caption?: string }
+export type ContentPageGalleryItem = { imageAssetId: string; imageSrc: string; imageAlt: string; imageVariants?: ResponsiveMediaVariant[]; caption?: string }
 export type ContentPageFeature = { title: string; description: string }
 export type ContentPageSpecification = { label: string; value: string }
 export type ContentPageAccordionItem = { title: string; content: string }
@@ -33,6 +34,7 @@ const localHref = /^(?:\/|\/[a-z0-9]+(?:-[a-z0-9]+)*(?:\/[a-z0-9]+(?:-[a-z0-9]+)
 const localImage = /^\/images\/[A-Za-z0-9][A-Za-z0-9._/-]*$/
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const uploadedMediaDelivery = /^\/api\/website\/media\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/content$/i
+const uploadedMediaVariant = /^\/api\/website\/media\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/variants\/(640|1280)\.webp$/i
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -77,6 +79,25 @@ export function safeMediaDeliveryPath(assetIdValue: unknown, deliveryPathValue: 
   const uploadedMatch = deliveryPath.match(uploadedMediaDelivery)
   if (!uploadedMatch || (assetId && (!uuid.test(assetId) || uploadedMatch[1]?.toLowerCase() !== assetId.toLowerCase()))) return null
   return deliveryPath
+}
+
+export function safeMediaVariants(catalogValue: unknown, assetIdValue: unknown): ResponsiveMediaVariant[] {
+  const assetId = text(assetIdValue, 36)
+  if (!assetId || !uuid.test(assetId) || !isRecord(catalogValue)) return []
+  const rawVariants = catalogValue[assetId]
+  if (!Array.isArray(rawVariants)) return []
+  const widths = new Set<number>()
+  return rawVariants.flatMap<ResponsiveMediaVariant>(value => {
+    if (!isRecord(value) || !hasOnlyFields(value, ['targetWidth', 'deliveryUrl', 'mimeType'])) return []
+    const targetWidth = value.targetWidth
+    const deliveryUrl = text(value.deliveryUrl)
+    if ((targetWidth !== 640 && targetWidth !== 1280) || !deliveryUrl) return []
+    const match = deliveryUrl?.match(uploadedMediaVariant)
+    if (value.mimeType !== 'image/webp' || !match
+      || match[1]?.toLowerCase() !== assetId.toLowerCase() || Number(match[2]) !== targetWidth || widths.has(targetWidth)) return []
+    widths.add(targetWidth)
+    return [{ targetWidth, deliveryUrl, mimeType: 'image/webp' as const }]
+  }).sort((left, right) => left.targetWidth - right.targetWidth)
 }
 
 const allowedByKind: Record<ContentKind, readonly ContentPageBlock['type'][]> = {
@@ -264,7 +285,19 @@ function legacyDocument(value: Record<string, unknown>, typed = false): ContentP
 }
 
 export function parseContentPage(value: unknown, locale: 'ko' | 'en' = 'ko'): ContentPageDocument | null {
-  const parsed = parseDocument(value)
+  const document = parseDocument(value)
+  const catalog = isRecord(value) ? value.mediaVariants : undefined
+  const parsed = document ? { ...document, blocks: document.blocks.map(block => {
+    if (block.type === 'HERO') {
+      const imageVariants = safeMediaVariants(catalog, block.imageAssetId)
+      return imageVariants.length > 0 ? { ...block, imageVariants } : block
+    }
+    if (block.type !== 'IMAGE_GALLERY') return block
+    return { ...block, items: block.items.map(item => {
+      const imageVariants = safeMediaVariants(catalog, item.imageAssetId)
+      return imageVariants.length > 0 ? { ...item, imageVariants } : item
+    }) }
+  }) } : null
   if (!parsed || locale === 'ko') return parsed
   return { ...parsed, blocks: parsed.blocks.map(block => {
     if (!block.cta) return block

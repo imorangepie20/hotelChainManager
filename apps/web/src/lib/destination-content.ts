@@ -1,7 +1,8 @@
-import { safeMediaDeliveryPath } from './content-page.ts'
+import { safeMediaDeliveryPath, safeMediaVariants, type ResponsiveMediaVariant } from './content-page.ts'
 
 export type DestinationContent = {
   heroImage: string
+  heroVariants?: ResponsiveMediaVariant[]
   heroAlt: string
   eyebrow: string
   title: string
@@ -80,9 +81,11 @@ export function destinationContentFromPublished(region: string, published: unkno
     isRecord(item) && isText(item.title) && isText(item.detail) && isText(item.bookingPeriod) && isText(item.stayPeriod),
   ) ? published.offers as DestinationContent['offers'] : fallback.offers
   const heroImage = safeMediaDeliveryPath(published.heroAssetId, published.heroImage)
+  const heroVariants = heroImage ? safeMediaVariants(published.mediaVariants, published.heroAssetId) : []
 
   return {
     heroImage: heroImage ?? fallback.heroImage,
+    ...(heroVariants.length > 0 ? { heroVariants } : {}),
     heroAlt: heroImage && isText(published.heroAlt) ? published.heroAlt : fallback.heroAlt,
     eyebrow: isText(published.eyebrow) ? published.eyebrow : fallback.eyebrow,
     title: published.title,

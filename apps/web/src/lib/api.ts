@@ -27,6 +27,7 @@ export type PublishedWebsitePage = {
   hotelId: string | null
   content: Record<string, unknown>
   connections: { roomTypeIds: string[]; targetHotelIds: string[]; relatedPages: { targetPageId: string; relationType: 'RELATED' | 'MANUAL_CARD'; displayOrder: number }[] }
+  mediaVariants?: Record<string, { targetWidth: 640 | 1280; deliveryUrl: string; mimeType: 'image/webp' }[]>
 }
 
 export class ApiFailure extends Error {

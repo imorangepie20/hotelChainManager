@@ -23,9 +23,9 @@
 
 - V25는 활성 업로드 PNG/JPEG에 원본 폭 이하의 640px·1280px WebP 작업을 멱등 enqueue/backfill하고, V26은 READY 메타데이터 제약을 additive하게 보강하며, V27은 새 worker claim을 attempt와 함께 식별하는 nullable `claim_token`을 추가한다. V25 파일은 최초 적용 checksum을 유지한다.
 - 전용 단일 스레드의 2초 worker는 예약 만료 scheduler와 분리하며 `FOR UPDATE SKIP LOCKED`, 5분 lease, 30초·2분 backoff와 최대 3회 시도를 사용한다. 완료 파일은 claim별 고유 immutable key로 발행하고 덮어쓰지 않으며 rollback은 자기 파일만 정리하고 `STATUS_UNKNOWN`은 보존한다. 만료된 PROCESSING attempt 3은 `SKIP LOCKED LIMIT 1`로 한 건씩 terminal FAILED로 정리해 다른 작업 선점을 막지 않는다.
-- 공개 READY variant는 `image/webp`와 1년 immutable cache로 전달한다. 관리자 미디어 선택기는 상태·규격·용량·실패와 폭별 재시도를 표시하고 ACTIVE 자산의 PENDING/PROCESSING·FAILED 1·2회에서 polling한다. polling/재시도 응답은 편집 메타데이터·버전을 유지하고 이전 API의 누락 variants도 정규화한다. 원본 URL·한국어/영어 페이지 JSON과 고객 renderer는 유지했다.
+- 공개 READY variant는 `image/webp`와 1년 immutable cache로 전달한다. 관리자 미디어 선택기는 상태·규격·용량·실패와 폭별 재시도를 표시하고 ACTIVE 자산의 PENDING/PROCESSING·FAILED 1·2회에서 polling한다. polling/재시도 응답은 편집 메타데이터·버전을 유지하고 이전 API의 누락 variants도 정규화한다. 원본 URL·한국어/영어 페이지 JSON은 유지하며, 공개·저장 초안 미리보기 응답은 참조 중인 READY variant를 응답 전용 map으로 제공한다. 고객 HERO와 이미지 갤러리는 이를 검증한 뒤 `<picture>`·`srcset`으로 사용하고 원본을 fallback으로 둔다.
 - 서버 변경 범위 92건, 관리자 variant 1건과 영문 제목 미디어 회귀 18건, 관리자 TypeScript, 고객 parser 2개와 production build가 통과했다. 별도 4082 API·`db-test` 내 일회성 DB·전용 storage에서 V25→V26→V27, health `UP`, 실제 업로드·640/1280 READY, 640 WebP HTTP 200·정확한 캐시 헤더·RIFF/WEBP·원본 checksum 보존을 확인하고 컨테이너·DB·volume을 제거했다. 개발 4080 컨테이너와 개발 DB는 변경하지 않았다.
-- rolling 배포에서는 이전 worker를 먼저 drain해야 하며, 실제 운영 다중 인스턴스 장기 부하·storage audit, 고객 `<picture>`·`srcset`, CDN·객체 저장소는 후속이다. 상세 결과는 [변경 기록](../changes/2026-09-13-async-media-variants.md)을 따른다.
+- rolling 배포에서는 이전 worker를 먼저 drain해야 하며, 실제 운영 다중 인스턴스 장기 부하·storage audit, CDN·객체 저장소는 후속이다. 고객 연결 결과는 [반응형 미디어 변경 기록](../changes/2026-09-13-customer-responsive-media.md), worker 상세는 [비동기 variant 변경 기록](../changes/2026-09-13-async-media-variants.md)을 따른다.
 - 최종 리뷰 보완 검증은 서버 99건, 관리자 미디어 E2E 27건·API 경계 7건과 TypeScript를 통과했다. 실제 PostgreSQL terminal 잠금 회귀와 인코더 차단 중 예약 만료 스케줄 실행을 포함한다. 개발 API/DB mutation과 서버 재시작은 수행하지 않았다.
 
 
@@ -148,7 +148,7 @@
 
 
 
-- 고객 웹 CMS는 지점 랜딩의 전체 필수 스키마, 경험·오퍼 카드 순서 변경, 고객 화면 형태의 미리보기, 선택 SEO 제목·설명 편집을 지원한다. 지점 랜딩의 페이지·경로·메뉴·콘텐츠 발행 기준은 `website_page`이며 `/stays/sokcho`, `/stays/seoraksan`, `/stays/jeju`를 고객 웹 직접 경로와 공개 메뉴에 연결했다. V10~V24에서 일반·홈 페이지, 미디어 카탈로그, 페이지 수명주기·이력·미리보기·부모 이동·redirect, 한국어·영어 독립 발행과 영어 검토 역할, 저장 초안 URL 미리보기를 단계적으로 구현했다. 보관 업로드 영구 삭제, 현재 위치 파일 교체, 활성 한국어·영어 초안 사용 위치 일괄 교체와 V25~V27 비동기 WebP variant도 구현했다. 기존 호텔 콘텐츠 endpoint와 원본 미디어 URL은 유지한다. 고객 `<picture>`·`srcset`, CDN·객체 저장소, 언어별 임의 슬러그와 예약 발행은 후속 범위다.
+- 고객 웹 CMS는 지점 랜딩의 전체 필수 스키마, 경험·오퍼 카드 순서 변경, 고객 화면 형태의 미리보기, 선택 SEO 제목·설명 편집을 지원한다. 지점 랜딩의 페이지·경로·메뉴·콘텐츠 발행 기준은 `website_page`이며 `/stays/sokcho`, `/stays/seoraksan`, `/stays/jeju`를 고객 웹 직접 경로와 공개 메뉴에 연결했다. V10~V24에서 일반·홈 페이지, 미디어 카탈로그, 페이지 수명주기·이력·미리보기·부모 이동·redirect, 한국어·영어 독립 발행과 영어 검토 역할, 저장 초안 URL 미리보기를 단계적으로 구현했다. 보관 업로드 영구 삭제, 현재 위치 파일 교체, 활성 한국어·영어 초안 사용 위치 일괄 교체, V25~V27 비동기 WebP variant와 고객 HERO·갤러리 반응형 선택도 구현했다. 기존 호텔 콘텐츠 endpoint와 원본 미디어 URL은 유지한다. CDN·객체 저장소, 언어별 임의 슬러그와 예약 발행은 후속 범위다.
 
 
 
@@ -235,7 +235,7 @@
 
 
 
-1. CMS variant를 고객 `<picture>`·`srcset`에 연결하고 CDN·객체 저장소와 storage audit을 단계적으로 구현한다. 저장 초안 URL 미리보기는 운영 HTTPS 설정을 배포 환경에서 확인한다.
+1. CMS 미디어를 CDN·객체 저장소로 이관하고 storage audit을 단계적으로 구현한다. 저장 초안 URL 미리보기는 운영 HTTPS 설정을 배포 환경에서 확인한다.
 
 
 
@@ -379,7 +379,7 @@
 
 
 
-- V12는 이미지 파일을 고객 CMS 문서의 자유 경로가 아니라 카탈로그 자산 UUID로 관리한다. 본사만 업로드·목록·사용 위치를 조회하고, 서버가 실제 PNG/JPEG 형식과 한도를 검사한 뒤 UUID 공개 경로를 문서에 넣는다. V13은 본사 자산명·기본 alt의 버전 기반 저장, 참조 없는 자산만 가능한 보관·복원, 보관 업로드의 공개 전달 차단과 재검증 캐시를 추가했다. V14는 일반 페이지를 보관해 공개를 중단하고 초안으로 복원하는 상태 전환을 추가했다. Docker named volume은 파일을 이미지 재생성 뒤에도 유지한다. 영구 삭제·현재 위치 파일 교체·활성 초안 사용 위치 일괄 교체와 V25~V27 비동기 WebP variant까지 구현했으며, 고객 선택 연결·CDN·객체 저장소는 다음 단계다.
+- V12는 이미지 파일을 고객 CMS 문서의 자유 경로가 아니라 카탈로그 자산 UUID로 관리한다. 본사만 업로드·목록·사용 위치를 조회하고, 서버가 실제 PNG/JPEG 형식과 한도를 검사한 뒤 UUID 공개 경로를 문서에 넣는다. V13은 본사 자산명·기본 alt의 버전 기반 저장, 참조 없는 자산만 가능한 보관·복원, 보관 업로드의 공개 전달 차단과 재검증 캐시를 추가했다. V14는 일반 페이지를 보관해 공개를 중단하고 초안으로 복원하는 상태 전환을 추가했다. Docker named volume은 파일을 이미지 재생성 뒤에도 유지한다. 영구 삭제·현재 위치 파일 교체·활성 초안 사용 위치 일괄 교체, V25~V27 비동기 WebP variant와 고객 HERO·갤러리 선택 연결까지 구현했으며, CDN·객체 저장소가 다음 단계다.
 
 - V16 통합 리조트 콘텐츠 모델은 콘텐츠 종류별 블록과 초안·발행 연결(객실 유형·대상 지점·관련 페이지)을 추가했다. `WebsitePageIntegrationTest` 22건, 고객 파서·예약 의도·갤러리 검사와 production build, 관리자 Chromium E2E 4건·TypeScript 검사를 통과했다. API 재빌드 뒤 health `UP` 및 기존 `/brand/story` 공개 resolve를 읽기 전용으로 확인했으며, 실제 사용자 페이지·미디어에 저장·발행·수명주기 요청을 보내지 않았다. 상세 범위와 미구현 항목은 [변경 기록](../changes/2026-09-12-unified-resort-content-model.md)을 따른다.
 
