@@ -3,8 +3,6 @@ package team.hotelchain.webcontent;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -17,7 +15,6 @@ import javax.imageio.ImageReader;
 import javax.imageio.stream.ImageInputStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,6 +25,7 @@ import team.hotelchain.staff.StaffAccessService;
 import team.hotelchain.staff.StaffPrincipal;
 import team.hotelchain.webcontent.storage.WebsiteMediaStorageException;
 import team.hotelchain.webcontent.storage.WebsiteMediaStorageGateway;
+import team.hotelchain.webcontent.storage.WebsiteMediaQuarantinedObject;
 
 @Service
 public class WebsiteMediaService {
@@ -41,18 +39,13 @@ public class WebsiteMediaService {
     private final StaffAccessService access;
     private final WebsiteMediaVariantService variants;
     private final WebsiteMediaStorageGateway storage;
-    private final Path storageDirectory;
 
     public WebsiteMediaService(JdbcTemplate jdbc, StaffAccessService access, WebsiteMediaVariantService variants,
-            WebsiteMediaStorageGateway storage,
-            @Value("${website.media.storage-dir:}") String configuredStorageDirectory) {
+            WebsiteMediaStorageGateway storage) {
         this.jdbc = jdbc;
         this.access = access;
         this.variants = variants;
         this.storage = storage;
-        this.storageDirectory = configuredStorageDirectory == null || configuredStorageDirectory.isBlank()
-                ? Path.of(System.getProperty("java.io.tmpdir"), "hotel-chain-media")
-                : Path.of(configuredStorageDirectory);
     }
 
     @Transactional(readOnly = true)
@@ -168,9 +161,9 @@ public class WebsiteMediaService {
         List<String> storageKeys = new ArrayList<>();
         storageKeys.add(current.storageKey());
         storageKeys.addAll(variants.storageKeys(mediaId));
-        List<QuarantinedFile> files = storageKeys.stream().map(this::quarantinedFile).toList();
-        registerFileCompletion(files);
-        files.forEach(this::moveToQuarantine);
+        UUID transactionId = UUID.randomUUID();
+        List<WebsiteMediaQuarantinedObject> objects = storage.quarantineEverywhere(storageKeys, transactionId);
+        registerStorageCompletion(mediaId, transactionId, objects);
 
         int deleted = jdbc.update("delete from website_media_asset where id = ? and status = 'ARCHIVED' and version = ?",
                 mediaId, request.expectedVersion());
@@ -345,54 +338,25 @@ public class WebsiteMediaService {
         return archivedAt == null ? null : archivedAt.plusDays(PERMANENT_DELETE_GRACE_DAYS);
     }
 
-    private QuarantinedFile quarantinedFile(String storageKey) {
-        Path source = storedFile(storageKey);
-        Path root = storageDirectory.toAbsolutePath().normalize();
-        Path trash = root.resolve(".trash").normalize();
-        Path quarantine = trash.resolve(UUID.randomUUID() + ".delete").normalize();
-        if (!quarantine.startsWith(trash)) throw new IllegalStateException("미디어 저장 경로가 올바르지 않습니다.");
-        return new QuarantinedFile(source, quarantine);
-    }
-
-    private Path storedFile(String storageKey) {
-        Path root = storageDirectory.toAbsolutePath().normalize();
-        Path source = storageKey == null ? root : root.resolve(storageKey).normalize();
-        if (storageKey == null || !source.startsWith(root) || !Files.isRegularFile(source)) {
-            throw new IllegalStateException("영구 삭제할 미디어 파일을 찾을 수 없습니다.");
-        }
-        return source;
-    }
-
-    private void moveToQuarantine(QuarantinedFile file) {
-        try {
-            Files.createDirectories(file.quarantine().getParent());
-            Files.move(file.source(), file.quarantine());
-        } catch (IOException exception) {
-            throw new IllegalStateException("미디어 파일을 삭제 준비 상태로 옮기지 못했습니다.", exception);
-        }
-    }
-
-    private void registerFileCompletion(List<QuarantinedFile> files) {
+    private void registerStorageCompletion(
+            UUID mediaId,
+            UUID transactionId,
+            List<WebsiteMediaQuarantinedObject> objects) {
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCompletion(int status) {
-                files.forEach(file -> restoreOrDelete(status, file));
+                try {
+                    if (status == STATUS_COMMITTED) storage.purgeEverywhere(objects);
+                    else if (status == STATUS_ROLLED_BACK) storage.restoreEverywhere(objects);
+                } catch (RuntimeException exception) {
+                    log.error(
+                            "미디어 저장소 삭제 상태를 정리하지 못했습니다. mediaId={}, transactionId={}, storageKeys={}, transactionStatus={}",
+                            mediaId, transactionId,
+                            objects.stream().map(WebsiteMediaQuarantinedObject::sourceKey).toList(),
+                            status, exception);
+                }
             }
         });
-    }
-
-    private void restoreOrDelete(int status, QuarantinedFile file) {
-        try {
-            if (status == TransactionSynchronization.STATUS_COMMITTED) {
-                Files.deleteIfExists(file.quarantine());
-            } else if (Files.exists(file.quarantine())) {
-                Files.createDirectories(file.source().getParent());
-                Files.move(file.quarantine(), file.source());
-            }
-        } catch (IOException exception) {
-            log.error("미디어 파일 삭제 상태를 정리하지 못했습니다. source={}, quarantine={}, transactionStatus={}",
-                    file.source(), file.quarantine(), status, exception);
-        }
     }
 
     private ImageInfo inspect(byte[] bytes) {
@@ -446,6 +410,4 @@ public class WebsiteMediaService {
     private record ImageInfo(String mimeType, int width, int height) {
     }
 
-    private record QuarantinedFile(Path source, Path quarantine) {
-    }
 }

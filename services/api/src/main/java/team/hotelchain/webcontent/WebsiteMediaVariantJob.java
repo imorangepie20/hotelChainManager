@@ -4,10 +4,13 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import team.hotelchain.webcontent.storage.WebsiteMediaObjectNotFoundException;
+import team.hotelchain.webcontent.storage.WebsiteMediaStorageGateway;
 
 @Component
 @ConditionalOnProperty(
@@ -17,17 +20,28 @@ import org.springframework.stereotype.Component;
 public final class WebsiteMediaVariantJob {
     private final WebsiteMediaVariantService variants;
     private final WebsiteMediaVariantEncoder encoder;
-    private final Path storageDirectory;
+    private final WebsiteMediaStorageGateway storage;
+    private final Path workDirectory;
 
+    @Autowired
     public WebsiteMediaVariantJob(
             WebsiteMediaVariantService variants,
             WebsiteMediaVariantEncoder encoder,
-            @Value("${website.media.storage-dir:}") String configuredStorageDirectory) {
+            WebsiteMediaStorageGateway storage,
+            @Value("${website.media.work-dir:}") String configuredWorkDirectory) {
         this.variants = variants;
         this.encoder = encoder;
-        this.storageDirectory = configuredStorageDirectory == null || configuredStorageDirectory.isBlank()
-                ? Path.of(System.getProperty("java.io.tmpdir"), "hotel-chain-media")
-                : Path.of(configuredStorageDirectory);
+        this.storage = storage;
+        this.workDirectory = configuredWorkDirectory == null || configuredWorkDirectory.isBlank()
+                ? Path.of(System.getProperty("java.io.tmpdir"), "hotel-chain-media-work")
+                : Path.of(configuredWorkDirectory);
+    }
+
+    WebsiteMediaVariantJob(
+            WebsiteMediaVariantService variants,
+            WebsiteMediaVariantEncoder encoder,
+            WebsiteMediaStorageGateway storage) {
+        this(variants, encoder, storage, "");
     }
 
     @Scheduled(fixedDelayString = "${website.media.variant-scan-delay:2s}", scheduler = "websiteMediaVariantScheduler")
@@ -40,47 +54,40 @@ public final class WebsiteMediaVariantJob {
         if (claimed.isEmpty()) return false;
 
         WebsiteMediaVariantService.VariantClaim claim = claimed.orElseThrow();
-        Path root = storageDirectory.toAbsolutePath().normalize();
         String finalStorageKey = claim.assetId() + "-" + claim.targetWidth()
                 + "-" + claim.variantId() + "-" + claim.attemptCount()
                 + "-" + UUID.randomUUID() + ".webp";
-        Path source = root.resolve(claim.sourceStorageKey()).normalize();
-        Path target = root.resolve(finalStorageKey).normalize();
-        Path temporaryTarget = root.resolve(finalStorageKey + ".tmp").normalize();
+        Path source = null;
+        Path temporaryTarget = null;
         try {
-            requireInsideRoot(root, source);
-            requireInsideRoot(root, target);
-            requireInsideRoot(root, temporaryTarget);
-            if (!Files.isRegularFile(source)) throw new IOException("원본 미디어 파일을 찾을 수 없습니다.");
-            Files.createDirectories(root);
+            Path work = workDirectory.toAbsolutePath().normalize();
+            Files.createDirectories(work);
+            source = storage.materialize(claim.sourceStorageKey(), work);
+            temporaryTarget = work.resolve(UUID.randomUUID() + ".webp.tmp");
             WebsiteMediaVariantEncoder.Result result = encoder.encode(source, temporaryTarget, claim.targetWidth());
             boolean completed = variants.completeReady(
                     claim.variantId(), claim.attemptCount(), claim.claimToken(),
-                    finalStorageKey, result, temporaryTarget, target);
-            if (!completed) deleteTemporaryFile(temporaryTarget);
+                    finalStorageKey, result, Files.readAllBytes(temporaryTarget));
+            if (!completed) return true;
         } catch (Exception exception) {
-            deleteTemporaryFile(temporaryTarget);
             variants.completeFailed(
                     claim.variantId(), claim.attemptCount(), claim.claimToken(), failureSummary(exception));
+        } finally {
+            deleteTemporaryFile(temporaryTarget);
+            deleteTemporaryFile(source);
         }
         return true;
     }
 
-    private void requireInsideRoot(Path root, Path path) throws IOException {
-        if (!path.startsWith(root)) throw new IOException("미디어 저장 경로가 올바르지 않습니다.");
-    }
-
     private String failureSummary(Exception exception) {
-        if (exception instanceof IOException && "원본 미디어 파일을 찾을 수 없습니다.".equals(exception.getMessage())) {
+        if (exception instanceof WebsiteMediaObjectNotFoundException) {
             return "원본 미디어 파일을 찾을 수 없습니다.";
-        }
-        if (exception instanceof IOException && "미디어 저장 경로가 올바르지 않습니다.".equals(exception.getMessage())) {
-            return "미디어 저장 경로가 올바르지 않습니다.";
         }
         return "미디어 variant 생성에 실패했습니다.";
     }
 
     private void deleteTemporaryFile(Path temporaryTarget) {
+        if (temporaryTarget == null) return;
         try {
             Files.deleteIfExists(temporaryTarget);
         } catch (IOException ignored) {

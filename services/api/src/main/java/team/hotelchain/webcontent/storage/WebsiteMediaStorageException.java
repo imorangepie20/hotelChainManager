@@ -1,6 +1,6 @@
 package team.hotelchain.webcontent.storage;
 
-public class WebsiteMediaStorageException extends RuntimeException {
+public class WebsiteMediaStorageException extends IllegalStateException {
     public WebsiteMediaStorageException(String message) {
         super(message);
     }

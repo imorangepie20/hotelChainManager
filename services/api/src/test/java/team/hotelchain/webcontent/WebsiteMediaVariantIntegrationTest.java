@@ -60,6 +60,7 @@ import org.springframework.web.context.WebApplicationContext;
 import org.springframework.web.multipart.MultipartFile;
 import team.hotelchain.staff.StaffAccessDeniedException;
 import team.hotelchain.staff.StaffAccessService;
+import team.hotelchain.webcontent.storage.WebsiteMediaStorageGateway;
 
 @SpringBootTest(properties = "website.media.variant-job-enabled=false")
 @Transactional
@@ -74,6 +75,7 @@ class WebsiteMediaVariantIntegrationTest {
     @org.springframework.beans.factory.annotation.Autowired WebsiteMediaService media;
     @org.springframework.beans.factory.annotation.Autowired WebsiteMediaVariantService variants;
     @org.springframework.beans.factory.annotation.Autowired WebsiteMediaVariantEncoder encoder;
+    @org.springframework.beans.factory.annotation.Autowired WebsiteMediaStorageGateway storageGateway;
     @org.springframework.beans.factory.annotation.Autowired WebApplicationContext context;
     @org.springframework.beans.factory.annotation.Autowired TestClock clock;
     @org.springframework.beans.factory.annotation.Autowired TransactionTemplate transactions;
@@ -95,7 +97,7 @@ class WebsiteMediaVariantIntegrationTest {
                 values (?, ?, ?, ?, 'BRANCH_STAFF', ?)
                 """, UUID.randomUUID(), "variant-branch@example.com", "Variant 지점 직원",
                 passwordEncoder.encode("branch-password"), BRANCH_HOTEL);
-        job = new WebsiteMediaVariantJob(variants, encoder, storageDirectory().toString());
+        job = new WebsiteMediaVariantJob(variants, encoder, storageGateway);
     }
 
     @Test
@@ -374,7 +376,7 @@ class WebsiteMediaVariantIntegrationTest {
         try {
             assertThat(variants.completeReady(
                     oldClaim.variantId(), oldClaim.attemptCount(), oldClaim.claimToken(),
-                    oldStorageKey, result, temporaryTarget, finalTarget)).isFalse();
+                    oldStorageKey, result, Files.readAllBytes(temporaryTarget))).isFalse();
             assertThat(temporaryTarget).exists();
             assertThat(finalTarget).doesNotExist();
             assertThat(claimState(asset.id())).isEqualTo(
@@ -647,7 +649,7 @@ class WebsiteMediaVariantIntegrationTest {
             try {
                 WebsiteMediaAsset asset = uploadImage(640, 360);
                 WebsiteMediaVariantJob staleJob =
-                        new WebsiteMediaVariantJob(variants, blockingEncoder, storageDirectory().toString());
+                        new WebsiteMediaVariantJob(variants, blockingEncoder, storageGateway);
                 Future<Boolean> staleResult = executor.submit(staleJob::processNext);
                 assertThat(staleEncoded.await(10, TimeUnit.SECONDS)).isTrue();
 
@@ -690,9 +692,10 @@ class WebsiteMediaVariantIntegrationTest {
             Path oldFinalTarget = storageDirectory().resolve(legacySharedKey);
             Files.write(oldTemporaryTarget, "old-worker-publication".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
-            WebsiteMediaVariantService.ReadyFilePublication oldPublication =
-                    new WebsiteMediaVariantService.ReadyFilePublication(
-                            claimA.variantId(), oldTemporaryTarget, oldFinalTarget);
+            WebsiteMediaVariantService.ReadyObjectPublication oldPublication =
+                    new WebsiteMediaVariantService.ReadyObjectPublication(
+                            claimA.variantId(), storageGateway, legacySharedKey, null,
+                            Files.readAllBytes(oldTemporaryTarget), "image/webp");
             oldPublication.publish();
 
             jdbc.update("""
@@ -727,9 +730,10 @@ class WebsiteMediaVariantIntegrationTest {
             byte[] encodedBytes = "encoded-webp".getBytes(java.nio.charset.StandardCharsets.UTF_8);
             Files.write(temporaryTarget, encodedBytes);
 
-            WebsiteMediaVariantService.ReadyFilePublication publication =
-                    new WebsiteMediaVariantService.ReadyFilePublication(
-                            UUID.randomUUID(), temporaryTarget, uniqueFinalTarget);
+            WebsiteMediaVariantService.ReadyObjectPublication publication =
+                    new WebsiteMediaVariantService.ReadyObjectPublication(
+                            UUID.randomUUID(), storageGateway, uniqueFinalTarget.getFileName().toString(), null,
+                            encodedBytes, "image/webp");
             publication.publish();
             publication.afterCompletion(TransactionSynchronization.STATUS_UNKNOWN);
 

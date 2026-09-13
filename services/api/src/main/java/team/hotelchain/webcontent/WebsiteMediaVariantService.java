@@ -1,11 +1,6 @@
 package team.hotelchain.webcontent;
 
 import java.io.IOException;
-import java.nio.file.AtomicMoveNotSupportedException;
-import java.nio.file.FileAlreadyExistsException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.OffsetDateTime;
@@ -20,13 +15,14 @@ import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import team.hotelchain.staff.StaffAccessService;
+import team.hotelchain.webcontent.storage.WebsiteMediaStorageException;
+import team.hotelchain.webcontent.storage.WebsiteMediaStorageGateway;
 
 @Service
 public class WebsiteMediaVariantService {
@@ -42,19 +38,17 @@ public class WebsiteMediaVariantService {
     private final JdbcTemplate jdbc;
     private final Clock clock;
     private final StaffAccessService access;
-    private final Path storageDirectory;
+    private final WebsiteMediaStorageGateway storage;
 
     public WebsiteMediaVariantService(
             JdbcTemplate jdbc,
             Clock clock,
             StaffAccessService access,
-            @Value("${website.media.storage-dir:}") String configuredStorageDirectory) {
+            WebsiteMediaStorageGateway storage) {
         this.jdbc = jdbc;
         this.clock = clock;
         this.access = access;
-        this.storageDirectory = configuredStorageDirectory == null || configuredStorageDirectory.isBlank()
-                ? Path.of(System.getProperty("java.io.tmpdir"), "hotel-chain-media")
-                : Path.of(configuredStorageDirectory);
+        this.storage = storage;
     }
 
     @Transactional
@@ -134,14 +128,9 @@ public class WebsiteMediaVariantService {
                 """, rs -> rs.next() ? rs.getString("storage_key") : null, mediaId, targetWidth);
         if (storageKey == null) throw new WebsiteMediaNotFoundException(mediaId);
 
-        Path root = storageDirectory.toAbsolutePath().normalize();
-        Path source = root.resolve(storageKey).normalize();
-        if (!source.startsWith(root) || !Files.isRegularFile(source)) {
-            throw new WebsiteMediaNotFoundException(mediaId);
-        }
         try {
-            return new WebsiteMediaContent(Files.readAllBytes(source), "image/webp");
-        } catch (IOException exception) {
+            return new WebsiteMediaContent(storage.get(storageKey), "image/webp");
+        } catch (WebsiteMediaStorageException exception) {
             throw new WebsiteMediaNotFoundException(mediaId);
         }
     }
@@ -251,15 +240,14 @@ public class WebsiteMediaVariantService {
         return Optional.of(claim);
     }
 
-    @Transactional(rollbackFor = IOException.class)
+    @Transactional
     public boolean completeReady(
             UUID variantId,
             int attemptCount,
             UUID claimToken,
             String storageKey,
             WebsiteMediaVariantEncoder.Result result,
-            Path temporaryTarget,
-            Path finalTarget) throws IOException {
+            byte[] encodedBytes) {
         List<VariantState> states = jdbc.query("""
                 select status, attempt_count, claim_token, storage_key
                   from website_media_variant
@@ -276,9 +264,11 @@ public class WebsiteMediaVariantService {
             return false;
         }
 
-        Path previousTarget = previousTarget(finalTarget, states.getFirst().storageKey());
-        ReadyFilePublication publication = new ReadyFilePublication(
-                variantId, temporaryTarget, finalTarget, previousTarget);
+        String previousStorageKey = states.getFirst().storageKey();
+        ReadyObjectPublication publication = new ReadyObjectPublication(
+                variantId, storage, storageKey,
+                storageKey.equals(previousStorageKey) ? null : previousStorageKey,
+                encodedBytes, result.mimeType());
         TransactionSynchronizationManager.registerSynchronization(publication);
         publication.publish();
         int updated = jdbc.update("""
@@ -332,13 +322,6 @@ public class WebsiteMediaVariantService {
             UUID claimToken) {
     }
 
-    private Path previousTarget(Path finalTarget, String storageKey) {
-        if (storageKey == null || finalTarget.getParent() == null) return null;
-        Path root = finalTarget.getParent().toAbsolutePath().normalize();
-        Path candidate = root.resolve(storageKey).toAbsolutePath().normalize();
-        return candidate.startsWith(root) && !candidate.equals(finalTarget) ? candidate : null;
-    }
-
     private record VariantState(String status, int attemptCount, UUID claimToken, String storageKey) {
     }
 
@@ -351,31 +334,32 @@ public class WebsiteMediaVariantService {
     private record VariantStorage(String status, String storageKey) {
     }
 
-    static final class ReadyFilePublication implements TransactionSynchronization {
+    static final class ReadyObjectPublication implements TransactionSynchronization {
         private final UUID variantId;
-        private final Path temporaryTarget;
-        private final Path finalTarget;
-        private final Path previousTarget;
+        private final WebsiteMediaStorageGateway storage;
+        private final String storageKey;
+        private final String previousStorageKey;
+        private final byte[] bytes;
+        private final String contentType;
         private boolean published;
 
-        ReadyFilePublication(UUID variantId, Path temporaryTarget, Path finalTarget) {
-            this(variantId, temporaryTarget, finalTarget, null);
-        }
-
-        private ReadyFilePublication(
+        ReadyObjectPublication(
                 UUID variantId,
-                Path temporaryTarget,
-                Path finalTarget,
-                Path previousTarget) {
+                WebsiteMediaStorageGateway storage,
+                String storageKey,
+                String previousStorageKey,
+                byte[] bytes,
+                String contentType) {
             this.variantId = variantId;
-            this.temporaryTarget = temporaryTarget;
-            this.finalTarget = finalTarget;
-            this.previousTarget = previousTarget;
+            this.storage = storage;
+            this.storageKey = storageKey;
+            this.previousStorageKey = previousStorageKey;
+            this.bytes = bytes;
+            this.contentType = contentType;
         }
 
-        void publish() throws IOException {
-            if (Files.exists(finalTarget)) throw new FileAlreadyExistsException(finalTarget.toString());
-            moveWithoutReplacement(temporaryTarget, finalTarget);
+        void publish() {
+            storage.publish(storageKey, bytes, contentType);
             published = true;
         }
 
@@ -383,22 +367,14 @@ public class WebsiteMediaVariantService {
         public void afterCompletion(int status) {
             try {
                 if (status == STATUS_COMMITTED) {
-                    if (previousTarget != null) Files.deleteIfExists(previousTarget);
+                    if (previousStorageKey != null) storage.deleteEverywhere(previousStorageKey);
                     return;
                 }
-                if (status == STATUS_ROLLED_BACK && published) Files.deleteIfExists(finalTarget);
-            } catch (IOException exception) {
+                if (status == STATUS_ROLLED_BACK && published) storage.deleteEverywhere(storageKey);
+            } catch (RuntimeException exception) {
                 log.error(
-                        "미디어 variant 파일 발행 상태를 정리하지 못했습니다. variantId={}, target={}, previous={}, transactionStatus={}",
-                        variantId, finalTarget, previousTarget, status, exception);
-            }
-        }
-
-        private static void moveWithoutReplacement(Path source, Path target) throws IOException {
-            try {
-                Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
-            } catch (AtomicMoveNotSupportedException exception) {
-                Files.move(source, target);
+                        "미디어 variant 저장 상태를 정리하지 못했습니다. variantId={}, storageKey={}, previousStorageKey={}, transactionStatus={}",
+                        variantId, storageKey, previousStorageKey, status, exception);
             }
         }
     }

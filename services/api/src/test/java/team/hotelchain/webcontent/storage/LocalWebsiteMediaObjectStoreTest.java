@@ -61,4 +61,28 @@ class LocalWebsiteMediaObjectStoreTest {
 
         assertThat(store.head("variants/asset.webp")).isEmpty();
     }
+
+    @Test
+    void gatewayMaterializesPublishesAndRestoresAQuarantinedGroup(@TempDir Path workDirectory) throws Exception {
+        var store = new LocalWebsiteMediaObjectStore(root);
+        var gateway = new WebsiteMediaStorageGateway(store);
+        byte[] original = "original".getBytes(StandardCharsets.UTF_8);
+        byte[] variant = "variant".getBytes(StandardCharsets.UTF_8);
+        gateway.put("asset.png", original, "image/png");
+
+        Path materialized = gateway.materialize("asset.png", workDirectory);
+        gateway.publish("asset.webp", variant, "image/webp");
+
+        assertThat(materialized).hasParent(workDirectory).hasBinaryContent(original);
+        assertThat(gateway.get("asset.webp")).containsExactly(variant);
+
+        var quarantined = gateway.quarantineEverywhere(
+                java.util.List.of("asset.png", "asset.webp"), TRANSACTION_ID);
+        assertThat(store.head("asset.png")).isEmpty();
+        assertThat(store.head("asset.webp")).isEmpty();
+
+        gateway.restoreEverywhere(quarantined);
+        assertThat(gateway.get("asset.png")).containsExactly(original);
+        assertThat(gateway.get("asset.webp")).containsExactly(variant);
+    }
 }
