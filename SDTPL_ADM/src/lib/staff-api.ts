@@ -29,6 +29,20 @@ export type DailyOperationsView = {
 
 export type AssignableRoom = { id: string; roomNumber: string };
 
+export type RoomReassignmentOptions = {
+  reservationId: string;
+  assignments: AssignableRoom[];
+  candidates: AssignableRoom[];
+};
+
+export type RoomReassignmentResult = {
+  reservationId: string;
+  previousPhysicalRoomId: string;
+  previousRoomNumber: string;
+  physicalRoomId: string;
+  roomNumber: string;
+};
+
 export type StaffReservationSummary = {
   reservationId: string;
   guestName: string;
@@ -426,6 +440,43 @@ async function mediaRequest<T>(path: string, token: string, init?: RequestInit):
     throw new StaffApiError(error.message ?? "미디어 요청을 처리하지 못했습니다.", response.status, error.code);
   }
   return response.json() as Promise<T>;
+}
+
+export async function getRoomReassignmentOptions(
+  token: string,
+  reservationId: string,
+): Promise<RoomReassignmentOptions> {
+  const response = await fetch(`/api/staff/reservations/${reservationId}/room-reassignment-options`, {
+    headers: { "X-Staff-Session": token },
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(error.message ?? "객실 변경 후보를 불러오지 못했습니다.", response.status, error.code);
+  }
+  return response.json() as Promise<RoomReassignmentOptions>;
+}
+
+export async function reassignRoom(
+  token: string,
+  reservationId: string,
+  currentPhysicalRoomId: string,
+  newPhysicalRoomId: string,
+  idempotencyKey: string,
+): Promise<RoomReassignmentResult> {
+  const response = await fetch(`/api/staff/reservations/${reservationId}/assignments/${currentPhysicalRoomId}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Staff-Session": token,
+      "Idempotency-Key": idempotencyKey,
+    },
+    body: JSON.stringify({ newPhysicalRoomId }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(error.message ?? "배정 객실을 변경하지 못했습니다.", response.status, error.code);
+  }
+  return response.json() as Promise<RoomReassignmentResult>;
 }
 
 export async function getStaffReservations(

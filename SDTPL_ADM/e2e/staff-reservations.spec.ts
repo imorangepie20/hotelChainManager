@@ -342,3 +342,109 @@ test("lets a branch employee assign the remaining room from reservation details"
   expect(assignmentMethods).toEqual(["POST", "POST"]);
   expect(assignmentBodies).toEqual([{ physicalRoomId: "room-702" }, { physicalRoomId: "room-702" }]);
 });
+
+test("lets a branch employee change one assigned room before check-in", async ({ page }) => {
+  const assignedRoomNumbers = ["701"];
+  const requestKeys: string[] = [];
+  const requestMethods: string[] = [];
+  const requestBodies: unknown[] = [];
+  await page.addInitScript((hotelId) => {
+    localStorage.setItem("hotel-chain-staff-session", "test-session-token");
+    localStorage.setItem("hotel-chain-staff", JSON.stringify({
+      id: "staff",
+      email: "sokcho@hotel-chain.local",
+      displayName: "속초 직원",
+      role: "BRANCH_STAFF",
+      hotelId,
+    }));
+  }, SOKCHO);
+  await page.route("**/api/staff/me", (route) => route.fulfill({ status: 200, contentType: "application/json", body: "{}" }));
+  await page.route("**/api/staff/hotels/*/reservations?*", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      hotelId: SOKCHO,
+      date: "2026-09-13",
+      truncated: false,
+      reservations: [{
+        reservationId: "42000000-0000-0000-0000-000000000001",
+        guestName: "김하늘",
+        guestEmail: "guest@example.com",
+        roomTypeName: "디럭스 오션",
+        ratePlanName: "조식 포함",
+        checkIn: "2026-09-13",
+        checkOut: "2026-09-15",
+        adults: 2,
+        children: 0,
+        rooms: 1,
+        status: "CONFIRMED",
+        totalKrw: 420000,
+        currency: "KRW",
+        assignedRoomNumbers,
+      }],
+    }),
+  }));
+  await page.route("**/api/staff/reservations/*/room-reassignment-options", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      reservationId: "42000000-0000-0000-0000-000000000001",
+      assignments: [{ id: "room-701", roomNumber: "701" }],
+      candidates: [
+        { id: "room-702", roomNumber: "702" },
+        { id: "room-703", roomNumber: "703" },
+      ],
+    }),
+  }));
+  await page.route("**/api/staff/reservations/*/assignments/*", (route) => {
+    requestKeys.push(route.request().headers()["idempotency-key"] ?? "");
+    requestMethods.push(route.request().method());
+    requestBodies.push(route.request().postDataJSON());
+    if (requestBodies.length < 3) {
+      return route.fulfill({
+        status: 502,
+        contentType: "application/json",
+        body: JSON.stringify({ message: "응답을 확인하지 못했습니다. 다시 시도해 주세요." }),
+      });
+    }
+    assignedRoomNumbers.splice(0, 1, "703");
+    return route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        reservationId: "42000000-0000-0000-0000-000000000001",
+        previousPhysicalRoomId: "room-701",
+        previousRoomNumber: "701",
+        physicalRoomId: "room-703",
+        roomNumber: "703",
+      }),
+    });
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/dashboard/reservations");
+  await page.getByRole("button", { name: "김하늘 예약 상세" }).press("Enter");
+  const detail = page.getByRole("dialog");
+  await detail.getByRole("button", { name: "배정 객실 변경" }).press("Enter");
+  await expect(detail.getByLabel("현재 배정 객실")).toHaveValue("room-701");
+  const newRoom = detail.getByLabel("새 배정 객실");
+  await expect(newRoom).toHaveValue("room-702");
+
+  const submit = detail.getByRole("button", { name: "선택 객실로 변경" });
+  await submit.press("Enter");
+  await expect(detail.getByRole("alert")).toContainText("응답을 확인하지 못했습니다");
+  await newRoom.selectOption("room-703");
+  await submit.press("Enter");
+  await expect(detail.getByRole("alert")).toContainText("응답을 확인하지 못했습니다");
+  await submit.press("Enter");
+
+  await expect(page.getByRole("status", { name: "예약 처리 결과" })).toContainText("701호를 703호로 변경했습니다");
+  await page.getByRole("button", { name: "김하늘 예약 상세" }).press("Enter");
+  await expect(page.getByRole("dialog")).toContainText("703호");
+  expect(requestMethods).toEqual(["PATCH", "PATCH", "PATCH"]);
+  expect(requestBodies).toEqual([
+    { newPhysicalRoomId: "room-702" },
+    { newPhysicalRoomId: "room-703" },
+    { newPhysicalRoomId: "room-703" },
+  ]);
+  expect(requestKeys[0]).not.toBe("");
+  expect(requestKeys[1]).not.toBe(requestKeys[0]);
+  expect(requestKeys[2]).toBe(requestKeys[1]);
+});

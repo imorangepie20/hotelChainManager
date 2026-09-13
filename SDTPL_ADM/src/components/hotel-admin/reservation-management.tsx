@@ -27,13 +27,17 @@ import {
   assignRoom,
   cancelStaffReservation,
   getAssignableRooms,
+  getRoomReassignmentOptions,
   getStaffCancellationPreview,
   getStaffReservations,
   StaffApiError,
+  reassignRoom,
   type AssignableRoom,
   type StaffCancellationPreview,
   type StaffPrincipal,
   type StaffReservationGuestUpdateResult,
+  type RoomReassignmentOptions,
+  type RoomReassignmentResult,
   type StaffReservationSearchView,
   type StaffReservationSummary,
   updateStaffReservationGuest,
@@ -235,6 +239,12 @@ export function ReservationManagement() {
     setRefreshVersion((version) => version + 1);
   }
 
+  function roomReassigned(result: RoomReassignmentResult) {
+    setNotice(`${result.previousRoomNumber}호를 ${result.roomNumber}호로 변경했습니다.`);
+    setSelectedReservation(null);
+    setRefreshVersion((version) => version + 1);
+  }
+
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-end">
@@ -330,6 +340,7 @@ export function ReservationManagement() {
         cancellationTriggerRef={cancellationTriggerRef}
         onGuestDetailsUpdated={guestDetailsUpdated}
         onRoomAssigned={roomAssigned}
+        onRoomReassigned={roomReassigned}
         onRequestCancellation={requestCancellation}
         onOpenChange={(open) => { if (!open) setSelectedReservation(null); }}
       />
@@ -379,6 +390,7 @@ function ReservationDetail({
   cancellationTriggerRef,
   onGuestDetailsUpdated,
   onRoomAssigned,
+  onRoomReassigned,
   onRequestCancellation,
   onOpenChange,
 }: {
@@ -388,6 +400,7 @@ function ReservationDetail({
   cancellationTriggerRef: RefObject<HTMLButtonElement | null>;
   onGuestDetailsUpdated: (result: StaffReservationGuestUpdateResult) => void;
   onRoomAssigned: (roomNumber: string) => void;
+  onRoomReassigned: (result: RoomReassignmentResult) => void;
   onRequestCancellation: (reservation: StaffReservationSummary) => Promise<void>;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -415,6 +428,9 @@ function ReservationDetail({
           {reservation.status === "CONFIRMED" && (
             <div className="flex flex-col gap-4 border-t pt-4">
               <ReservationRoomAssignment reservation={reservation} onAssigned={onRoomAssigned} />
+              {reservation.assignedRoomNumbers.length > 0 && (
+                <ReservationRoomReassignment reservation={reservation} onReassigned={onRoomReassigned} />
+              )}
               <ReservationGuestEditor reservation={reservation} onUpdated={onGuestDetailsUpdated} />
               <div className="flex justify-end">
                 <Button ref={cancellationTriggerRef} variant="destructive" disabled={checkingCancellation} onClick={() => void onRequestCancellation(reservation)}>
@@ -426,6 +442,136 @@ function ReservationDetail({
         </DialogContent>
       )}
     </Dialog>
+  );
+}
+
+function ReservationRoomReassignment({
+  reservation,
+  onReassigned,
+}: {
+  reservation: StaffReservationSummary;
+  onReassigned: (result: RoomReassignmentResult) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [options, setOptions] = useState<RoomReassignmentOptions | null>(null);
+  const [currentRoomId, setCurrentRoomId] = useState("");
+  const [newRoomId, setNewRoomId] = useState("");
+  const [idempotencyKey, setIdempotencyKey] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  async function loadOptions() {
+    const token = window.localStorage.getItem("hotel-chain-staff-session");
+    if (!token) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await getRoomReassignmentOptions(token, reservation.reservationId);
+      setOptions(result);
+      setCurrentRoomId(result.assignments[0]?.id ?? "");
+      setNewRoomId(result.candidates[0]?.id ?? "");
+      setIdempotencyKey(window.crypto.randomUUID());
+      setOpen(true);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "객실 변경 후보를 불러오지 못했습니다.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function changeSelection(setValue: (value: string) => void, value: string) {
+    setValue(value);
+    setIdempotencyKey(window.crypto.randomUUID());
+    setError(null);
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const token = window.localStorage.getItem("hotel-chain-staff-session");
+    if (!token || !currentRoomId || !newRoomId || !idempotencyKey) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const result = await reassignRoom(
+        token,
+        reservation.reservationId,
+        currentRoomId,
+        newRoomId,
+        idempotencyKey,
+      );
+      onReassigned(result);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "배정 객실을 변경하지 못했습니다.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function close() {
+    if (saving) return;
+    setOpen(false);
+    setOptions(null);
+    setError(null);
+  }
+
+  return (
+    <section aria-labelledby="reservation-room-reassignment-title" className="space-y-3 border-b pb-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 id="reservation-room-reassignment-title" className="text-sm font-medium">배정 객실 변경</h3>
+          <p className="mt-1 text-xs text-muted-foreground">체크인 전 같은 객실 유형의 청결 객실로 한 실씩 변경합니다.</p>
+        </div>
+        {!open && (
+          <Button type="button" variant="outline" disabled={loading} onClick={() => void loadOptions()}>
+            {loading ? "변경 후보 조회 중" : "배정 객실 변경"}
+          </Button>
+        )}
+      </div>
+      {open && options && (
+        <form className="space-y-3" onSubmit={(event) => void submit(event)}>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="reservation-current-room">현재 배정 객실</Label>
+              <select
+                id="reservation-current-room"
+                className="h-8 w-full rounded-lg border border-input bg-background px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                value={currentRoomId}
+                disabled={saving}
+                onChange={(event) => changeSelection(setCurrentRoomId, event.target.value)}
+              >
+                {options.assignments.map((room) => <option key={room.id} value={room.id}>{room.roomNumber}호</option>)}
+              </select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="reservation-new-room">새 배정 객실</Label>
+              {options.candidates.length > 0 ? (
+                <select
+                  id="reservation-new-room"
+                  className="h-8 w-full rounded-lg border border-input bg-background px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                  value={newRoomId}
+                  disabled={saving}
+                  onChange={(event) => changeSelection(setNewRoomId, event.target.value)}
+                >
+                  {options.candidates.map((room) => <option key={room.id} value={room.id}>{room.roomNumber}호</option>)}
+                </select>
+              ) : (
+                <p className="text-sm text-muted-foreground">변경 가능한 청결 객실이 없습니다.</p>
+              )}
+            </div>
+          </div>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button type="button" variant="ghost" disabled={saving} onClick={close}>닫기</Button>
+            {options.candidates.length > 0 && (
+              <Button type="submit" disabled={!currentRoomId || !newRoomId || saving}>
+                {saving ? "변경 중" : "선택 객실로 변경"}
+              </Button>
+            )}
+          </div>
+        </form>
+      )}
+      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+    </section>
   );
 }
 
