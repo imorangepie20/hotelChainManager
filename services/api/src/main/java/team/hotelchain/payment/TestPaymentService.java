@@ -8,6 +8,7 @@ import java.time.Instant;
 import java.util.UUID;
 
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,11 +22,17 @@ public class TestPaymentService {
     private final JdbcTemplate jdbc;
     private final ReservationAccess access;
     private final Clock clock;
+    private final boolean changeSettlementEnabled;
 
-    public TestPaymentService(JdbcTemplate jdbc, ReservationAccess access, Clock clock) {
+    public TestPaymentService(
+            JdbcTemplate jdbc,
+            ReservationAccess access,
+            Clock clock,
+            @Value("${reservation.change.settlement-enabled:false}") boolean changeSettlementEnabled) {
         this.jdbc = jdbc;
         this.access = access;
         this.clock = clock;
+        this.changeSettlementEnabled = changeSettlementEnabled;
     }
 
     @Transactional(noRollbackFor = ReservationExpiredException.class)
@@ -50,6 +57,7 @@ public class TestPaymentService {
             if (outcome != PaymentOutcome.SUCCESS) {
                 throw new BusinessConflictException("RESERVATION_STATE_CONFLICT", "이미 결제가 완료된 예약입니다.");
             }
+            insertOriginalTransaction(reservation);
             insertAttempt(reservationId, idempotencyKey, requestHash, outcome, "SUCCEEDED", "CONFIRMED");
             return new PaymentResult(reservationId, "CONFIRMED", "SUCCEEDED");
         }
@@ -80,6 +88,7 @@ public class TestPaymentService {
             throw new IllegalStateException("확보 재고가 예약 숙박일과 일치하지 않습니다.");
         }
         jdbc.update("update reservation set status = 'CONFIRMED' where id = ?", reservationId);
+        insertOriginalTransaction(reservation);
         insertAttempt(reservationId, idempotencyKey, requestHash, outcome, "SUCCEEDED", "CONFIRMED");
         return new PaymentResult(reservationId, "CONFIRMED", "SUCCEEDED");
     }
@@ -87,6 +96,7 @@ public class TestPaymentService {
     private PaymentReservation lockReservation(UUID reservationId, String tokenHash) {
         PaymentReservation reservation = jdbc.query("""
                 SELECT id, room_type_id, check_in, check_out, rooms, status, expires_at,
+                       total_krw, currency,
                        (SELECT count(*) FROM reservation_night rn WHERE rn.reservation_id = r.id) AS nights
                   FROM reservation r
                  WHERE id = ? AND management_token_hash = ?
@@ -133,6 +143,18 @@ public class TestPaymentService {
                 """, UUID.randomUUID(), reservationId, idempotencyKey, requestHash, outcome.name(), paymentStatus, reservationStatus);
     }
 
+    private void insertOriginalTransaction(PaymentReservation reservation) {
+        if (!changeSettlementEnabled) return;
+        jdbc.update("""
+                INSERT INTO payment_transaction (
+                    id, reservation_id, provider, merchant_account, gateway_transaction_id,
+                    transaction_type, captured_amount_krw, refunded_amount_krw, currency)
+                VALUES (?, ?, 'FAKE', 'LOCAL', ?, 'ORIGINAL_CHARGE', ?, 0, ?)
+                ON CONFLICT (provider, merchant_account, gateway_transaction_id) DO NOTHING
+                """, UUID.randomUUID(), reservation.id(), "test-payment-" + reservation.id(),
+                reservation.totalKrw(), reservation.currency());
+    }
+
     private void validate(String idempotencyKey, PaymentOutcome outcome) {
         if (idempotencyKey == null || idempotencyKey.isBlank() || idempotencyKey.length() > 100 || outcome == null) {
             throw new IllegalArgumentException("결제 결과와 올바른 Idempotency-Key가 필요합니다.");
@@ -142,11 +164,12 @@ public class TestPaymentService {
     private PaymentReservation mapReservation(ResultSet rs) throws SQLException {
         return new PaymentReservation(rs.getObject("id", UUID.class), rs.getObject("room_type_id", UUID.class),
                 rs.getDate("check_in").toLocalDate(), rs.getDate("check_out").toLocalDate(), rs.getInt("rooms"),
-                rs.getString("status"), rs.getTimestamp("expires_at").toInstant(), rs.getInt("nights"));
+                rs.getString("status"), rs.getTimestamp("expires_at").toInstant(), rs.getLong("total_krw"),
+                rs.getString("currency").trim(), rs.getInt("nights"));
     }
 
     record PaymentReservation(UUID id, UUID roomTypeId, java.time.LocalDate checkIn, java.time.LocalDate checkOut,
-            int rooms, String status, Instant expiresAt, int nights) {
+            int rooms, String status, Instant expiresAt, long totalKrw, String currency, int nights) {
     }
 
     private record ExistingPayment(String requestHash, String paymentStatus, String reservationStatus) {

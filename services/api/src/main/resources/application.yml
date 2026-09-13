@@ -20,6 +20,12 @@ server:
 
 reservation:
   hold-ttl: ${RESERVATION_HOLD_TTL:10m}
+  change:
+    settlement-enabled: ${RESERVATION_CHANGE_SETTLEMENT_ENABLED:false}
+    gateway: ${RESERVATION_CHANGE_GATEWAY:disabled}
+    direct-limit-krw: 100000
+    approval-ttl: 24h
+    hold-ttl: 15m
 
 website:
   media:

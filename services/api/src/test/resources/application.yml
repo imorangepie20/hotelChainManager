@@ -6,3 +6,8 @@ spring:
 
 test-payment:
   enabled: true
+
+reservation:
+  change:
+    settlement-enabled: false
+    gateway: fake

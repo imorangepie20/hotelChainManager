@@ -7,7 +7,6 @@ import java.time.Clock;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -17,7 +16,10 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import team.hotelchain.inventory.NightlyPrice;
+import team.hotelchain.reservationchange.ReservationStayQuote;
+import team.hotelchain.reservationchange.ReservationChangeMutationGuard;
+import team.hotelchain.reservationchange.ReservationStayQuoteService;
+import team.hotelchain.reservationchange.ReservationChangePolicy;
 import team.hotelchain.staff.StaffAccessService;
 import team.hotelchain.staff.StaffPrincipal;
 
@@ -26,16 +28,25 @@ public class StaffReservationStayChangeService {
     private final JdbcTemplate jdbc;
     private final StaffAccessService staffAccess;
     private final ReservationAccess reservationAccess;
+    private final ReservationStayQuoteService quoteService;
+    private final ReservationChangeMutationGuard mutationGuard;
+    private final ReservationChangePolicy changePolicy;
     private final Clock clock;
 
     public StaffReservationStayChangeService(
             JdbcTemplate jdbc,
             StaffAccessService staffAccess,
             ReservationAccess reservationAccess,
+            ReservationStayQuoteService quoteService,
+            ReservationChangeMutationGuard mutationGuard,
+            ReservationChangePolicy changePolicy,
             Clock clock) {
         this.jdbc = jdbc;
         this.staffAccess = staffAccess;
         this.reservationAccess = reservationAccess;
+        this.quoteService = quoteService;
+        this.mutationGuard = mutationGuard;
+        this.changePolicy = changePolicy;
         this.clock = clock;
     }
 
@@ -45,19 +56,25 @@ public class StaffReservationStayChangeService {
             UUID reservationId,
             StaffReservationStayChangePreviewRequest request) {
         StaffPrincipal staff = staffAccess.current(token);
-        StayDates dates = validateDates(request == null ? null : request.checkIn(), request == null ? null : request.checkOut());
-        ReservationStay reservation = findReservation(reservationId, false);
-        staffAccess.requireHotel(staff, reservation.hotelId());
-        requireChangeable(reservation);
-        requireFutureTarget(reservation, dates);
+        ReservationStayQuote quote = quoteService.quote(
+                reservationId,
+                request == null ? null : request.checkIn(),
+                request == null ? null : request.checkOut(),
+                false);
+        staffAccess.requireHotel(staff, quote.hotelId());
+        requireChangeable(quote);
+        requireFutureTarget(quote);
 
         return new StaffReservationStayChangePreview(
                 reservationId,
-                dates.checkIn(),
-                dates.checkOut(),
-                reservation.totalKrw(),
-                reservation.currency(),
-                findOffers(reservation, dates));
+                quote.targetCheckIn(),
+                quote.targetCheckOut(),
+                quote.previousTotalKrw(),
+                quote.currency(),
+                quote.offers().stream().map(offer -> new StaffReservationStayChangeOffer(
+                        offer.roomTypeId(), offer.roomTypeName(), offer.ratePlanId(), offer.ratePlanName(),
+                        offer.breakfastIncluded(), offer.remaining(), offer.nightlyPrices(), offer.totalKrw(),
+                        offer.differenceKrw(), offer.currency())).toList());
     }
 
     @Transactional
@@ -66,6 +83,10 @@ public class StaffReservationStayChangeService {
             UUID reservationId,
             String idempotencyKey,
             StaffReservationStayChangeRequest request) {
+        if (changePolicy.settlementEnabled()) {
+            throw new BusinessConflictException(
+                    "CHANGE_SETTLEMENT_REQUIRED", "예약 변경 요청과 정산 절차를 이용해 주세요.");
+        }
         StaffPrincipal staff = staffAccess.current(token);
         ValidatedChange change = validateChange(idempotencyKey, request);
         ReservationStay reservation = findReservation(reservationId, true);
@@ -100,6 +121,7 @@ public class StaffReservationStayChangeService {
                     "RESERVATION_PARTY_CAPACITY_EXCEEDED", "선택한 객실 유형의 최대 수용 인원을 초과했습니다.");
         }
 
+        mutationGuard.prepareCriticalMutation(reservationId);
         Map<InventoryKey, InventoryRow> inventory = lockInventory(reservation, change);
         requireOriginalInventory(reservation, inventory);
         List<RateNight> targetNights = findRateNights(change);
@@ -149,51 +171,11 @@ public class StaffReservationStayChangeService {
                 reservation.roomTypeId(), change.roomTypeId(), reservation.ratePlanId(), change.ratePlanId(),
                 reservation.checkIn(), reservation.checkOut(), change.dates().checkIn(), change.dates().checkOut(),
                 reservation.totalKrw(), totalKrw, differenceKrw);
+        mutationGuard.incrementRevision(reservationId);
 
         return new StaffReservationStayChangeResult(
                 reservationId, change.dates().checkIn(), change.dates().checkOut(),
                 change.roomTypeId(), change.ratePlanId(), totalKrw, differenceKrw, reservation.currency());
-    }
-
-    private List<StaffReservationStayChangeOffer> findOffers(ReservationStay reservation, StayDates dates) {
-        int nights = Math.toIntExact(ChronoUnit.DAYS.between(dates.checkIn(), dates.checkOut()));
-        List<OfferNight> rows = jdbc.query("""
-                select rt.id as room_type_id, rt.name as room_type_name,
-                       rp.id as rate_plan_id, rp.name as rate_plan_name, rp.breakfast_included,
-                       rd.stay_date, rd.amount_krw,
-                       i.capacity - i.held - i.confirmed
-                         + case when rt.id = ? and rd.stay_date >= ? and rd.stay_date < ? then ? else 0 end
-                         as remaining
-                from room_type rt
-                join rate_plan rp on rp.room_type_id = rt.id
-                join rate_day rd on rd.rate_plan_id = rp.id
-                join inventory_day i on i.room_type_id = rt.id and i.stay_date = rd.stay_date
-                where rt.hotel_id = ? and rd.stay_date >= ? and rd.stay_date < ?
-                  and rt.max_occupancy * ? >= ?
-                order by rp.id, rd.stay_date
-                """, this::mapOfferNight,
-                reservation.roomTypeId(), reservation.checkIn(), reservation.checkOut(), reservation.rooms(),
-                reservation.hotelId(), dates.checkIn(), dates.checkOut(), reservation.rooms(),
-                reservation.adults() + reservation.children());
-        Map<UUID, List<OfferNight>> byRatePlan = new LinkedHashMap<>();
-        rows.forEach(row -> byRatePlan.computeIfAbsent(row.ratePlanId(), ignored -> new ArrayList<>()).add(row));
-        return byRatePlan.values().stream()
-                .filter(group -> group.size() == nights)
-                .filter(group -> group.stream().mapToInt(OfferNight::remaining).min().orElse(0) >= reservation.rooms())
-                .map(group -> toOffer(group, reservation))
-                .toList();
-    }
-
-    private StaffReservationStayChangeOffer toOffer(List<OfferNight> group, ReservationStay reservation) {
-        OfferNight first = group.getFirst();
-        List<NightlyPrice> nightlyPrices = group.stream()
-                .map(night -> new NightlyPrice(night.stayDate(), night.amountKrw()))
-                .toList();
-        long totalKrw = nightlyPrices.stream().mapToLong(NightlyPrice::amount).sum() * reservation.rooms();
-        return new StaffReservationStayChangeOffer(
-                first.roomTypeId(), first.roomTypeName(), first.ratePlanId(), first.ratePlanName(),
-                first.breakfastIncluded(), group.stream().mapToInt(OfferNight::remaining).min().orElseThrow(),
-                nightlyPrices, totalKrw, totalKrw - reservation.totalKrw(), reservation.currency());
     }
 
     private Map<InventoryKey, InventoryRow> lockInventory(
@@ -322,9 +304,33 @@ public class StaffReservationStayChangeService {
         }
     }
 
+    private void requireChangeable(ReservationStayQuote quote) {
+        if (!"CONFIRMED".equals(quote.reservationStatus())) {
+            throw new BusinessConflictException(
+                    "RESERVATION_STATE_CONFLICT", "확정된 예약의 숙박 조건만 변경할 수 있습니다.");
+        }
+        LocalDate today = LocalDate.now(clock.withZone(ZoneId.of(quote.timezone())));
+        if (!today.isBefore(quote.previousCheckIn())) {
+            throw new BusinessConflictException(
+                    "RESERVATION_STAY_CHANGE_TOO_LATE", "체크인일이 지난 예약은 숙박 조건을 변경할 수 없습니다.");
+        }
+        if (quote.assignments() > 0) {
+            throw new BusinessConflictException(
+                    "RESERVATION_HAS_ROOM_ASSIGNMENT", "배정 객실이 있는 예약은 숙박 조건을 변경할 수 없습니다.");
+        }
+    }
+
     private void requireFutureTarget(ReservationStay reservation, StayDates dates) {
         LocalDate today = LocalDate.now(clock.withZone(ZoneId.of(reservation.timezone())));
         if (!dates.checkIn().isAfter(today)) {
+            throw new BusinessConflictException(
+                    "RESERVATION_STAY_CHANGE_TOO_LATE", "변경할 체크인 날짜는 지점 현지 날짜 이후여야 합니다.");
+        }
+    }
+
+    private void requireFutureTarget(ReservationStayQuote quote) {
+        LocalDate today = LocalDate.now(clock.withZone(ZoneId.of(quote.timezone())));
+        if (!quote.targetCheckIn().isAfter(today)) {
             throw new BusinessConflictException(
                     "RESERVATION_STAY_CHANGE_TOO_LATE", "변경할 체크인 날짜는 지점 현지 날짜 이후여야 합니다.");
         }
@@ -359,18 +365,6 @@ public class StaffReservationStayChangeService {
                 change.ratePlanId().toString(),
                 Long.toString(change.expectedTotal()));
         return reservationAccess.sha256(value.getBytes(StandardCharsets.UTF_8));
-    }
-
-    private OfferNight mapOfferNight(ResultSet rs, int rowNumber) throws SQLException {
-        return new OfferNight(
-                rs.getObject("room_type_id", UUID.class),
-                rs.getString("room_type_name"),
-                rs.getObject("rate_plan_id", UUID.class),
-                rs.getString("rate_plan_name"),
-                rs.getBoolean("breakfast_included"),
-                rs.getDate("stay_date").toLocalDate(),
-                rs.getInt("amount_krw"),
-                rs.getInt("remaining"));
     }
 
     private InventoryRow mapInventory(ResultSet rs, int rowNumber) throws SQLException {
@@ -427,17 +421,6 @@ public class StaffReservationStayChangeService {
     }
 
     private record TargetPlan(UUID hotelId, int maxOccupancy) {
-    }
-
-    private record OfferNight(
-            UUID roomTypeId,
-            String roomTypeName,
-            UUID ratePlanId,
-            String ratePlanName,
-            boolean breakfastIncluded,
-            LocalDate stayDate,
-            int amountKrw,
-            int remaining) {
     }
 
     private record InventoryKey(UUID roomTypeId, LocalDate stayDate) {

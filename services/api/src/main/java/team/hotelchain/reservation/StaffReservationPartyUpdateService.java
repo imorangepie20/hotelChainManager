@@ -7,6 +7,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import team.hotelchain.reservationchange.ReservationChangeMutationGuard;
 import team.hotelchain.staff.StaffAccessService;
 import team.hotelchain.staff.StaffPrincipal;
 
@@ -15,14 +16,17 @@ public class StaffReservationPartyUpdateService {
     private final JdbcTemplate jdbc;
     private final StaffAccessService staffAccess;
     private final ReservationAccess reservationAccess;
+    private final ReservationChangeMutationGuard mutationGuard;
 
     public StaffReservationPartyUpdateService(
             JdbcTemplate jdbc,
             StaffAccessService staffAccess,
-            ReservationAccess reservationAccess) {
+            ReservationAccess reservationAccess,
+            ReservationChangeMutationGuard mutationGuard) {
         this.jdbc = jdbc;
         this.staffAccess = staffAccess;
         this.reservationAccess = reservationAccess;
+        this.mutationGuard = mutationGuard;
     }
 
     @Transactional
@@ -60,6 +64,7 @@ public class StaffReservationPartyUpdateService {
                     "RESERVATION_PARTY_UNCHANGED", "변경할 투숙 인원을 입력해 주세요.");
         }
 
+        mutationGuard.prepareCriticalMutation(reservationId);
         jdbc.update("update reservation set adults = ?, children = ? where id = ?",
                 party.adults(), party.children(), reservationId);
         jdbc.update("""
@@ -69,6 +74,7 @@ public class StaffReservationPartyUpdateService {
                 values (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, UUID.randomUUID(), reservationId, idempotencyKey, requestHash, staff.id(),
                 reservation.adults(), reservation.children(), party.adults(), party.children());
+        mutationGuard.incrementRevision(reservationId);
         return new StaffReservationPartyUpdateResult(reservationId, party.adults(), party.children());
     }
 

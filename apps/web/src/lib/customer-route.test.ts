@@ -7,6 +7,7 @@ function expectEqual(actual: unknown, expected: unknown, message: string) {
 }
 
 export function runCustomerRouteTests() {
+  expectEqual(resolveCustomerRoute('/reservation-change-payment#token'), { kind: 'reservation-change-payment', pathname: '/reservation-change-payment' }, '예약 변경 결제를 일반 CMS 경로와 구분한다')
   expectEqual(resolveCustomerRoute('/en/brand/story'), { kind: 'page', pathname: '/en/brand/story', segments: ['brand', 'story'], locale: 'en' }, '영어 상세를 한국어와 구분한다')
   expectEqual(resolveCustomerRoute('/en'), { kind: 'home', pathname: '/en', locale: 'en' }, '영어 홈 경로를 구분한다')
   expectEqual(resolveCustomerRoute('/en/stays/sokcho/rooms/suite'), { kind: 'page', pathname: '/en/stays/sokcho/rooms/suite', segments: ['stays', 'sokcho', 'rooms', 'suite'], locale: 'en' }, 'locale 접두사는 콘텐츠 깊이에 포함하지 않는다')

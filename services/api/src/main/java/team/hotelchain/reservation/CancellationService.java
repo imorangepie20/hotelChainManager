@@ -14,6 +14,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import team.hotelchain.reservationchange.ReservationChangeMutationGuard;
+
 @Service
 public class CancellationService {
 
@@ -23,12 +25,19 @@ public class CancellationService {
     private final ReservationAccess access;
     private final TestRefundGateway refundGateway;
     private final Clock clock;
+    private final ReservationChangeMutationGuard mutationGuard;
 
-    public CancellationService(JdbcTemplate jdbc, ReservationAccess access, TestRefundGateway refundGateway, Clock clock) {
+    public CancellationService(
+            JdbcTemplate jdbc,
+            ReservationAccess access,
+            TestRefundGateway refundGateway,
+            Clock clock,
+            ReservationChangeMutationGuard mutationGuard) {
         this.jdbc = jdbc;
         this.access = access;
         this.refundGateway = refundGateway;
         this.clock = clock;
+        this.mutationGuard = mutationGuard;
     }
 
     @Transactional(noRollbackFor = RefundFailedException.class)
@@ -94,11 +103,13 @@ public class CancellationService {
         if (!clock.instant().isBefore(cutoff)) {
             throw new CancellationNotAllowedException();
         }
+        mutationGuard.assertCriticalMutationAllowed(reservationId);
         if (!refundGateway.refund(reservationId, reservation.total())) {
             insertAttempt(reservationId, idempotencyKey, requestHash, reservation.total(), "FAILED", "CONFIRMED", staffId);
             throw new RefundFailedException();
         }
 
+        mutationGuard.prepareCriticalMutation(reservationId);
         jdbc.query("""
                 SELECT stay_date FROM inventory_day
                  WHERE room_type_id = ? AND stay_date >= ? AND stay_date < ?
@@ -113,6 +124,7 @@ public class CancellationService {
         }
         jdbc.update("update reservation set status = 'CANCELLED' where id = ?", reservationId);
         insertAttempt(reservationId, idempotencyKey, requestHash, reservation.total(), "SUCCEEDED", "CANCELLED", staffId);
+        mutationGuard.incrementRevision(reservationId);
         return new CancellationResult(reservationId, "CANCELLED", reservation.total(), "KRW");
     }
 
