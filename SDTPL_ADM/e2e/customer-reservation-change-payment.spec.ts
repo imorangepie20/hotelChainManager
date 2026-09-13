@@ -20,7 +20,7 @@ test.beforeEach(async ({ page }) => {
     json: { checkoutUrl: 'http://localhost:4000/fake-checkout' },
   }))
   await page.route('**/fake-checkout', route => route.fulfill({
-    contentType: 'text/html',
+    contentType: 'text/html; charset=utf-8',
     body: '<main><h1>테스트 결제 화면</h1></main>',
   }))
 })
