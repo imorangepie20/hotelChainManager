@@ -24,16 +24,19 @@ public class WebsiteMediaManagementController {
     private final WebsiteMediaVariantService variants;
     private final WebsiteMediaDraftReplacementService replacements;
     private final WebsiteMediaStorageAuditService storageAudit;
+    private final WebsiteMediaStorageMigrationService storageMigration;
 
     public WebsiteMediaManagementController(
             WebsiteMediaService media,
             WebsiteMediaVariantService variants,
             WebsiteMediaDraftReplacementService replacements,
-            WebsiteMediaStorageAuditService storageAudit) {
+            WebsiteMediaStorageAuditService storageAudit,
+            WebsiteMediaStorageMigrationService storageMigration) {
         this.media = media;
         this.variants = variants;
         this.replacements = replacements;
         this.storageAudit = storageAudit;
+        this.storageMigration = storageMigration;
     }
 
     @GetMapping
@@ -46,6 +49,18 @@ public class WebsiteMediaManagementController {
     @GetMapping("/storage-audit")
     public WebsiteMediaStorageAudit storageAudit(@RequestHeader("X-Staff-Session") String token) {
         return storageAudit.audit(token);
+    }
+
+    @GetMapping("/storage-migration")
+    public WebsiteMediaStorageMigrationStatus storageMigration(
+            @RequestHeader("X-Staff-Session") String token) {
+        return storageMigration.status(token);
+    }
+
+    @PostMapping("/storage-migration/backfill")
+    public WebsiteMediaStorageBackfillResult backfillStorage(
+            @RequestHeader("X-Staff-Session") String token) {
+        return storageMigration.backfill(token);
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

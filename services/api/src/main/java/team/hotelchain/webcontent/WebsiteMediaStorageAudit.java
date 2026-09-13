@@ -8,5 +8,7 @@ public record WebsiteMediaStorageAudit(
         boolean healthy,
         List<String> missingStorageKeys,
         List<String> orphanStorageKeys,
-        List<String> staleTemporaryStorageKeys) {
+        List<String> staleTemporaryStorageKeys,
+        String mode,
+        List<WebsiteMediaStoreAudit> stores) {
 }

@@ -194,6 +194,9 @@ class WebsiteMediaIntegrationTest {
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.orphanStorageKeys.length()").value(1))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.staleTemporaryStorageKeys[0]").value("abandoned-variant.webp.tmp"))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.staleTemporaryStorageKeys.length()").value(1))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.mode").value("local"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.stores[0].storeName").value("local"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.stores.length()").value(1))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.checkedAt").isString());
 
         assertThat(readyVariant).isRegularFile();
@@ -227,6 +230,46 @@ class WebsiteMediaIntegrationTest {
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.missingStorageKeys.length()").value(0))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.orphanStorageKeys.length()").value(0))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.staleTemporaryStorageKeys.length()").value(0));
+    }
+
+    @Test
+    void reportsLocalStorageMigrationAndRejectsBackfillOutsideMirrorMode() throws Exception {
+        String token = staffAccess.login("media-hq@example.com", "hq-password").token();
+        media.upload(token,
+                new MemoryMultipartFile("migration.png", "image/png", image("png")),
+                "마이그레이션 점검", "마이그레이션 점검");
+        var mockMvc = MockMvcBuilders.webAppContextSetup(context).build();
+
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .get("/api/staff/website/media/storage-migration")
+                        .header("X-Staff-Session", token))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.mode").value("local"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.total").value(1))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.localOnly").value(1))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.both").value(0));
+
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/api/staff/website/media/storage-migration/backfill")
+                        .header("X-Staff-Session", token))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isConflict())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.code")
+                        .value("WEBSITE_MEDIA_STORAGE_MODE_CONFLICT"));
+    }
+
+    @Test
+    void restrictsStorageMigrationToHeadquartersAdministrators() throws Exception {
+        String token = staffAccess.login("media-branch@example.com", "branch-password").token();
+        var mockMvc = MockMvcBuilders.webAppContextSetup(context).build();
+
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .get("/api/staff/website/media/storage-migration")
+                        .header("X-Staff-Session", token))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/api/staff/website/media/storage-migration/backfill")
+                        .header("X-Staff-Session", token))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
     }
 
     @Test

@@ -6,6 +6,7 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.ArrayList;
 import java.util.Set;
 import java.util.TreeSet;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -15,6 +16,7 @@ import team.hotelchain.staff.StaffAccessService;
 import team.hotelchain.webcontent.storage.WebsiteMediaObjectMetadata;
 import team.hotelchain.webcontent.storage.WebsiteMediaStorageGateway;
 import team.hotelchain.webcontent.storage.WebsiteMediaStorageKey;
+import team.hotelchain.webcontent.storage.WebsiteMediaStorageProperties;
 
 @Service
 public class WebsiteMediaStorageAuditService {
@@ -24,16 +26,19 @@ public class WebsiteMediaStorageAuditService {
     private final StaffAccessService access;
     private final Clock clock;
     private final WebsiteMediaStorageGateway storage;
+    private final WebsiteMediaStorageProperties properties;
 
     public WebsiteMediaStorageAuditService(
             JdbcTemplate jdbc,
             StaffAccessService access,
             Clock clock,
-            WebsiteMediaStorageGateway storage) {
+            WebsiteMediaStorageGateway storage,
+            WebsiteMediaStorageProperties properties) {
         this.jdbc = jdbc;
         this.access = access;
         this.clock = clock;
         this.storage = storage;
+        this.properties = properties;
     }
 
     @Transactional(readOnly = true)
@@ -53,26 +58,52 @@ public class WebsiteMediaStorageAuditService {
                 .map(this::relativeStorageKey)
                 .forEach(expectedStorageKeys::add);
 
+        Instant staleBefore = checkedAt.toInstant().minus(STALE_TEMPORARY_FILE_AGE);
+        List<WebsiteMediaStoreAudit> stores = new ArrayList<>();
+        for (String storeName : storage.storeNames()) {
+            stores.add(auditStore(storeName, expectedStorageKeys, staleBefore));
+        }
+        String preferredStore = properties.getMode() == team.hotelchain.webcontent.storage.WebsiteMediaStorageMode.S3_PRIMARY
+                ? "s3" : "local";
+        WebsiteMediaStoreAudit preferred = stores.stream()
+                .filter(store -> store.storeName().equals(preferredStore))
+                .findFirst()
+                .orElseThrow();
+        return new WebsiteMediaStorageAudit(
+                checkedAt,
+                stores.stream().allMatch(WebsiteMediaStoreAudit::healthy),
+                preferred.missingStorageKeys(),
+                preferred.orphanStorageKeys(),
+                preferred.staleTemporaryStorageKeys(),
+                modeName(),
+                List.copyOf(stores));
+    }
+
+    private WebsiteMediaStoreAudit auditStore(
+            String storeName,
+            Set<String> expectedStorageKeys,
+            Instant staleBefore) {
         Set<String> actualStorageKeys = new TreeSet<>();
         Set<String> orphanStorageKeys = new TreeSet<>();
         Set<String> staleTemporaryStorageKeys = new TreeSet<>();
-        Instant staleBefore = checkedAt.toInstant().minus(STALE_TEMPORARY_FILE_AGE);
-
-        storage.list("local").forEach(metadata -> classifyFile(
+        storage.list(storeName).forEach(metadata -> classifyFile(
                 metadata, expectedStorageKeys, actualStorageKeys,
                 orphanStorageKeys, staleTemporaryStorageKeys, staleBefore));
-
-        List<String> missingStorageKeys = expectedStorageKeys.stream()
+        List<String> missing = expectedStorageKeys.stream()
                 .filter(key -> !actualStorageKeys.contains(key))
                 .toList();
-        List<String> orphanKeys = List.copyOf(orphanStorageKeys);
-        List<String> staleKeys = List.copyOf(staleTemporaryStorageKeys);
-        return new WebsiteMediaStorageAudit(
-                checkedAt,
-                missingStorageKeys.isEmpty() && orphanKeys.isEmpty() && staleKeys.isEmpty(),
-                missingStorageKeys,
-                orphanKeys,
-                staleKeys);
+        List<String> orphan = List.copyOf(orphanStorageKeys);
+        List<String> stale = List.copyOf(staleTemporaryStorageKeys);
+        return new WebsiteMediaStoreAudit(
+                storeName,
+                missing.isEmpty() && orphan.isEmpty() && stale.isEmpty(),
+                missing,
+                orphan,
+                stale);
+    }
+
+    private String modeName() {
+        return properties.getMode().name().toLowerCase().replace('_', '-');
     }
 
     private void classifyFile(
