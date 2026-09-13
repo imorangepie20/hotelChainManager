@@ -95,6 +95,16 @@ test("keeps the full Korean desktop navigation on one line at 1186px", async ({ 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 
+test("keeps Korean hero title words intact at 390px", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await routeKoreanHeaderPage(page);
+
+  await page.goto(`${customerUrl}/stays/seoraksan`);
+  const heading = page.locator("#hero-title");
+  await expect(heading).toBeVisible();
+  await expect(heading).toHaveCSS("word-break", "keep-all");
+});
+
 test("aligns the desktop booking lookup and active locale indicators", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 844 });
   await routeKoreanHeaderPage(page);
