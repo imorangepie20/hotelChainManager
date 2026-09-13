@@ -90,6 +90,12 @@ export type StaffReservationGuestUpdateResult = {
   guestEmail: string;
 };
 
+export type StaffReservationPartyUpdateResult = {
+  reservationId: string;
+  adults: number;
+  children: number;
+};
+
 
 type SessionResponse = { token: string; staff: StaffPrincipal };
 
@@ -542,6 +548,28 @@ export async function updateStaffReservationGuest(
     throw new StaffApiError(error.message ?? "예약자 정보를 수정하지 못했습니다.", response.status, error.code);
   }
   return response.json() as Promise<StaffReservationGuestUpdateResult>;
+}
+
+export async function updateStaffReservationParty(
+  token: string,
+  reservationId: string,
+  idempotencyKey: string,
+  party: { adults: number; children: number },
+): Promise<StaffReservationPartyUpdateResult> {
+  const response = await fetch(`/api/staff/reservations/${reservationId}/party`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Staff-Session": token,
+      "Idempotency-Key": idempotencyKey,
+    },
+    body: JSON.stringify(party),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(error.message ?? "투숙 인원을 변경하지 못했습니다.", response.status, error.code);
+  }
+  return response.json() as Promise<StaffReservationPartyUpdateResult>;
 }
 
 type WebsiteMediaAssetResponse = Omit<WebsiteMediaAsset, "variants"> & { variants?: WebsiteMediaVariant[] };

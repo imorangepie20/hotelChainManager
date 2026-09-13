@@ -36,11 +36,13 @@ import {
   type StaffCancellationPreview,
   type StaffPrincipal,
   type StaffReservationGuestUpdateResult,
+  type StaffReservationPartyUpdateResult,
   type RoomReassignmentOptions,
   type RoomReassignmentResult,
   type StaffReservationSearchView,
   type StaffReservationSummary,
   updateStaffReservationGuest,
+  updateStaffReservationParty,
 } from "@/lib/staff-api";
 
 const hotels = [
@@ -245,6 +247,12 @@ export function ReservationManagement() {
     setRefreshVersion((version) => version + 1);
   }
 
+  function partyUpdated(result: StaffReservationPartyUpdateResult) {
+    setNotice(`투숙 인원을 성인 ${result.adults}명 · 아동 ${result.children}명으로 변경했습니다.`);
+    setSelectedReservation(null);
+    setRefreshVersion((version) => version + 1);
+  }
+
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-end">
@@ -341,6 +349,7 @@ export function ReservationManagement() {
         onGuestDetailsUpdated={guestDetailsUpdated}
         onRoomAssigned={roomAssigned}
         onRoomReassigned={roomReassigned}
+        onPartyUpdated={partyUpdated}
         onRequestCancellation={requestCancellation}
         onOpenChange={(open) => { if (!open) setSelectedReservation(null); }}
       />
@@ -391,6 +400,7 @@ function ReservationDetail({
   onGuestDetailsUpdated,
   onRoomAssigned,
   onRoomReassigned,
+  onPartyUpdated,
   onRequestCancellation,
   onOpenChange,
 }: {
@@ -401,6 +411,7 @@ function ReservationDetail({
   onGuestDetailsUpdated: (result: StaffReservationGuestUpdateResult) => void;
   onRoomAssigned: (roomNumber: string) => void;
   onRoomReassigned: (result: RoomReassignmentResult) => void;
+  onPartyUpdated: (result: StaffReservationPartyUpdateResult) => void;
   onRequestCancellation: (reservation: StaffReservationSummary) => Promise<void>;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -421,7 +432,7 @@ function ReservationDetail({
             <Detail label="배정 객실" value={reservation.assignedRoomNumbers.length ? `${reservation.assignedRoomNumbers.join(", ")}호` : "아직 배정되지 않음"} />
             <Detail label="결제 금액" value={money(reservation.totalKrw, reservation.currency)} />
           </dl>
-          <p className="text-xs text-muted-foreground">날짜·객실·인원 변경은 아직 지원하지 않습니다. 체크인·체크아웃은 오늘의 운영에서 처리하세요.</p>
+          <p className="text-xs text-muted-foreground">날짜·객실 유형·객실 수 변경은 아직 지원하지 않습니다. 체크인·체크아웃은 오늘의 운영에서 처리하세요.</p>
           {cancellationError && (
             <p role="alert" className="text-sm text-destructive">{cancellationError}</p>
           )}
@@ -432,6 +443,7 @@ function ReservationDetail({
                 <ReservationRoomReassignment reservation={reservation} onReassigned={onRoomReassigned} />
               )}
               <ReservationGuestEditor reservation={reservation} onUpdated={onGuestDetailsUpdated} />
+              <ReservationPartyEditor reservation={reservation} onUpdated={onPartyUpdated} />
               <div className="flex justify-end">
                 <Button ref={cancellationTriggerRef} variant="destructive" disabled={checkingCancellation} onClick={() => void onRequestCancellation(reservation)}>
                   {checkingCancellation ? "취소 조건 확인 중" : "예약 취소"}
@@ -768,6 +780,118 @@ function ReservationGuestEditor({
       <div className="flex flex-wrap justify-end gap-2">
         <Button type="button" variant="ghost" disabled={saving} onClick={stopEditing}>수정 취소</Button>
         <Button type="submit" disabled={!canSave || saving}>{saving ? "저장 중" : "예약자 정보 저장"}</Button>
+      </div>
+    </form>
+  );
+}
+
+function ReservationPartyEditor({
+  reservation,
+  onUpdated,
+}: {
+  reservation: StaffReservationSummary;
+  onUpdated: (result: StaffReservationPartyUpdateResult) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [adults, setAdults] = useState(String(reservation.adults));
+  const [children, setChildren] = useState(String(reservation.children));
+  const [idempotencyKey, setIdempotencyKey] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const adultCount = Number(adults);
+  const childCount = Number(children);
+  const canSave = Number.isInteger(adultCount)
+    && adultCount >= 1
+    && Number.isInteger(childCount)
+    && childCount >= 0
+    && (adultCount !== reservation.adults || childCount !== reservation.children);
+
+  function beginEditing() {
+    setAdults(String(reservation.adults));
+    setChildren(String(reservation.children));
+    setIdempotencyKey(window.crypto.randomUUID());
+    setError(null);
+    setEditing(true);
+  }
+
+  function stopEditing() {
+    if (saving) return;
+    setEditing(false);
+    setError(null);
+  }
+
+  function changeValue(setValue: (value: string) => void, value: string) {
+    setValue(value);
+    setIdempotencyKey(window.crypto.randomUUID());
+    setError(null);
+  }
+
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const token = window.localStorage.getItem("hotel-chain-staff-session");
+    if (!token || !idempotencyKey || !canSave) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const result = await updateStaffReservationParty(
+        token,
+        reservation.reservationId,
+        idempotencyKey,
+        { adults: adultCount, children: childCount },
+      );
+      onUpdated(result);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "투숙 인원을 변경하지 못했습니다.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!editing) {
+    return (
+      <div className="flex justify-end">
+        <Button variant="outline" onClick={beginEditing}>투숙 인원 변경</Button>
+      </div>
+    );
+  }
+
+  return (
+    <form className="space-y-4" onSubmit={(event) => void save(event)}>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-2">
+          <Label htmlFor="reservation-party-adults">성인 인원</Label>
+          <Input
+            id="reservation-party-adults"
+            type="number"
+            min={1}
+            step={1}
+            inputMode="numeric"
+            value={adults}
+            disabled={saving}
+            required
+            onChange={(event) => changeValue(setAdults, event.target.value)}
+          />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="reservation-party-children">아동 인원</Label>
+          <Input
+            id="reservation-party-children"
+            type="number"
+            min={0}
+            step={1}
+            inputMode="numeric"
+            value={children}
+            disabled={saving}
+            required
+            onChange={(event) => changeValue(setChildren, event.target.value)}
+          />
+        </div>
+      </div>
+      <p className="text-xs text-muted-foreground">예약한 객실 유형과 객실 수의 최대 수용 인원 안에서 변경할 수 있습니다.</p>
+      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+      <div className="flex flex-wrap justify-end gap-2">
+        <Button type="button" variant="ghost" disabled={saving} onClick={stopEditing}>변경 취소</Button>
+        <Button type="submit" disabled={!canSave || saving}>{saving ? "저장 중" : "투숙 인원 저장"}</Button>
       </div>
     </form>
   );

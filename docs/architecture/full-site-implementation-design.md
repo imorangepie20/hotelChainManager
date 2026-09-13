@@ -234,6 +234,7 @@ CMS는 본사가 개발자 도움 없이 지점 랜딩, 오퍼, 안내, 캠페�
 | GET | `/api/staff/reservations/{id}/cancellation-preview` | 본사 또는 예약 지점. 저장 정책 기준 취소 가능 여부·예상 환불 조회 |
 | POST | `/api/staff/reservations/{id}/cancel` | 본사 또는 예약 지점. 멱등 키로 취소·환불·재고 복구 후 직원 감사 기록 |
 | PATCH | `/api/staff/reservations/{id}/guest` | 본사 또는 예약 지점. 확정 예약의 이름·이메일만 멱등 정정하고 직원 감사 기록 |
+| PATCH | `/api/staff/reservations/{id}/party` | 본사 또는 예약 지점. 확정 예약의 성인·아동 수를 수용 인원 안에서 멱등 변경하고 직원 감사 기록 |
 | POST | `/api/staff/reservations/{id}/assignments` | 본사 또는 소속 지점 |
 | GET | `/api/staff/reservations/{id}/room-reassignment-options` | 본사 또는 예약 지점. 현재 배정과 같은 유형의 변경 후보 조회 |
 | PATCH | `/api/staff/reservations/{id}/assignments/{physicalRoomId}` | 본사 또는 예약 지점. 확정 예약의 객실 한 실을 멱등 변경하고 직원 감사 기록 |
