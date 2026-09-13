@@ -1,6 +1,7 @@
 package team.hotelchain.operations;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -86,6 +87,34 @@ class StaffOperationsIntegrationTest {
                 .singleElement()
                 .extracting(AssignableRoom::roomNumber)
                 .isEqualTo("101");
+    }
+
+    @Test
+    void repeatingTheSameRoomAssignmentAfterCheckInDoesNotCreateAConflictOrDuplicate() {
+        StaffSessionView session = staffAccess.login("operations@example.com", "password");
+
+        operations.assign(session.token(), RESERVATION, ROOM);
+        operations.checkIn(session.token(), RESERVATION);
+        operations.assign(session.token(), RESERVATION, ROOM);
+
+        assertThat(jdbc.queryForObject("""
+                select count(*) from reservation_room_assignment
+                where reservation_id = ? and physical_room_id = ?
+                """, Integer.class, RESERVATION, ROOM)).isEqualTo(1);
+    }
+
+    @Test
+    void rejectsANonCleanRoomEvenWhenItWasPreviouslyListedAsAssignable() {
+        StaffSessionView session = staffAccess.login("operations@example.com", "password");
+        assertThat(operations.assignableRooms(session.token(), RESERVATION)).hasSize(1);
+        jdbc.update("update physical_room set housekeeping_status = 'NEEDS_CLEANING' where id = ?", ROOM);
+
+        assertThatThrownBy(() -> operations.assign(session.token(), RESERVATION, ROOM))
+                .isInstanceOf(team.hotelchain.reservation.BusinessConflictException.class)
+                .hasMessage("청결 상태인 객실만 배정할 수 있습니다.");
+        assertThat(jdbc.queryForObject("""
+                select count(*) from reservation_room_assignment where reservation_id = ?
+                """, Integer.class, RESERVATION)).isZero();
     }
 
     @Test

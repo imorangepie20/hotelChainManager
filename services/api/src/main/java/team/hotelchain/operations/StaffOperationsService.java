@@ -24,12 +24,20 @@ public class StaffOperationsService {
     public void assign(String token, UUID reservationId, UUID physicalRoomId) {
         ReservationOperation reservation = reservation(reservationId);
         staffAccess.requireHotel(token, reservation.hotelId());
-        if (!"CONFIRMED".equals(reservation.status())) {
-            throw new BusinessConflictException("RESERVATION_NOT_ASSIGNABLE", "확정된 예약만 객실을 배정할 수 있습니다.");
-        }
         Room room = room(physicalRoomId);
         if (!reservation.hotelId().equals(room.hotelId()) || !reservation.roomTypeId().equals(room.roomTypeId())) {
             throw new BusinessConflictException("ROOM_NOT_MATCHED", "예약 객실 유형과 일치하는 객실만 배정할 수 있습니다.");
+        }
+        Integer existingAssignment = jdbc.queryForObject("""
+                select count(*) from reservation_room_assignment
+                where reservation_id = ? and physical_room_id = ?
+                """, Integer.class, reservationId, physicalRoomId);
+        if (existingAssignment != null && existingAssignment > 0) return;
+        if (!"CONFIRMED".equals(reservation.status())) {
+            throw new BusinessConflictException("RESERVATION_NOT_ASSIGNABLE", "확정된 예약만 객실을 배정할 수 있습니다.");
+        }
+        if (!"CLEAN".equals(room.housekeepingStatus())) {
+            throw new BusinessConflictException("ROOM_NOT_CLEAN", "청결 상태인 객실만 배정할 수 있습니다.");
         }
         Integer assignedCount = jdbc.queryForObject("select count(*) from reservation_room_assignment where reservation_id = ?", Integer.class, reservationId);
         if (assignedCount != null && assignedCount >= reservation.rooms()) {

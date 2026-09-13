@@ -241,3 +241,104 @@ test("lets a branch employee correct confirmed reservation guest details", async
     { guestName: "김하늘 수정", guestEmail: "updated@example.com" },
   ]);
 });
+
+test("lets a branch employee assign the remaining room from reservation details", async ({ page }) => {
+  const assignedRoomNumbers = ["701"];
+  const assignmentMethods: string[] = [];
+  const assignmentBodies: unknown[] = [];
+  await page.addInitScript((hotelId) => {
+    localStorage.setItem("hotel-chain-staff-session", "test-session-token");
+    localStorage.setItem("hotel-chain-staff", JSON.stringify({
+      id: "staff",
+      email: "sokcho@hotel-chain.local",
+      displayName: "속초 직원",
+      role: "BRANCH_STAFF",
+      hotelId,
+    }));
+  }, SOKCHO);
+  await page.route("**/api/staff/me", (route) => route.fulfill({ status: 200, contentType: "application/json", body: "{}" }));
+  await page.route("**/api/staff/hotels/*/reservations?*", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      hotelId: SOKCHO,
+      date: "2026-09-13",
+      truncated: false,
+      reservations: [{
+        reservationId: "42000000-0000-0000-0000-000000000001",
+        guestName: "김하늘",
+        guestEmail: "guest@example.com",
+        roomTypeName: "디럭스 오션",
+        ratePlanName: "조식 포함",
+        checkIn: "2026-09-13",
+        checkOut: "2026-09-15",
+        adults: 4,
+        children: 0,
+        rooms: 2,
+        status: "CONFIRMED",
+        totalKrw: 840000,
+        currency: "KRW",
+        assignedRoomNumbers,
+      }],
+    }),
+  }));
+  await page.route("**/api/staff/reservations/*/assignable-rooms", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify([
+      { id: "room-702", roomNumber: "702" },
+      { id: "room-703", roomNumber: "703" },
+    ]),
+  }));
+  await page.route("**/api/staff/reservations/*/assignments", (route) => {
+    assignmentMethods.push(route.request().method());
+    assignmentBodies.push(route.request().postDataJSON());
+    if (assignmentBodies.length === 1) {
+      assignedRoomNumbers.push("702");
+      return route.fulfill({
+        status: 502,
+        contentType: "application/json",
+        body: JSON.stringify({ message: "객실 배정에 실패했습니다. 다시 시도해 주세요." }),
+      });
+    }
+    return route.fulfill({ status: 204 });
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/dashboard/reservations");
+  await page.getByRole("button", { name: "김하늘 예약 상세" }).press("Enter");
+  const detail = page.getByRole("dialog");
+  const openAssignment = detail.getByRole("button", { name: "객실 추가 배정" });
+  await expect(openAssignment).toContainText("1/2");
+  await openAssignment.press("Enter");
+  const roomSelect = detail.getByLabel("배정할 객실");
+  await roomSelect.focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(roomSelect).toHaveValue("room-703");
+  await page.keyboard.press("ArrowUp");
+  await expect(roomSelect).toHaveValue("room-702");
+  const assignButton = detail.getByRole("button", { name: "선택 객실 배정" });
+  await assignButton.press("Enter");
+  await expect(detail.getByRole("alert")).toContainText("객실 배정에 실패했습니다");
+
+  await detail.getByRole("button", { name: "예약자 정보 수정" }).press("Enter");
+  const dialogBox = await detail.boundingBox();
+  expect(dialogBox).not.toBeNull();
+  expect(dialogBox!.y).toBeGreaterThanOrEqual(16);
+  expect(dialogBox!.y + dialogBox!.height).toBeLessThanOrEqual(828);
+  const cancellationButton = detail.getByRole("button", { name: "예약 취소", exact: true });
+  await detail.getByLabel("예약자 이름").focus();
+  for (let index = 0; index < 6 && !await cancellationButton.evaluate((button) => button === document.activeElement); index += 1) {
+    await page.keyboard.press("Tab");
+  }
+  await expect(cancellationButton).toBeFocused();
+  await expect(cancellationButton).toBeInViewport();
+
+  await assignButton.press("Enter");
+
+  await expect(page.getByRole("status", { name: "예약 처리 결과" })).toContainText("702호를 배정했습니다");
+  await page.getByRole("button", { name: "김하늘 예약 상세" }).press("Enter");
+  const refreshedDetail = page.getByRole("dialog");
+  await expect(refreshedDetail).toContainText("701, 702호");
+  await expect(refreshedDetail.getByRole("button", { name: "객실 추가 배정" })).toHaveCount(0);
+  expect(assignmentMethods).toEqual(["POST", "POST"]);
+  expect(assignmentBodies).toEqual([{ physicalRoomId: "room-702" }, { physicalRoomId: "room-702" }]);
+});
