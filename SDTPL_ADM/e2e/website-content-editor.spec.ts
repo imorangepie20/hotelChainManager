@@ -1029,6 +1029,10 @@ test.beforeEach(async ({ page }) => {
 test("미디어 variant 상태를 갱신하고 실패 항목을 다시 시도한다", async ({ page }) => {
   let catalogRequestCount = 0;
   const retryRequests: string[] = [];
+  let releaseRetryFailure!: () => void;
+  let releaseRetrySuccess!: () => void;
+  const retryFailure = new Promise<void>((resolve) => { releaseRetryFailure = resolve; });
+  const retrySuccess = new Promise<void>((resolve) => { releaseRetrySuccess = resolve; });
   const pending = mediaAsset({
     id: UPLOADED_ASSET,
     displayName: "변환 중인 제주 이미지",
@@ -1037,6 +1041,16 @@ test("미디어 variant 상태를 갱신하고 실패 항목을 다시 시도한
     variants: [{
       id: "variant-640", format: "WEBP", targetWidth: 640, status: "PENDING", deliveryUrl: null,
       mimeType: null, byteSize: null, width: null, height: null, attemptCount: 0, lastError: null, updatedAt: "2026-09-13T00:00:00Z",
+    }],
+  });
+  const processing = mediaAsset({
+    id: UPLOADED_ASSET,
+    displayName: "변환 중인 제주 이미지",
+    deliveryUrl: `/api/website/media/${UPLOADED_ASSET}/content`,
+    usageCount: 0,
+    variants: [{
+      id: "variant-640", format: "WEBP", targetWidth: 640, status: "PROCESSING", deliveryUrl: null,
+      mimeType: null, byteSize: null, width: null, height: null, attemptCount: 1, lastError: null, updatedAt: "2026-09-13T00:00:02Z",
     }],
   });
   const terminal = mediaAsset({
@@ -1055,14 +1069,39 @@ test("미디어 variant 상태를 갱신하고 실패 항목을 다시 시도한
       },
     ],
   });
+  const otherFailed = mediaAsset({
+    id: "other-failed-asset",
+    displayName: "다른 실패 이미지",
+    deliveryUrl: "/images/sokcho-coast-hero.png",
+    usageCount: 0,
+    variants: [{
+      id: "other-variant-1280", format: "WEBP", targetWidth: 1280, status: "FAILED", deliveryUrl: null,
+      mimeType: null, byteSize: null, width: null, height: null, attemptCount: 1, lastError: "이전 변환 실패", updatedAt: "2026-09-13T00:00:04Z",
+    }],
+  });
+  const undersized = mediaAsset({
+    id: "undersized-asset",
+    displayName: "작은 원본 이미지",
+    deliveryUrl: "/images/sokcho-coast-hero.png",
+    width: 320,
+    height: 180,
+    usageCount: 0,
+    variants: [],
+  });
 
   await page.unroute("**/api/staff/website/media?includeArchived=true");
   await page.route("**/api/staff/website/media?includeArchived=true", (route) => {
     catalogRequestCount += 1;
-    return route.fulfill({ contentType: "application/json", body: JSON.stringify([catalogRequestCount === 1 ? pending : terminal]) });
+    const current = catalogRequestCount === 1 ? pending : catalogRequestCount === 2 ? processing : terminal;
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify([current, otherFailed, undersized]) });
   });
-  await page.route(`**/api/staff/website/media/${UPLOADED_ASSET}/variants/1280/retry`, (route) => {
+  await page.route(`**/api/staff/website/media/${UPLOADED_ASSET}/variants/1280/retry`, async (route) => {
     retryRequests.push(`${UPLOADED_ASSET}:1280`);
+    if (retryRequests.length === 1) {
+      await retryFailure;
+      return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ message: "변환 재시도를 시작하지 못했습니다." }) });
+    }
+    await retrySuccess;
     return route.fulfill({ contentType: "application/json", body: JSON.stringify(pending) });
   });
 
@@ -1072,10 +1111,32 @@ test("미디어 variant 상태를 갱신하고 실패 항목을 다시 시도한
 
   const picker = page.getByRole("dialog", { name: "미디어 선택" });
   await expect(picker.getByText("640px · 변환 대기 중")).toBeVisible();
-  await expect(picker.getByText("640 × 360 · WebP")).toBeVisible({ timeout: 5_000 });
+  await picker.getByLabel("선택한 자산 이름").fill("편집 중인 자산명");
+  await expect.poll(() => catalogRequestCount).toBeGreaterThanOrEqual(2);
+  await expect(picker.getByText("640px · 변환 중")).toBeVisible();
+  await expect.poll(() => catalogRequestCount).toBeGreaterThanOrEqual(3);
+  await expect(picker.getByText("640 × 360 · WebP · 34 KB")).toBeVisible();
   await expect(picker.getByText("1280px · 변환 실패 · 3/3회")).toBeVisible();
+  await expect(picker.getByLabel("선택한 자산 이름")).toHaveValue("편집 중인 자산명");
+
+  const catalogRequestsAfterTerminal = catalogRequestCount;
+  await page.waitForTimeout(2_500);
+  expect(catalogRequestCount).toBe(catalogRequestsAfterTerminal);
+
   await picker.getByRole("button", { name: "1280px 다시 시도" }).click();
-  expect(retryRequests).toEqual([`${UPLOADED_ASSET}:1280`]);
+  await expect(picker.getByRole("button", { name: "1280px 다시 시도 중" })).toBeDisabled();
+  releaseRetryFailure();
+  await expect(picker.getByRole("alert")).toContainText("변환 재시도를 시작하지 못했습니다.");
+
+  await picker.getByRole("button", { name: "1280px 다시 시도" }).click();
+  await picker.getByRole("button", { name: "다른 실패 이미지 선택" }).click();
+  await expect(picker.getByRole("button", { name: "1280px 다시 시도" })).toBeEnabled();
+  releaseRetrySuccess();
+  await expect(picker.getByText("다른 실패 이미지")).toBeVisible();
+
+  await picker.getByRole("button", { name: "작은 원본 이미지 선택" }).click();
+  await expect(picker.getByText("원본보다 큰 이미지는 생성하지 않습니다.")).toBeVisible();
+  expect(retryRequests).toEqual([`${UPLOADED_ASSET}:1280`, `${UPLOADED_ASSET}:1280`]);
 
   await picker.getByRole("button", { name: "취소", exact: true }).click();
   const catalogRequestsAfterClose = catalogRequestCount;
