@@ -19,6 +19,7 @@ import org.flywaydb.core.api.MigrationVersion;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.SingleConnectionDataSource;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -133,6 +134,39 @@ class WebsiteMediaVariantIntegrationTest {
         assertThat(catalogAsset.variants().getFirst().deliveryUrl())
                 .isEqualTo("/api/website/media/" + asset.id() + "/variants/640.webp");
         assertThat(catalogAsset.variants().getLast().deliveryUrl()).isNull();
+    }
+
+    @Test
+    void rejectsReadyVariantsWithIncompleteResultMetadata() throws IOException {
+        WebsiteMediaAsset asset = media.upload(
+                headquartersToken(), imageFile(640, 360), "불완전 variant 원본", "불완전 variant 설명");
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> jdbc.update("""
+                update website_media_variant
+                   set status = 'READY', storage_key = ?, mime_type = null,
+                       byte_size = null, width = null, height = null
+                 where asset_id = ? and target_width = 640
+                """, asset.id() + "-640.webp", asset.id()))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void doesNotEnqueueBundledAssetsWhenRestored() {
+        String token = headquartersToken();
+        WebsiteMediaAsset bundled = media.catalog(token, true).stream()
+                .filter(asset -> asset.id().equals(WebsiteMediaService.BUNDLED_ASSET_ID))
+                .findFirst()
+                .orElseThrow();
+        jdbc.update("update website_media_asset set status = 'ARCHIVED', archived_at = current_timestamp where id = ?",
+                bundled.id());
+
+        WebsiteMediaAsset restored = media.restore(
+                token, bundled.id(), new WebsiteMediaVersionRequest(bundled.version()));
+
+        assertThat(restored.variants()).isEmpty();
+        assertThat(jdbc.queryForObject(
+                "select count(*) from website_media_variant where asset_id = ?", Integer.class, bundled.id()))
+                .isZero();
     }
 
     private String headquartersToken() {

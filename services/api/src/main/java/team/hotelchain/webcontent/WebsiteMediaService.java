@@ -281,7 +281,9 @@ public class WebsiteMediaService {
                  where id = ? and status = ? and version = ?
                 """, nextStatus, nextStatus, actor.id(), mediaId, expectedStatus, request.expectedVersion());
         if (updated == 0) throw versionConflict();
-        if ("ACTIVE".equals(nextStatus)) variants.enqueueEligible(mediaId, current.width());
+        if ("ACTIVE".equals(nextStatus) && "UPLOADED".equals(current.origin())) {
+            variants.enqueueEligible(mediaId, current.width());
+        }
         return catalogAsset(mediaId);
     }
 

@@ -16,8 +16,8 @@ CREATE TABLE website_media_variant (
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (asset_id, format, target_width),
-    CHECK ((status = 'READY') = (storage_key IS NOT NULL AND mime_type = 'image/webp'
-        AND byte_size > 0 AND width = target_width AND height > 0))
+    CHECK ((status = 'READY') = COALESCE(storage_key IS NOT NULL AND mime_type = 'image/webp'
+        AND byte_size > 0 AND width = target_width AND height > 0, FALSE))
 );
 
 CREATE INDEX website_media_variant_work_idx
