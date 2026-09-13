@@ -10,38 +10,62 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicReference;
 import javax.imageio.ImageIO;
 import javax.sql.DataSource;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.MigrationVersion;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.SingleConnectionDataSource;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.web.multipart.MultipartFile;
 import team.hotelchain.staff.StaffAccessService;
 
-@SpringBootTest
+@SpringBootTest(properties = "website.media.variant-job-enabled=false")
 @Transactional
+@Import(WebsiteMediaVariantIntegrationTest.ClockConfiguration.class)
 class WebsiteMediaVariantIntegrationTest {
+    private static final Instant START = Instant.parse("2026-09-13T00:00:00Z");
+
     @org.springframework.beans.factory.annotation.Autowired JdbcTemplate jdbc;
     @org.springframework.beans.factory.annotation.Autowired DataSource dataSource;
     @org.springframework.beans.factory.annotation.Autowired StaffAccessService staffAccess;
     @org.springframework.beans.factory.annotation.Autowired WebsiteMediaService media;
     @org.springframework.beans.factory.annotation.Autowired WebsiteMediaVariantService variants;
+    @org.springframework.beans.factory.annotation.Autowired WebsiteMediaVariantEncoder encoder;
+    @org.springframework.beans.factory.annotation.Autowired TestClock clock;
+    WebsiteMediaVariantJob job;
 
     @BeforeEach
     void seed() throws IOException {
+        removeCommittedWorkerFixtures();
         deleteStorage();
+        clock.reset();
         jdbc.update("insert into staff_member (id, email, display_name, password_hash, role) values (?, ?, ?, ?, 'HQ_ADMIN')",
                 UUID.randomUUID(), "variant-hq@example.com", "Variant 본사 관리자",
                 new BCryptPasswordEncoder().encode("hq-password"));
+        job = new WebsiteMediaVariantJob(variants, encoder, storageDirectory().toString());
     }
 
     @Test
@@ -169,8 +193,149 @@ class WebsiteMediaVariantIntegrationTest {
                 .isZero();
     }
 
+    @Test
+    void claimsQueuedVariantsOnceAndCompletesOneAsReady() throws Exception {
+        WebsiteMediaAsset asset = uploadImage(1600, 900);
+
+        assertThat(variants.claimNext()).get().extracting(WebsiteMediaVariantService.VariantClaim::targetWidth)
+                .isEqualTo(640);
+        assertThat(variants.claimNext()).get().extracting(WebsiteMediaVariantService.VariantClaim::targetWidth)
+                .isEqualTo(1280);
+        assertThat(variants.claimNext()).isEmpty();
+
+        resetBothRowsToPending(asset.id());
+        assertThat(job.processNext()).isTrue();
+
+        VariantResultRow result = jdbc.queryForObject("""
+                select status, storage_key, mime_type, byte_size, width, height
+                  from website_media_variant
+                 where asset_id = ? and target_width = 640
+                """, (rs, rowNumber) -> new VariantResultRow(
+                rs.getString("status"), rs.getString("storage_key"), rs.getString("mime_type"),
+                rs.getLong("byte_size"), rs.getInt("width"), rs.getInt("height")), asset.id());
+        assertThat(result).isEqualTo(new VariantResultRow(
+                "READY", asset.id() + "-640.webp", "image/webp",
+                Files.size(storageDirectory().resolve(asset.id() + "-640.webp")), 640, 360));
+        assertThat(ImageIO.read(storageDirectory().resolve(result.storageKey()).toFile())).isNotNull();
+    }
+
+    @Test
+    void retriesFailuresAfterThirtySecondsAndTwoMinutesThenStopsAtThreeAttempts() throws Exception {
+        WebsiteMediaAsset asset = uploadImage(640, 360);
+        Files.delete(storageDirectory().resolve(asset.id() + ".png"));
+
+        assertThat(job.processNext()).isTrue();
+        assertFailure(asset.id(), 1, START.plusSeconds(30));
+
+        clock.advanceSeconds(29);
+        assertThat(job.processNext()).isFalse();
+        clock.advanceSeconds(1);
+        assertThat(job.processNext()).isTrue();
+        assertFailure(asset.id(), 2, START.plusSeconds(150));
+
+        clock.advanceSeconds(120);
+        assertThat(job.processNext()).isTrue();
+        FailureRow terminal = failureRow(asset.id());
+        assertThat(terminal.status()).isEqualTo("FAILED");
+        assertThat(terminal.attemptCount()).isEqualTo(3);
+        assertThat(terminal.nextAttemptAt()).isNull();
+        assertThat(terminal.lastError()).isNotBlank().hasSizeLessThanOrEqualTo(500);
+        assertThat(job.processNext()).isFalse();
+    }
+
+    @Test
+    void reclaimsOnlyExpiredProcessingVariantsBelowTheAttemptLimit() throws Exception {
+        WebsiteMediaAsset asset = uploadImage(640, 360);
+        jdbc.update("""
+                update website_media_variant
+                   set status = 'PROCESSING', attempt_count = 2, lease_expires_at = ?, next_attempt_at = null
+                 where asset_id = ? and target_width = 640
+                """, OffsetDateTime.ofInstant(START.minusSeconds(1), ZoneOffset.UTC), asset.id());
+
+        assertThat(variants.claimNext()).get()
+                .extracting(WebsiteMediaVariantService.VariantClaim::attemptCount).isEqualTo(3);
+
+        jdbc.update("""
+                update website_media_variant
+                   set status = 'PROCESSING', attempt_count = 3, lease_expires_at = ?, next_attempt_at = null
+                 where asset_id = ? and target_width = 640
+                """, OffsetDateTime.ofInstant(START.minusSeconds(1), ZoneOffset.UTC), asset.id());
+        assertThat(variants.claimNext()).isEmpty();
+        FailureRow terminal = failureRow(asset.id());
+        assertThat(terminal.status()).isEqualTo("FAILED");
+        assertThat(terminal.attemptCount()).isEqualTo(3);
+        assertThat(terminal.nextAttemptAt()).isNull();
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void concurrentClaimsNeverReturnTheSameVariant() throws Exception {
+        try {
+            uploadImage(1600, 900);
+            CountDownLatch start = new CountDownLatch(1);
+            try (var executor = Executors.newFixedThreadPool(2)) {
+                Future<Optional<WebsiteMediaVariantService.VariantClaim>> first =
+                        executor.submit(() -> { start.await(); return variants.claimNext(); });
+                Future<Optional<WebsiteMediaVariantService.VariantClaim>> second =
+                        executor.submit(() -> { start.await(); return variants.claimNext(); });
+                start.countDown();
+
+                assertThat(first.get()).isPresent();
+                assertThat(second.get()).isPresent();
+                assertThat(List.of(first.get().orElseThrow().variantId(), second.get().orElseThrow().variantId()))
+                        .doesNotHaveDuplicates();
+            }
+        } finally {
+            removeCommittedWorkerFixtures();
+        }
+    }
+
     private String headquartersToken() {
         return staffAccess.login("variant-hq@example.com", "hq-password").token();
+    }
+
+    private WebsiteMediaAsset uploadImage(int width, int height) throws IOException {
+        return media.upload(headquartersToken(), imageFile(width, height),
+                "variant-worker-" + UUID.randomUUID(), "variant worker 테스트 이미지");
+    }
+
+    private Path storageDirectory() {
+        return Path.of(System.getProperty("java.io.tmpdir"), "hotel-chain-media").toAbsolutePath().normalize();
+    }
+
+    private void removeCommittedWorkerFixtures() {
+        jdbc.update("delete from website_media_asset where display_name like 'variant-worker-%'");
+        jdbc.update("delete from staff_session where staff_id in (select id from staff_member where email = ?)",
+                "variant-hq@example.com");
+        jdbc.update("delete from staff_member where email = ?", "variant-hq@example.com");
+    }
+
+    private void resetBothRowsToPending(UUID assetId) {
+        jdbc.update("""
+                update website_media_variant
+                   set status = 'PENDING', storage_key = null, mime_type = null, byte_size = null,
+                       width = null, height = null, attempt_count = 0, next_attempt_at = null,
+                       lease_expires_at = null, last_error = null
+                 where asset_id = ?
+                """, assetId);
+    }
+
+    private void assertFailure(UUID assetId, int attemptCount, Instant nextAttemptAt) {
+        FailureRow failure = failureRow(assetId);
+        assertThat(failure.status()).isEqualTo("FAILED");
+        assertThat(failure.attemptCount()).isEqualTo(attemptCount);
+        assertThat(failure.nextAttemptAt())
+                .isEqualTo(OffsetDateTime.ofInstant(nextAttemptAt, ZoneOffset.UTC));
+    }
+
+    private FailureRow failureRow(UUID assetId) {
+        return jdbc.queryForObject("""
+                select status, attempt_count, next_attempt_at, last_error
+                  from website_media_variant
+                 where asset_id = ? and target_width = 640
+                """, (rs, rowNumber) -> new FailureRow(
+                rs.getString("status"), rs.getInt("attempt_count"),
+                rs.getObject("next_attempt_at", OffsetDateTime.class), rs.getString("last_error")), assetId);
     }
 
     private MemoryMultipartFile imageFile(int width, int height) throws IOException {
@@ -231,6 +396,53 @@ class WebsiteMediaVariantIntegrationTest {
     }
 
     private record MigrationVariantRow(UUID assetId, int targetWidth) {
+    }
+
+    private record VariantResultRow(
+            String status, String storageKey, String mimeType, long byteSize, int width, int height) {
+    }
+
+    private record FailureRow(String status, int attemptCount, OffsetDateTime nextAttemptAt, String lastError) {
+    }
+
+    @TestConfiguration
+    static class ClockConfiguration {
+        @Bean
+        @Primary
+        TestClock testClock() {
+            return new TestClock(START);
+        }
+    }
+
+    static final class TestClock extends Clock {
+        private final AtomicReference<Instant> instant;
+
+        TestClock(Instant initial) {
+            instant = new AtomicReference<>(initial);
+        }
+
+        void reset() {
+            instant.set(START);
+        }
+
+        void advanceSeconds(long seconds) {
+            instant.updateAndGet(current -> current.plusSeconds(seconds));
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return instant.get();
+        }
     }
 
     private record MemoryMultipartFile(String originalFilename, String contentType, byte[] bytes) implements MultipartFile {

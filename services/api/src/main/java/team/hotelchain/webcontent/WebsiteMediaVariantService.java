@@ -1,11 +1,16 @@
 package team.hotelchain.webcontent;
 
+import java.time.Clock;
+import java.time.Duration;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -14,11 +19,19 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class WebsiteMediaVariantService {
     private static final List<Integer> TARGET_WIDTHS = List.of(640, 1280);
+    private static final Duration LEASE_DURATION = Duration.ofMinutes(5);
+    private static final String GENERIC_FAILURE = "미디어 variant 생성에 실패했습니다.";
+    private static final Set<String> ALLOWED_FAILURES = Set.of(
+            GENERIC_FAILURE,
+            "원본 미디어 파일을 찾을 수 없습니다.",
+            "미디어 저장 경로가 올바르지 않습니다.");
 
     private final JdbcTemplate jdbc;
+    private final Clock clock;
 
-    public WebsiteMediaVariantService(JdbcTemplate jdbc) {
+    public WebsiteMediaVariantService(JdbcTemplate jdbc, Clock clock) {
         this.jdbc = jdbc;
+        this.clock = clock;
     }
 
     @Transactional
@@ -61,5 +74,98 @@ public class WebsiteMediaVariantService {
             variantsByAsset.computeIfAbsent(assetId, ignored -> new ArrayList<>()).add(variant);
         }, assetIds.toArray());
         return variantsByAsset;
+    }
+
+    @Transactional
+    public Optional<VariantClaim> claimNext() {
+        OffsetDateTime now = now();
+        jdbc.update("""
+                update website_media_variant
+                   set status = 'FAILED', lease_expires_at = null, next_attempt_at = null,
+                       last_error = ?, updated_at = ?
+                 where status = 'PROCESSING' and attempt_count >= 3 and lease_expires_at <= ?
+                """, GENERIC_FAILURE, now, now);
+
+        List<VariantClaim> candidates = jdbc.query("""
+                select variant.id, variant.asset_id, variant.target_width, asset.storage_key,
+                       variant.attempt_count
+                  from website_media_variant variant
+                  join website_media_asset asset on asset.id = variant.asset_id
+                 where asset.status = 'ACTIVE' and asset.origin = 'UPLOADED'
+                   and variant.attempt_count < 3
+                   and (
+                       variant.status = 'PENDING'
+                       or (variant.status = 'FAILED' and variant.next_attempt_at <= ?)
+                       or (variant.status = 'PROCESSING' and variant.lease_expires_at <= ?)
+                   )
+                 order by variant.created_at, variant.target_width
+                 for update of variant skip locked
+                 limit 1
+                """, (rs, rowNumber) -> new VariantClaim(
+                rs.getObject("id", UUID.class),
+                rs.getObject("asset_id", UUID.class),
+                rs.getInt("target_width"),
+                rs.getString("storage_key"),
+                rs.getInt("attempt_count") + 1), now, now);
+        if (candidates.isEmpty()) return Optional.empty();
+
+        VariantClaim claim = candidates.getFirst();
+        jdbc.update("""
+                update website_media_variant
+                   set status = 'PROCESSING', attempt_count = ?, next_attempt_at = null,
+                       lease_expires_at = ?, last_error = null, updated_at = ?
+                 where id = ?
+                """, claim.attemptCount(), now.plus(LEASE_DURATION), now, claim.variantId());
+        return Optional.of(claim);
+    }
+
+    @Transactional
+    public boolean completeReady(
+            UUID variantId,
+            int attemptCount,
+            String storageKey,
+            WebsiteMediaVariantEncoder.Result result) {
+        int updated = jdbc.update("""
+                update website_media_variant
+                   set status = 'READY', storage_key = ?, mime_type = ?, byte_size = ?,
+                       width = ?, height = ?, next_attempt_at = null, lease_expires_at = null,
+                       last_error = null, updated_at = ?
+                 where id = ? and status = 'PROCESSING' and attempt_count = ?
+                """, storageKey, result.mimeType(), result.byteSize(), result.width(), result.height(),
+                now(), variantId, attemptCount);
+        return updated == 1;
+    }
+
+    @Transactional
+    public boolean completeFailed(UUID variantId, int attemptCount, String errorSummary) {
+        OffsetDateTime now = now();
+        OffsetDateTime nextAttemptAt = switch (attemptCount) {
+            case 1 -> now.plusSeconds(30);
+            case 2 -> now.plusMinutes(2);
+            default -> null;
+        };
+        int updated = jdbc.update("""
+                update website_media_variant
+                   set status = 'FAILED', next_attempt_at = ?, lease_expires_at = null,
+                       last_error = ?, updated_at = ?
+                 where id = ? and status = 'PROCESSING' and attempt_count = ?
+                """, nextAttemptAt, allowedFailure(errorSummary), now, variantId, attemptCount);
+        return updated == 1;
+    }
+
+    private OffsetDateTime now() {
+        return OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
+    }
+
+    private String allowedFailure(String errorSummary) {
+        return ALLOWED_FAILURES.contains(errorSummary) ? errorSummary : GENERIC_FAILURE;
+    }
+
+    public record VariantClaim(
+            UUID variantId,
+            UUID assetId,
+            int targetWidth,
+            String sourceStorageKey,
+            int attemptCount) {
     }
 }
