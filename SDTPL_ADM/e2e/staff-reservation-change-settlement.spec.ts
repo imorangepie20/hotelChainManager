@@ -80,6 +80,6 @@ test('응답 유실 재시도에도 같은 token과 key로 고객 링크를 만�
   expect(keys[1]).toBe(keys[0])
   expect(bodies[0]!.publicToken).toMatch(/^[A-Za-z0-9_-]{43}$/)
   expect(bodies[1]).toEqual(bodies[0])
-  await expect(detail.getByLabel('고객 결제 링크')).toHaveValue(/reservation-change-payment#/)
+  await expect(detail.getByRole('textbox', { name: '고객 결제 링크' })).toHaveValue(/reservation-change-payment#/)
   expect(await page.evaluate(() => localStorage.getItem('reservation-change-payment-token'))).toBeNull()
 })
