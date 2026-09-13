@@ -8,6 +8,7 @@ import java.time.Instant;
 import java.util.UUID;
 
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,11 +22,17 @@ public class TestPaymentService {
     private final JdbcTemplate jdbc;
     private final ReservationAccess access;
     private final Clock clock;
+    private final boolean changeSettlementEnabled;
 
-    public TestPaymentService(JdbcTemplate jdbc, ReservationAccess access, Clock clock) {
+    public TestPaymentService(
+            JdbcTemplate jdbc,
+            ReservationAccess access,
+            Clock clock,
+            @Value("${reservation.change.settlement-enabled:false}") boolean changeSettlementEnabled) {
         this.jdbc = jdbc;
         this.access = access;
         this.clock = clock;
+        this.changeSettlementEnabled = changeSettlementEnabled;
     }
 
     @Transactional(noRollbackFor = ReservationExpiredException.class)
@@ -137,6 +144,7 @@ public class TestPaymentService {
     }
 
     private void insertOriginalTransaction(PaymentReservation reservation) {
+        if (!changeSettlementEnabled) return;
         jdbc.update("""
                 INSERT INTO payment_transaction (
                     id, reservation_id, provider, merchant_account, gateway_transaction_id,

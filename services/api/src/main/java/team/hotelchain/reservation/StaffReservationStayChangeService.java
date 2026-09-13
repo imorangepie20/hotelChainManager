@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 import team.hotelchain.reservationchange.ReservationStayQuote;
 import team.hotelchain.reservationchange.ReservationChangeMutationGuard;
 import team.hotelchain.reservationchange.ReservationStayQuoteService;
+import team.hotelchain.reservationchange.ReservationChangePolicy;
 import team.hotelchain.staff.StaffAccessService;
 import team.hotelchain.staff.StaffPrincipal;
 
@@ -29,6 +30,7 @@ public class StaffReservationStayChangeService {
     private final ReservationAccess reservationAccess;
     private final ReservationStayQuoteService quoteService;
     private final ReservationChangeMutationGuard mutationGuard;
+    private final ReservationChangePolicy changePolicy;
     private final Clock clock;
 
     public StaffReservationStayChangeService(
@@ -37,12 +39,14 @@ public class StaffReservationStayChangeService {
             ReservationAccess reservationAccess,
             ReservationStayQuoteService quoteService,
             ReservationChangeMutationGuard mutationGuard,
+            ReservationChangePolicy changePolicy,
             Clock clock) {
         this.jdbc = jdbc;
         this.staffAccess = staffAccess;
         this.reservationAccess = reservationAccess;
         this.quoteService = quoteService;
         this.mutationGuard = mutationGuard;
+        this.changePolicy = changePolicy;
         this.clock = clock;
     }
 
@@ -79,6 +83,10 @@ public class StaffReservationStayChangeService {
             UUID reservationId,
             String idempotencyKey,
             StaffReservationStayChangeRequest request) {
+        if (changePolicy.settlementEnabled()) {
+            throw new BusinessConflictException(
+                    "CHANGE_SETTLEMENT_REQUIRED", "예약 변경 요청과 정산 절차를 이용해 주세요.");
+        }
         StaffPrincipal staff = staffAccess.current(token);
         ValidatedChange change = validateChange(idempotencyKey, request);
         ReservationStay reservation = findReservation(reservationId, true);

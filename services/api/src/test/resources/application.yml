@@ -9,5 +9,5 @@ test-payment:
 
 reservation:
   change:
-    settlement-enabled: true
+    settlement-enabled: false
     gateway: fake
