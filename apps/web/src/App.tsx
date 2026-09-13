@@ -8,6 +8,7 @@ import { destinationContentByRegion, destinationContentFromPublished, type Desti
 import { captureWebsitePreview, storedWebsitePreviewForPath, clearWebsitePreview } from './lib/website-preview'
 import { WebsitePreviewBanner } from './components/website-preview-banner'
 import { resolveCustomerRoute } from './lib/customer-route'
+import { websiteMetadata } from './lib/website-metadata'
 import { applyBookingIntent, availabilityRequestFields, filterOffersForRoomType, LatestAvailabilityRequest, type BookingIntent, type SearchState } from './lib/latest-availability-request'
 import { ContentPage, ContentPageAfterHero, ContentPageHero } from './components/content-page'
 import { ResponsiveCmsImage } from './components/responsive-cms-image'
@@ -162,26 +163,36 @@ export default function App() {
   }, [currentAvailabilityKey])
   const selectedHotel = useMemo(() => hotels.find(h => h.id === hotelId), [hotels, hotelId]); const destination = publishedDestination ?? destinationContentByRegion(selectedHotel?.region ?? '속초')
   const pageSeo = contentPage?.seo ?? homeContentPage?.seo ?? (locale === 'en' ? publishedDestination?.seo ?? { title: 'STAY HANEUL | English content', description: 'English content is not yet available.' } : destination.seo)
+  const canonicalPathname = previewSession?.path ?? resolveCustomerRoute(pathname)?.pathname ?? pathname
   useEffect(() => {
+    const metadata = websiteMetadata({
+      origin: window.location.origin,
+      pathname: canonicalPathname,
+      title: pageSeo.title,
+      description: pageSeo.description,
+      previewMode,
+    })
     document.documentElement.lang = locale
-    document.title = pageSeo.title
-    let description = document.querySelector('meta[name="description"]')
-    if (!description) {
-      description = document.createElement('meta')
-      description.setAttribute('name', 'description')
-      document.head.append(description)
+    document.title = metadata.title
+    const namedMeta = (name: string, content: string) => {
+      let element = document.querySelector<HTMLMetaElement>(`meta[name="${name}"]`)
+      if (!element) { element = document.createElement('meta'); element.name = name; document.head.append(element) }
+      element.content = content
     }
-    description.setAttribute('content', pageSeo.description)
-  }, [pageSeo.description, pageSeo.title])
-  useEffect(() => {
-    if (!previewMode) return
-    let robots = document.querySelector<HTMLMetaElement>('meta[name="robots"]')
-    const previous = robots?.getAttribute('content')
-    const created = !robots
-    if (!robots) { robots = document.createElement('meta'); robots.name = 'robots'; document.head.append(robots) }
-    robots.content = 'noindex,nofollow'
-    return () => { if (created) robots?.remove(); else if (previous != null) robots?.setAttribute('content', previous); else robots?.removeAttribute('content') }
-  }, [previewMode])
+    const propertyMeta = (property: string, content: string) => {
+      let element = document.querySelector<HTMLMetaElement>(`meta[property="${property}"]`)
+      if (!element) { element = document.createElement('meta'); element.setAttribute('property', property); document.head.append(element) }
+      element.content = content
+    }
+    let canonical = document.querySelector<HTMLLinkElement>('link[rel="canonical"]')
+    if (!canonical) { canonical = document.createElement('link'); canonical.rel = 'canonical'; document.head.append(canonical) }
+    canonical.href = metadata.canonicalUrl
+    namedMeta('description', metadata.description)
+    namedMeta('robots', metadata.robots)
+    propertyMeta('og:title', metadata.openGraphTitle)
+    propertyMeta('og:description', metadata.openGraphDescription)
+    propertyMeta('og:url', metadata.openGraphUrl)
+  }, [canonicalPathname, locale, pageSeo.description, pageSeo.title, previewMode])
   useEffect(() => {
     if (!previewMode) return
     const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href]')).filter(link => /#booking|#reservation-management|^\/booking|^\/reservations/.test(link.getAttribute('href') ?? ''))

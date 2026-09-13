@@ -12,6 +12,11 @@
 
 최종 갱신: 2026-09-13
 
+## 고객 공개 SEO 메타데이터 (2026-09-13)
+
+- 고객 공개 페이지는 현재 origin과 정규화된 공개 경로로 canonical과 `og:url`을 만들고 발행 SEO를 title·description·Open Graph에 반영한다. 공개 화면은 `robots=index,follow`, 저장 초안 미리보기는 `noindex,nofollow`다.
+- 직접 계약 테스트, production build와 실제 영문 CMS 경로의 브라우저 DOM을 확인했다. OG 대표 이미지 편집·sitemap·크롤러용 서버 렌더링은 포함하지 않았다. 상세 범위는 [변경 기록](../changes/2026-09-13-public-seo-metadata.md)을 따른다.
+
 ## 저장 초안 URL 미리보기 (2026-09-13)
 
 - V24 grant로 저장된 최신 한국어·영어 홈/지점 랜딩/일반 페이지를 실제 고객 URL에서 10분간 검토한다. 기존 저장 전 인메모리 dialog와 별개이며 미저장 변경사항은 발급 전에 저장한다.
@@ -246,7 +251,7 @@
 
 
 
-2. 한국어 승인·영어 이력 복원/비교, 공개 페이지 canonical/OG/robots, 예약된 발행과 블록 이동 감지를 구현한다.
+2. 한국어 승인·영어 이력 복원/비교, 예약된 발행과 블록 이동 감지를 구현한다. 공개 페이지의 브라우저 canonical/OG/robots는 구현했으며 OG 대표 이미지 편집·sitemap·크롤러용 서버 렌더링은 별도 단계로 남긴다.
 
 
 

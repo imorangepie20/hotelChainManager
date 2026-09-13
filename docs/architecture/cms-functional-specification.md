@@ -74,7 +74,7 @@
 
 - 선택 `seo.title`과 `seo.description`을 지점 랜딩·홈·일반 페이지에 저장할 수 있다.
 - 둘 중 하나를 입력하면 모두 필요하며 길이는 각각 최대 60자, 160자다.
-- 고객 Vite SPA는 유효한 발행 SEO를 브라우저 title과 description meta에 반영한다. canonical, OG, robots 및 크롤러용 서버 렌더링은 후속 범위다.
+- 고객 Vite SPA는 유효한 발행 SEO를 브라우저 title, description, canonical, `og:title`, `og:description`, `og:url`에 반영하고 공개 페이지에는 `robots=index,follow`를 적용한다. 저장 초안 URL 미리보기는 `robots=noindex,nofollow`를 유지한다. OG 대표 이미지 편집, sitemap과 크롤러용 서버 렌더링은 후속 범위다.
 
 ## 5. 페이지 수명주기와 이력
 
