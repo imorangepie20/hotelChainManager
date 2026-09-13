@@ -1,6 +1,8 @@
 package team.hotelchain.webcontent.storage;
 
+import io.micrometer.core.instrument.MeterRegistry;
 import java.net.URI;
+import java.util.Optional;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -54,6 +56,16 @@ public class WebsiteMediaStorageConfiguration {
             S3Client websiteMediaS3Client,
             WebsiteMediaStorageProperties properties) {
         return new S3WebsiteMediaObjectStore(websiteMediaS3Client, properties.getS3().getBucket());
+    }
+
+    @Bean
+    WebsiteMediaStorageGateway websiteMediaStorageGateway(
+            LocalWebsiteMediaObjectStore local,
+            Optional<S3WebsiteMediaObjectStore> s3,
+            WebsiteMediaStorageProperties properties,
+            MeterRegistry meterRegistry) {
+        Optional<WebsiteMediaObjectStore> optionalStore = s3.map(store -> store);
+        return new WebsiteMediaStorageGateway(properties.getMode(), local, optionalStore, meterRegistry);
     }
 
     private void requireText(String value, String field) {

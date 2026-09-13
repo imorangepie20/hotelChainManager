@@ -65,7 +65,11 @@ class LocalWebsiteMediaObjectStoreTest {
     @Test
     void gatewayMaterializesPublishesAndRestoresAQuarantinedGroup(@TempDir Path workDirectory) throws Exception {
         var store = new LocalWebsiteMediaObjectStore(root);
-        var gateway = new WebsiteMediaStorageGateway(store);
+        var gateway = new WebsiteMediaStorageGateway(
+                WebsiteMediaStorageMode.LOCAL,
+                store,
+                java.util.Optional.empty(),
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
         byte[] original = "original".getBytes(StandardCharsets.UTF_8);
         byte[] variant = "variant".getBytes(StandardCharsets.UTF_8);
         gateway.put("asset.png", original, "image/png");
