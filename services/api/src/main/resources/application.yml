@@ -24,6 +24,13 @@ reservation:
 website:
   media:
     storage-dir: ${WEBSITE_MEDIA_STORAGE_DIR:}
+    storage:
+      mode: ${WEBSITE_MEDIA_STORAGE_MODE:local}
+      s3:
+        endpoint: ${WEBSITE_MEDIA_S3_ENDPOINT:}
+        region: ${WEBSITE_MEDIA_S3_REGION:}
+        bucket: ${WEBSITE_MEDIA_S3_BUCKET:}
+        path-style: ${WEBSITE_MEDIA_S3_PATH_STYLE:false}
 
 management:
   endpoint:
