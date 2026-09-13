@@ -205,6 +205,46 @@ public class WebsiteTranslationService {
         return document(source, translation(pageId));
     }
 
+    int replaceDraftMediaReferences(
+            String token,
+            UUID pageId,
+            int expectedDraftVersion,
+            WebsiteMediaService.MediaAssetRow sourceAsset,
+            WebsiteMediaService.MediaAssetRow targetAsset,
+            List<String> expectedFieldPaths) {
+        UUID actor = access.requireHeadquarters(token).id();
+        WebsitePageDocument source = lockedSource(token, pageId);
+        Translation current = requiredLockedTranslation(pageId);
+        if (current.draftVersion() != expectedDraftVersion) {
+            throw WebsiteMediaDraftReplacementService.conflict();
+        }
+        WebsiteMediaReferenceService.MediaReferenceReplacement replacement = media.replaceAssetReferences(
+                source.pageType(), current.draftContent(), sourceAsset, targetAsset);
+        List<String> actualPaths = replacement.fieldPaths().stream().sorted().toList();
+        if (!actualPaths.equals(expectedFieldPaths.stream().sorted().toList())) {
+            throw WebsiteMediaDraftReplacementService.conflict();
+        }
+        Map<String, Object> content = normalize(source, replacement.content(), current.draftConnections(), false);
+        int updated = jdbc.update("""
+                update website_page_translation
+                   set draft_content = ?::jsonb, draft_version = draft_version + 1,
+                       review_status = 'DRAFT', reviewed_draft_version = null,
+                       updated_at = current_timestamp, updated_by = ?
+                 where page_id = ? and locale = 'en' and draft_version = ?
+                """, stringify(content), actor, pageId, expectedDraftVersion);
+        if (updated == 0) throw WebsiteMediaDraftReplacementService.conflict();
+        if (List.of(WebsiteTranslationReviewStatus.IN_REVIEW, WebsiteTranslationReviewStatus.APPROVED,
+                WebsiteTranslationReviewStatus.PUBLISHED).contains(current.reviewStatus())) {
+            reviewEvent(pageId, actor, "APPROVAL_INVALIDATED", current.draftVersion() + 1, null);
+        }
+        media.synchronize(pageId, source.pageType(), "en", "DRAFT", content);
+        audit(pageId, actor, "DRAFT_SAVED", Map.of(
+                "operation", "MEDIA_DRAFT_USAGES_REPLACED", "locale", "en",
+                "sourceMediaId", sourceAsset.id(), "targetMediaId", targetAsset.id(),
+                "count", actualPaths.size()));
+        return actualPaths.size();
+    }
+
     @Transactional
     public WebsitePageDocument publish(String token, UUID pageId, PublishWebsitePageRequest request) {
         UUID actor = access.requireContentPublisher(token).id();
@@ -258,7 +298,27 @@ public class WebsiteTranslationService {
         if (matches.isEmpty()) throw new WebsitePageNotFoundException(canonical);
         PublishedRow row = matches.getFirst();
         return new PublishedWebsitePage(row.id(), row.type(), row.kind(), canonical, row.hotelId(),
-                row.translation().publishedContent(), row.translation().publishedConnections());
+                row.translation().publishedContent(), row.translation().publishedConnections(),
+                media.publicVariants(row.type(), row.translation().publishedContent()));
+    }
+
+    PublishedWebsitePage previewDraft(UUID pageId, int draftVersion, String previewPath) {
+        PublishedWebsitePage page = jdbc.query("""
+                select page.id, page.page_type, page.content_kind, page.hotel_id, translation.*
+                  from website_page page join website_page_translation translation on translation.page_id = page.id
+                 where page.id = ? and page.lifecycle_status = 'ACTIVE'
+                   and page.page_type in ('HOME_PAGE', 'HOTEL_LANDING', 'CONTENT_PAGE')
+                   and translation.locale = 'en' and translation.draft_version = ? and translation.draft_path = ?
+                """, rs -> {
+                    if (!rs.next()) return null;
+                    Translation draft = row(rs);
+                    return new PublishedWebsitePage(rs.getObject("id", UUID.class), rs.getString("page_type"),
+                            ContentKind.valueOf(rs.getString("content_kind")), previewPath,
+                            rs.getObject("hotel_id", UUID.class), draft.draftContent(), draft.draftConnections());
+                }, pageId, draftVersion, previewPath);
+        if (page == null) throw new WebsitePreviewUnavailableException();
+        return new PublishedWebsitePage(page.id(), page.type(), page.contentKind(), page.path(), page.hotelId(),
+                page.content(), page.connections(), media.publicVariants(page.type(), page.content()));
     }
 
     @Transactional(readOnly = true)

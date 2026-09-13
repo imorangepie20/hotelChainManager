@@ -21,9 +21,22 @@ import org.springframework.web.multipart.MultipartFile;
 @RequestMapping("/api/staff/website/media")
 public class WebsiteMediaManagementController {
     private final WebsiteMediaService media;
+    private final WebsiteMediaVariantService variants;
+    private final WebsiteMediaDraftReplacementService replacements;
+    private final WebsiteMediaStorageAuditService storageAudit;
+    private final WebsiteMediaStorageMigrationService storageMigration;
 
-    public WebsiteMediaManagementController(WebsiteMediaService media) {
+    public WebsiteMediaManagementController(
+            WebsiteMediaService media,
+            WebsiteMediaVariantService variants,
+            WebsiteMediaDraftReplacementService replacements,
+            WebsiteMediaStorageAuditService storageAudit,
+            WebsiteMediaStorageMigrationService storageMigration) {
         this.media = media;
+        this.variants = variants;
+        this.replacements = replacements;
+        this.storageAudit = storageAudit;
+        this.storageMigration = storageMigration;
     }
 
     @GetMapping
@@ -31,6 +44,23 @@ public class WebsiteMediaManagementController {
             @RequestParam(defaultValue = "false") boolean includeArchived,
             @RequestHeader("X-Staff-Session") String token) {
         return media.catalog(token, includeArchived);
+    }
+
+    @GetMapping("/storage-audit")
+    public WebsiteMediaStorageAudit storageAudit(@RequestHeader("X-Staff-Session") String token) {
+        return storageAudit.audit(token);
+    }
+
+    @GetMapping("/storage-migration")
+    public WebsiteMediaStorageMigrationStatus storageMigration(
+            @RequestHeader("X-Staff-Session") String token) {
+        return storageMigration.status(token);
+    }
+
+    @PostMapping("/storage-migration/backfill")
+    public WebsiteMediaStorageBackfillResult backfillStorage(
+            @RequestHeader("X-Staff-Session") String token) {
+        return storageMigration.backfill(token);
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -45,6 +75,22 @@ public class WebsiteMediaManagementController {
     @GetMapping("/{mediaId}/usages")
     public List<WebsiteMediaUsage> usages(@PathVariable UUID mediaId, @RequestHeader("X-Staff-Session") String token) {
         return media.usages(token, mediaId);
+    }
+
+    @GetMapping("/{mediaId}/draft-replacement-impact")
+    public WebsiteMediaDraftReplacementImpact replacementImpact(
+            @PathVariable UUID mediaId,
+            @RequestParam UUID targetMediaId,
+            @RequestHeader("X-Staff-Session") String token) {
+        return replacements.impact(token, mediaId, targetMediaId);
+    }
+
+    @PostMapping("/{mediaId}/draft-replacements")
+    public WebsiteMediaDraftReplacementResult replaceDraftUsages(
+            @PathVariable UUID mediaId,
+            @RequestBody WebsiteMediaDraftReplacementRequest request,
+            @RequestHeader("X-Staff-Session") String token) {
+        return replacements.replace(token, mediaId, request);
     }
 
     @PatchMapping("/{mediaId}")
@@ -69,6 +115,15 @@ public class WebsiteMediaManagementController {
             @RequestBody WebsiteMediaVersionRequest request,
             @RequestHeader("X-Staff-Session") String token) {
         return media.restore(token, mediaId, request);
+    }
+
+    @PostMapping("/{mediaId}/variants/{targetWidth}/retry")
+    public WebsiteMediaAsset retryVariant(
+            @PathVariable UUID mediaId,
+            @PathVariable int targetWidth,
+            @RequestHeader("X-Staff-Session") String token) {
+        variants.retry(token, mediaId, targetWidth);
+        return media.catalogAssetForManagement(mediaId);
     }
 
     @DeleteMapping("/{mediaId}")

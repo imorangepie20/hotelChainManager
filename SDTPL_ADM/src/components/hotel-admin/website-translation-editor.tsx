@@ -7,6 +7,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ContentPageEditor } from "@/components/hotel-admin/content-page-editor";
+import { WebsiteSavedDraftPreviewAction } from "@/components/hotel-admin/website-saved-draft-preview-action";
 import { MediaField } from "@/components/hotel-admin/media-field";
 import { WebsiteTranslationReviewActions } from "@/components/hotel-admin/website-translation-review-actions";
 import {
@@ -36,19 +37,21 @@ function TranslationField({ label, value, onChange }: { label: string; value: un
   return <label className="grid gap-1 text-sm font-medium">{label}<Textarea aria-label={label} value={text(value)} maxLength={1000} onChange={(event) => onChange(event.target.value)} /></label>;
 }
 
-function LandingTranslationEditor({ token, document, externalBusy, onDirtyChange, onBusyChange, onApplied }: {
+function LandingTranslationEditor({ token, document, externalBusy, previewDisabled, onDirtyChange, onBusyChange, onApplied }: {
   token: string; document: WebsitePageDocument; onDirtyChange: (dirty: boolean) => void; onBusyChange: (busy: boolean) => void;
   externalBusy: boolean;
+  previewDisabled: boolean;
   onApplied: (document: WebsitePageDocument) => void;
 }) {
   const [content, setContent] = useState(document.draftContent);
   const [metadata, setMetadata] = useState<WebsitePageDraftMetadata>(document.draftMetadata);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [previewBusy, setPreviewBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const archived = document.lifecycleStatus === "ARCHIVED";
-  const interactionBusy = busy || externalBusy;
+  const interactionBusy = busy || previewBusy || externalBusy;
   function change(next: RecordValue) { setContent(next); setDirty(true); onDirtyChange(true); setError(""); setNotice(""); }
   function changeMetadata(next: WebsitePageDraftMetadata) { setMetadata(next); setDirty(true); onDirtyChange(true); setNotice(""); }
   async function save() {
@@ -65,6 +68,9 @@ function LandingTranslationEditor({ token, document, externalBusy, onDirtyChange
   return <Card className="min-w-0"><CardHeader><CardTitle>영어 지점 랜딩 페이지</CardTitle><CardDescription>한국어 콘텐츠와 별도로 저장·발행합니다.</CardDescription>
     <div className="flex flex-wrap gap-2"><Button variant="outline" disabled={interactionBusy || archived || !dirty} onClick={() => void save()}>초안 저장</Button></div>
   </CardHeader><CardContent className="space-y-6">
+    <WebsiteSavedDraftPreviewAction token={token} pageId={document.id} locale="en" draftVersion={document.draftVersion}
+      draftPath={document.draftMetadata.path} dirty={dirty} disabled={archived || busy || previewDisabled}
+      onBusyChange={value => { setPreviewBusy(value); onBusyChange(value); }} />
     <fieldset disabled={interactionBusy || archived} className="grid min-w-0 gap-6 border-0 p-0">
       <section className="grid gap-4 rounded-xl border p-4"><h2 className="font-semibold">페이지 정보</h2><label className="grid gap-1 text-sm font-medium">메뉴 이름<Input aria-label="메뉴 이름" maxLength={100} value={metadata.menuLabel} onChange={(event) => changeMetadata({ ...metadata, menuLabel: event.target.value })} /></label>
         <label className="flex items-center gap-2 text-sm"><Checkbox aria-label="메뉴에 노출" checked={metadata.menuVisible} onCheckedChange={(menuVisible) => changeMetadata({ ...metadata, menuVisible })} />메뉴에 노출</label>
@@ -174,8 +180,8 @@ export function WebsiteTranslationEditor({ token, pageId, catalog, staff, onDirt
       <p role="status" className="rounded-lg border bg-muted/20 p-3 text-sm">영어 · {document.publishedVersion ? (Object.keys(document.publishedContent).length ? `발행본 v${document.publishedVersion}` : '공개 중단') : '미발행'} · 초안 v{document.draftVersion} — 한국어를 가져온 내용은 직접 번역하고 검토한 뒤 발행해 주세요.</p>
       {document.draftVersion === 0 ? <Card><CardHeader><CardTitle>영어 번역 초안이 없습니다.</CardTitle><CardDescription>한국어 초안을 가져와 제목·본문·SEO·이미지 설명을 번역합니다. 고객 웹에는 자동으로 공개되지 않습니다.</CardDescription></CardHeader><CardContent><Button disabled={!canEdit || initializing || document.lifecycleStatus !== "ACTIVE"} onClick={() => void initialize()}>한국어 초안을 가져오기</Button>{error && <p role="alert" className="mt-3 text-sm text-destructive">{error} <Button variant="link" onClick={retry}>다시 불러오기</Button></p>}</CardContent></Card>
         : <><WebsiteTranslationReviewActions token={token} pageId={document.id} draftVersion={document.draftVersion} state={reviewState} staff={staff} reviewReady={reviewReady} dirty={editorDirty} busy={editorBusy} archived={document.lifecycleStatus === "ARCHIVED"} onStateChange={applyReviewState} onPublish={publish} onBusyChange={changeBusy} onHistoryRefresh={refreshHistory} />
-          {document.pageType === "HOTEL_LANDING" ? <LandingTranslationEditor token={token} document={document} externalBusy={editorBusy || !canEdit} onDirtyChange={changeDirty} onBusyChange={changeBusy} onApplied={saved} />
-            : <ContentPageEditor token={token} document={document} catalog={catalog} locale="en" showPublishAction={false} externalBusy={editorBusy || !canEdit} onDirtyChange={changeDirty} onBusyChange={changeBusy} onSaved={saved} onPublished={saved} onLifecycleChanged={saved} onDeleted={() => undefined} />}</>}
+          {document.pageType === "HOTEL_LANDING" ? <LandingTranslationEditor token={token} document={document} externalBusy={editorBusy || !canEdit} previewDisabled={editorBusy} onDirtyChange={changeDirty} onBusyChange={changeBusy} onApplied={saved} />
+            : <ContentPageEditor token={token} document={document} catalog={catalog} locale="en" showPublishAction={false} externalBusy={editorBusy || !canEdit} previewDisabled={editorBusy} onDirtyChange={changeDirty} onBusyChange={changeBusy} onSaved={saved} onPublished={saved} onLifecycleChanged={saved} onDeleted={() => undefined} />}</>}
       {document.lifecycleStatus === "ARCHIVED" && <p className="text-sm text-muted-foreground">페이지가 보관되어 두 언어 모두 공개되지 않습니다. 한국어 화면에서 페이지를 복원한 뒤 언어별로 다시 발행해 주세요.</p>}
     </div>
     <Card className="min-w-0 self-start"><CardHeader><CardTitle className="text-base">검토·발행 이력</CardTitle><CardDescription>서버의 최근 기록 최대 50건을 최신순으로 표시합니다.</CardDescription></CardHeader><CardContent className="space-y-5 text-sm">

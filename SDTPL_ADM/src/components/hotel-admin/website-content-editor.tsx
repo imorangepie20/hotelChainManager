@@ -1,6 +1,7 @@
 "use client";
 
 import { WebsiteTranslationEditor } from "@/components/hotel-admin/website-translation-editor";
+import { WebsiteSavedDraftPreviewAction } from "@/components/hotel-admin/website-saved-draft-preview-action";
 
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, Eye, FilePenLine, GitCompareArrows, History, Plus, RotateCcw, Send, Trash2 } from "lucide-react";
@@ -124,6 +125,7 @@ export function WebsiteContentEditor() {
   const [pendingLocale, setPendingLocale] = useState<"ko" | "en" | null>(null);
   const [translationDirty, setTranslationDirty] = useState(false);
   const [translationBusy, setTranslationBusy] = useState(false);
+  const [previewBusy, setPreviewBusy] = useState(false);
   const [staff, setStaff] = useState<StaffPrincipal | null>(null);
   const [hotelId, setHotelId] = useState(hotels[0].id);
   const [selectedPageId, setSelectedPageId] = useState<string | null>(null);
@@ -326,7 +328,7 @@ export function WebsiteContentEditor() {
 
   function selectPage(nextPageId: string) {
     if (nextPageId === selectedPageId) return;
-    if (translationBusy) return;
+    if (translationBusy || previewBusy) return;
     if (dirty || contentDirty || translationDirty) {
       setPendingPageId(nextPageId);
       return;
@@ -344,7 +346,7 @@ export function WebsiteContentEditor() {
     }
   }
   function selectLocale(next: "ko" | "en") {
-    if (next === locale || busy || translationBusy) return;
+    if (next === locale || busy || translationBusy || previewBusy) return;
     if (dirty || contentDirty || translationDirty) { setPendingLocale(next); return; }
     applyLocale(next);
   }
@@ -500,13 +502,15 @@ export function WebsiteContentEditor() {
           />
           {selectedTreePage?.pageType === "CONTENT_PAGE" && selectedTreePage.lifecycleStatus === "ACTIVE" && !contentDirty && <Button variant="outline" onClick={() => setMoveOpen(true)} disabled={busy}>페이지 이동</Button>}
           {!isStructuredPage && <>
+            {selectedTreePage && <WebsiteSavedDraftPreviewAction token={token ?? ""} pageId={selectedTreePage.id} locale="ko"
+              draftVersion={draftVersion} draftPath={draftPath} dirty={dirty} disabled={busy || selectedTreePage.lifecycleStatus === "ARCHIVED"} onBusyChange={setPreviewBusy} />}
             <Button variant="outline" onClick={() => setPreviewOpen(true)} disabled={busy}>
               <Eye /> 미리보기
             </Button>
-            <Button variant="outline" onClick={save} disabled={busy || !dirty}>
+            <Button variant="outline" onClick={save} disabled={busy || previewBusy || !dirty}>
               <FilePenLine /> 초안 저장
             </Button>
-            <Button onClick={publish} disabled={busy || dirty} title={dirty ? "변경사항을 먼저 초안으로 저장해 주세요." : undefined}>
+            <Button onClick={publish} disabled={busy || previewBusy || dirty} title={dirty ? "변경사항을 먼저 초안으로 저장해 주세요." : undefined}>
               <Send /> 발행
             </Button>
           </>}
@@ -541,6 +545,8 @@ export function WebsiteContentEditor() {
           document={contentPage}
           catalog={referenceCatalog}
           initialDirty={newContentPage}
+          externalBusy={busy}
+          onBusyChange={setPreviewBusy}
           onDirtyChange={setContentDirty}
           onSaved={(document, history) => { setContentPage(document); setVersions(history); setPublishedVersion(document.publishedVersion); setNewContentPage(false); void getWebsitePageTree(token ?? "").then(setPageTree).catch(() => undefined); }}
           onPublished={(document, history) => { setContentPage(document); setVersions(history); setPublishedVersion(document.publishedVersion); void getWebsitePageTree(token ?? "").then(setPageTree).catch(() => undefined); }}

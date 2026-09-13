@@ -1,5 +1,5 @@
 import { parseContentPage } from './content-page.ts'
-import { destinationContentByRegion, destinationContentFromPublished } from './destination-content.ts'
+import { destinationContentByRegion, destinationContentFromPublished, type DestinationContent } from './destination-content.ts'
 
 function expectEqual(actual: unknown, expected: unknown, message: string) {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
@@ -35,6 +35,11 @@ export function runContentPageTests() {
     imageAlt: '호텔 로비',
   }
   const text = { type: 'TEXT', title: '우리가 만드는 시간', paragraphs: ['첫 번째 문단'] }
+  const responsiveVariant = {
+    targetWidth: 640,
+    deliveryUrl: `/api/website/media/${uploadedAssetId}/variants/640.webp`,
+    mimeType: 'image/webp',
+  }
   const richBlocks = [
     { type: 'IMAGE_GALLERY', title: '객실 갤러리', items: [{ imageAssetId: bundledAssetId, imageSrc: '/images/brand-story.jpg', imageAlt: '객실 창가' }, { imageAssetId: uploadedAssetId, imageSrc: `/api/website/media/${uploadedAssetId}/content`, imageAlt: '객실 침실', caption: '편안한 침실' }] },
     { type: 'FEATURE_GRID', title: '객실 특징', items: [{ title: '오션뷰', description: '동해를 바라봅니다.' }, { title: '킹 베드', description: '여유로운 휴식을 제공합니다.' }] },
@@ -42,6 +47,13 @@ export function runContentPageTests() {
     { type: 'ACCORDION', title: '자주 묻는 질문', items: [{ title: '체크인 시간', content: '오후 3시부터입니다.' }] },
     { type: 'NOTICE_LIST', title: '이용 안내', items: [{ text: '성수기에는 조기 마감될 수 있습니다.', severity: 'IMPORTANT' }] },
   ]
+  const responsiveGalleryPage = parseContentPage({ seo, blocks: [hero, ...richBlocks], mediaVariants: { [uploadedAssetId]: [responsiveVariant] } })
+  const responsiveGallery = responsiveGalleryPage?.blocks.find(block => block.type === 'IMAGE_GALLERY')
+  expectEqual(
+    responsiveGallery?.type === 'IMAGE_GALLERY' ? responsiveGallery.items[1]?.imageVariants : undefined,
+    [responsiveVariant],
+    '공개 응답의 WebP variant를 갤러리 이미지에 연결한다',
+  )
   const homepageHero = { ...hero, cta: { label: '메인으로', href: '/' } }
 
   expectEqual(parseContentPage({ seo, blocks: [homepageHero] }), { seo, blocks: [homepageHero] }, '자산 UUID가 있는 내장 이미지를 허용한다')
@@ -49,6 +61,19 @@ export function runContentPageTests() {
     parseContentPage({ seo, blocks: [{ ...hero, imageAssetId: uploadedAssetId, imageSrc: `/api/website/media/${uploadedAssetId}/content` }] }),
     { seo, blocks: [{ ...hero, imageAssetId: uploadedAssetId, imageSrc: `/api/website/media/${uploadedAssetId}/content` }] },
     '자산 UUID와 일치하는 업로드 전달 경로를 허용한다',
+  )
+  const responsiveHomepageHero = { ...homepageHero, blockId: '323e4567-e89b-12d3-a456-426614174099', imageAssetId: uploadedAssetId, imageSrc: `/api/website/media/${uploadedAssetId}/content` }
+  const responsivePage = parseContentPage({
+    contentKind: 'HOME',
+    content: { seo, blocks: [responsiveHomepageHero] },
+    mediaVariants: {
+      [uploadedAssetId]: [responsiveVariant, { targetWidth: 1280, deliveryUrl: 'https://example.com/private.webp', mimeType: 'image/webp' }],
+    },
+  })
+  expectEqual(
+    responsivePage?.blocks[0]?.type === 'HERO' ? responsivePage.blocks[0].imageVariants : undefined,
+    [responsiveVariant],
+    '공개 응답의 안전한 WebP variant만 HERO에 연결한다',
   )
   expectEqual(parseContentPage({ seo, blocks: [{ ...hero, imageAssetId: 'not-a-uuid' }] }), null, '형식이 잘못된 HERO 자산 UUID를 거절한다')
   expectEqual(parseContentPage({ seo, blocks: [{ ...hero, imageAssetId: undefined }] }), null, 'HERO 자산 UUID가 없으면 문서를 거절한다')
@@ -86,8 +111,10 @@ export function runContentPageTests() {
     heroAssetId: uploadedAssetId,
     heroImage: `/api/website/media/${uploadedAssetId}/content`,
     heroAlt: '업로드한 속초 해안',
+    mediaVariants: { [uploadedAssetId]: [responsiveVariant] },
   })
   expectEqual(uploadedLanding.heroImage, `/api/website/media/${uploadedAssetId}/content`, '자산 UUID와 일치하는 업로드 랜딩 이미지를 사용한다')
+  expectEqual((uploadedLanding as DestinationContent & { heroVariants?: unknown }).heroVariants, [responsiveVariant], '랜딩 HERO에 공개 WebP variant를 연결한다')
 
   const fallbackHero = destinationContentByRegion('속초').heroImage
   expectEqual(

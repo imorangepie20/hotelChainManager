@@ -15,17 +15,21 @@ import {
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { MediaDraftUsageReplacementDialog } from "@/components/hotel-admin/media-draft-usage-replacement-dialog";
+import { MediaStorageStatus } from "@/components/hotel-admin/media-storage-status";
 import {
   archiveWebsiteMedia,
   deleteWebsiteMedia,
   getWebsiteMedia,
   getWebsiteMediaUsages,
+  retryWebsiteMediaVariant,
   restoreWebsiteMedia,
   StaffApiError,
   updateWebsiteMedia,
   uploadWebsiteMedia,
   type WebsiteMediaAsset,
   type WebsiteMediaUsage,
+  type WebsiteMediaVariant,
 } from "@/lib/staff-api";
 
 const customerWebOrigin = (process.env.NEXT_PUBLIC_CUSTOMER_WEB_ORIGIN ?? "http://127.0.0.1:4000").replace(/\/$/, "");
@@ -49,6 +53,28 @@ function usageStateLabel(state: WebsiteMediaUsage["documentState"]) {
 
 function assetStatusLabel(status: WebsiteMediaAsset["status"]) {
   return status === "ACTIVE" ? "활성" : "보관됨";
+}
+
+function variantStatusLabel(status: WebsiteMediaVariant["status"]) {
+  if (status === "PENDING") return "변환 대기 중";
+  if (status === "PROCESSING") return "변환 중";
+  if (status === "READY") return "변환 완료";
+  return "변환 실패";
+}
+
+function isActiveVariant(variant: WebsiteMediaVariant) {
+  return variant.status === "PENDING" || variant.status === "PROCESSING"
+    || (variant.status === "FAILED" && variant.attemptCount < 3);
+}
+
+function variantKey(mediaId: string, targetWidth: 640 | 1280) {
+  return `${mediaId}:${targetWidth}`;
+}
+
+function byteSizeLabel(byteSize: number) {
+  if (byteSize < 1024) return `${byteSize} B`;
+  if (byteSize < 1024 * 1024) return `${Math.max(1, Math.round(byteSize / 1024))} KB`;
+  return `${(byteSize / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function permanentDeleteState(asset: WebsiteMediaAsset) {
@@ -123,15 +149,22 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
   const [metadataAltText, setMetadataAltText] = useState("");
   const [metadataError, setMetadataError] = useState("");
   const [metadataNotice, setMetadataNotice] = useState("");
+  const [variantErrors, setVariantErrors] = useState<Record<string, string>>({});
   const [savingMetadata, setSavingMetadata] = useState(false);
   const [changingStatus, setChangingStatus] = useState(false);
   const [archiveConfirmationOpen, setArchiveConfirmationOpen] = useState(false);
   const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
   const [replacementConfirmationOpen, setReplacementConfirmationOpen] = useState(false);
+  const [draftReplacementOpen, setDraftReplacementOpen] = useState(false);
   const [replacementAssetId, setReplacementAssetId] = useState<string | null>(null);
+  const [retryingVariantKeys, setRetryingVariantKeys] = useState<Set<string>>(new Set());
   const uploadRequestGeneration = useRef(0);
   const catalogRequestGeneration = useRef(0);
   const usageRequestGeneration = useRef(0);
+  const pollRequestGeneration = useRef(0);
+  const variantContextGeneration = useRef(0);
+  const retryRequestGenerations = useRef(new Map<string, number>());
+  const selectedAssetIdRef = useRef(initialAssetId);
 
   const selectedAsset = useMemo(
     () => assets.find((asset) => asset.id === selectedAssetId) ?? null,
@@ -140,6 +173,24 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
   const activeAssets = useMemo(() => assets.filter((asset) => asset.status === "ACTIVE"), [assets]);
   const archivedAssets = useMemo(() => assets.filter((asset) => asset.status === "ARCHIVED"), [assets]);
   const selectedByCurrentDraft = Boolean(selectedAsset && protectedAssetIds.includes(selectedAsset.id));
+  const selectedAssetIdForPolling = selectedAsset?.id ?? "";
+  const selectedAssetHasActiveVariant = selectedAsset?.status === "ACTIVE"
+    && selectedAsset.variants.some(isActiveVariant);
+
+  function invalidateVariantContext() {
+    variantContextGeneration.current += 1;
+    retryRequestGenerations.current.clear();
+    setRetryingVariantKeys(new Set());
+    setVariantErrors({});
+  }
+
+  function updateSelectedAssetId(nextAssetId: string) {
+    if (selectedAssetIdRef.current !== nextAssetId) {
+      selectedAssetIdRef.current = nextAssetId;
+      invalidateVariantContext();
+    }
+    setSelectedAssetId(nextAssetId);
+  }
 
   const refreshCatalog = useCallback(async (preferredAssetId: string, resetMetadata: boolean) => {
     const requestGeneration = ++catalogRequestGeneration.current;
@@ -153,7 +204,7 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
         ?? nextAssets[0]
         ?? null;
       setAssets(nextAssets);
-      setSelectedAssetId(nextSelected?.id ?? "");
+      updateSelectedAssetId(nextSelected?.id ?? "");
       if (resetMetadata || nextSelected?.id !== preferredAssetId) {
         setMetadataDisplayName(nextSelected?.displayName ?? "");
         setMetadataAltText(nextSelected?.defaultAltText ?? "");
@@ -186,11 +237,15 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
     setUploading(false);
     setUploadError("");
     setUploadNotice("");
+    selectedAssetIdRef.current = initialAssetId;
     setSelectedAssetId(initialAssetId);
     setMetadataError("");
     setMetadataNotice("");
     void refreshCatalog(initialAssetId, true);
-    return () => { catalogRequestGeneration.current += 1; uploadRequestGeneration.current += 1; };
+    return () => {
+      catalogRequestGeneration.current += 1;
+      uploadRequestGeneration.current += 1;
+    };
   }, [initialAssetId, open, refreshCatalog]);
 
   useEffect(() => {
@@ -203,13 +258,45 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
     void refreshUsages(selectedAssetId);
   }, [open, refreshUsages, selectedAssetId]);
 
+  useEffect(() => {
+    if (!open || !selectedAssetIdForPolling || !selectedAssetHasActiveVariant) return;
+    const requestGeneration = ++pollRequestGeneration.current;
+    let timer: number | undefined;
+    let disposed = false;
+
+    const schedule = () => {
+      timer = window.setTimeout(() => { void poll(); }, 2_000);
+    };
+    const poll = async () => {
+      try {
+        const refreshedAssets = await getWebsiteMedia(token, true);
+        if (disposed || pollRequestGeneration.current !== requestGeneration) return;
+        const refreshedAsset = refreshedAssets.find((asset) => asset.id === selectedAssetIdForPolling);
+        if (!refreshedAsset) return;
+        setAssets((current) => current.map((asset) => asset.id === refreshedAsset.id
+          ? { ...asset, variants: refreshedAsset.variants }
+          : asset));
+        if (refreshedAsset.status === "ACTIVE" && refreshedAsset.variants.some(isActiveVariant)) schedule();
+      } catch {
+        if (!disposed && pollRequestGeneration.current === requestGeneration) schedule();
+      }
+    };
+
+    schedule();
+    return () => {
+      disposed = true;
+      pollRequestGeneration.current += 1;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [open, selectedAssetHasActiveVariant, selectedAssetIdForPolling, token]);
+
   function replaceAsset(nextAsset: WebsiteMediaAsset) {
     catalogRequestGeneration.current += 1;
     setAssets((current) => current.map((asset) => asset.id === nextAsset.id ? nextAsset : asset));
   }
 
   function selectAsset(asset: WebsiteMediaAsset) {
-    setSelectedAssetId(asset.id);
+    updateSelectedAssetId(asset.id);
     setMetadataDisplayName(asset.displayName);
     setMetadataAltText(asset.defaultAltText);
     setMetadataError("");
@@ -225,6 +312,38 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
   async function recoverFromMediaConflict(mediaId: string) {
     await Promise.all([refreshCatalog(mediaId, true), refreshUsages(mediaId)]);
     setMetadataError("최신 자산 정보를 불러왔습니다. 변경 내용을 확인한 뒤 다시 저장해 주세요.");
+  }
+
+  async function retryVariant(targetWidth: 640 | 1280) {
+    if (!selectedAsset) return;
+    const mediaId = selectedAsset.id;
+    const key = variantKey(mediaId, targetWidth);
+    const contextGeneration = variantContextGeneration.current;
+    const requestGeneration = (retryRequestGenerations.current.get(key) ?? 0) + 1;
+    retryRequestGenerations.current.set(key, requestGeneration);
+    setVariantErrors((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+    setRetryingVariantKeys((current) => new Set(current).add(key));
+    try {
+      const asset = await retryWebsiteMediaVariant(token, mediaId, targetWidth);
+      if (variantContextGeneration.current !== contextGeneration || selectedAssetIdRef.current !== mediaId || retryRequestGenerations.current.get(key) !== requestGeneration) return;
+      setAssets((current) => current.map((existing) => existing.id === asset.id
+        ? { ...existing, variants: asset.variants }
+        : existing));
+    } catch (cause) {
+      if (variantContextGeneration.current !== contextGeneration || selectedAssetIdRef.current !== mediaId || retryRequestGenerations.current.get(key) !== requestGeneration) return;
+      setVariantErrors((current) => ({ ...current, [key]: cause instanceof Error ? cause.message : `${targetWidth}px 변환을 다시 시도하지 못했습니다.` }));
+    } finally {
+      if (variantContextGeneration.current !== contextGeneration || selectedAssetIdRef.current !== mediaId || retryRequestGenerations.current.get(key) !== requestGeneration) return;
+      setRetryingVariantKeys((current) => {
+        const next = new Set(current);
+        next.delete(key);
+        return next;
+      });
+    }
   }
 
   async function upload() {
@@ -243,7 +362,7 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
       if (uploadRequestGeneration.current !== requestGeneration) return;
       catalogRequestGeneration.current += 1;
       setAssets((current) => [asset, ...current.filter((item) => item.id !== asset.id)]);
-      setSelectedAssetId(asset.id);
+      updateSelectedAssetId(asset.id);
       setReplacementAssetId(asset.id);
       setFile(null);
       setDisplayName("");
@@ -331,7 +450,7 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
       const remaining = assets.filter((asset) => asset.id !== selectedAsset.id);
       const nextSelected = remaining.find((asset) => asset.status === "ACTIVE") ?? remaining[0] ?? null;
       setAssets(remaining);
-      setSelectedAssetId(nextSelected?.id ?? null);
+      updateSelectedAssetId(nextSelected?.id ?? "");
       setMetadataDisplayName(nextSelected?.displayName ?? "");
       setMetadataAltText(nextSelected?.defaultAltText ?? "");
       setUsages([]);
@@ -343,6 +462,7 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
     } finally {
       setChangingStatus(false);
       setDeleteConfirmationOpen(false);
+      setDraftReplacementOpen(false);
     }
   }
 
@@ -351,6 +471,8 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
       catalogRequestGeneration.current += 1;
       usageRequestGeneration.current += 1;
       uploadRequestGeneration.current += 1;
+      pollRequestGeneration.current += 1;
+      invalidateVariantContext();
       setReplacementConfirmationOpen(false);
       setReplacementAssetId(null);
       setFile(null);
@@ -377,6 +499,8 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
         </DialogHeader>
 
         <div className="min-h-0 overflow-y-auto p-5">
+          <MediaStorageStatus key={open ? "open" : "closed"} token={token} active={open} />
+
           <section className="rounded-xl border bg-muted/20 p-4">
             <div className="grid gap-3 md:grid-cols-[1.15fr_1fr_1fr_auto] md:items-end">
               <label className="grid gap-1 text-sm font-medium">이미지 파일
@@ -427,6 +551,7 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
                   </label>
                   <Button type="button" variant="outline" onClick={() => void saveMetadata()} disabled={savingMetadata || changingStatus}>{savingMetadata ? "저장 중" : "자산 정보 저장"}</Button>
                   {selectedAsset.status === "ACTIVE" ? <>
+                    {usages.some((usage) => usage.documentState === "DRAFT") && <Button type="button" variant="outline" onClick={() => setDraftReplacementOpen(true)} disabled={savingMetadata || changingStatus || loadingUsages}>초안 사용 위치 일괄 교체</Button>}
                     <Button type="button" variant="outline" onClick={() => setArchiveConfirmationOpen(true)} disabled={savingMetadata || changingStatus || selectedAsset.usageCount > 0 || selectedByCurrentDraft}>보관</Button>
                     {selectedAsset.usageCount > 0 && <p className="text-xs text-muted-foreground">사용 위치가 있어 보관할 수 없습니다.</p>}
                     {selectedAsset.usageCount === 0 && selectedByCurrentDraft && <p className="text-xs text-muted-foreground">현재 페이지의 저장되지 않은 초안에서 선택되어 보관할 수 없습니다.</p>}
@@ -439,6 +564,28 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
                   {metadataError && <p role="alert" className="text-sm text-destructive">{metadataError}</p>}
                 </div>}
               </section>}
+
+              <section aria-label="반응형 이미지" className="border-t pt-4">
+                <h3 className="font-medium">반응형 이미지</h3>
+                {!selectedAsset ? <p className="mt-3 text-sm text-muted-foreground">자산을 선택하면 변환 상태를 표시합니다.</p> : selectedAsset.variants.length === 0 ? <p className="mt-3 text-sm text-muted-foreground">{selectedAsset.width < 640 ? "원본보다 큰 이미지는 생성하지 않습니다." : "생성된 반응형 이미지가 없습니다."}</p> : (
+                  <ul className="mt-3 grid gap-3">
+                    {selectedAsset.variants.map((variant) => {
+                      const key = variantKey(selectedAsset.id, variant.targetWidth);
+                      const retrying = retryingVariantKeys.has(key);
+                      const variantError = variantErrors[key];
+                      return <li key={variant.id} className="rounded-lg border bg-background p-3 text-sm">
+                        <p className="font-medium">{variant.targetWidth}px · {variantStatusLabel(variant.status)}{variant.status === "FAILED" ? ` · ${variant.attemptCount}/3회` : ""}</p>
+                        {variant.status === "READY" && variant.deliveryUrl && variant.width && variant.height && variant.byteSize !== null && <a href={variant.deliveryUrl} target="_blank" rel="noreferrer" className="mt-1 inline-block text-sm text-primary underline underline-offset-4">{variant.width} × {variant.height} · WebP · {byteSizeLabel(variant.byteSize)}</a>}
+                        {variant.status === "FAILED" && <>
+                          {variant.lastError && <p className="mt-1 text-xs text-muted-foreground">{variant.lastError}</p>}
+                          <Button type="button" variant="outline" size="sm" className="mt-3" onClick={() => void retryVariant(variant.targetWidth)} disabled={retrying}>{retrying ? `${variant.targetWidth}px 다시 시도 중` : `${variant.targetWidth}px 다시 시도`}</Button>
+                        </>}
+                        {variantError && <p role="alert" className="mt-3 text-sm text-destructive">{variantError}</p>}
+                      </li>;
+                    })}
+                  </ul>
+                )}
+              </section>
 
               <section className="border-t pt-4">
                 <h3 className="font-medium">사용 위치</h3>
@@ -463,6 +610,18 @@ export function MediaPickerDialog({ token, open, onOpenChange, initialAssetId, p
           <Button type="button" disabled={!selectedAsset || selectedAsset.status !== "ACTIVE" || loading || uploading || savingMetadata || changingStatus || Boolean(replacement && selectedAsset.id !== replacementAssetId)} onClick={() => { if (selectedAsset?.status === "ACTIVE") { if (replacement) setReplacementConfirmationOpen(true); else { onSelect(selectedAsset); close(); } } }}>{replacement ? "교체 확인" : "선택"}</Button>
         </DialogFooter>
       </DialogContent>
+      {!replacement && selectedAsset && <MediaDraftUsageReplacementDialog
+        token={token}
+        open={draftReplacementOpen}
+        sourceAsset={selectedAsset}
+        onOpenChange={setDraftReplacementOpen}
+        onCompleted={(result, targetAsset) => {
+          setMetadataNotice(`초안 ${result.changedDraftCount}개에서 사용 위치 ${result.replacedUsageCount}곳을 교체했습니다.`);
+          setAssets((current) => [targetAsset, ...current.filter((asset) => asset.id !== targetAsset.id)]);
+          void refreshCatalog(selectedAsset.id, false);
+          void refreshUsages(selectedAsset.id);
+        }}
+      />}
       <AlertDialog open={archiveConfirmationOpen} onOpenChange={setArchiveConfirmationOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>

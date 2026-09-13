@@ -3,30 +3,32 @@ import { ArrowLeft, ArrowRight, ChevronDown, ChevronUp } from 'lucide-react'
 import type { ContentPageBlock, ContentPageDocument, ContentPageGalleryItem } from '../lib/content-page'
 import type { BookingIntent } from '../lib/latest-availability-request'
 import { gallerySwipeOffset, galleryTransition, type GalleryTransitionDirection } from '../lib/gallery-swipe'
+import { ResponsiveCmsImage } from './responsive-cms-image'
 
 type ContentPageHeroProps = {
   page: ContentPageDocument
   headingId?: string
+  previewMode?: boolean
 }
 
-export function ContentPageHero({ page, headingId = 'content-page-title' }: ContentPageHeroProps) {
+export function ContentPageHero({ page, headingId = 'content-page-title', previewMode = false }: ContentPageHeroProps) {
   const hero = page.blocks[0]
   if (!hero || hero.type !== 'HERO') return null
 
   return <section className="hero content-page-hero" aria-labelledby={headingId}>
-    <img src={hero.imageSrc} alt={hero.imageAlt} />
+    <ResponsiveCmsImage src={hero.imageSrc} imageVariants={hero.imageVariants} sizes="100vw" alt={hero.imageAlt} />
     <div className="hero-shade" />
     <div className="hero-copy">
       {page.contentKind && <p className="content-kind-label">{page.contentKind}</p>}
       {hero.eyebrow && <p className="eyebrow">{hero.eyebrow}</p>}
       <h1 id={headingId}>{hero.title}</h1>
       {hero.description && <p>{hero.description}</p>}
-      {hero.cta && <a href={hero.cta.href} className="text-link">{hero.cta.label} <ArrowRight size={18} /></a>}
+      {hero.cta && (previewMode ? <button type="button" className="text-link" disabled>{hero.cta.label} <ArrowRight size={18} /></button> : <a href={hero.cta.href} className="text-link">{hero.cta.label} <ArrowRight size={18} /></a>)}
     </div>
   </section>
 }
 
-function ContentPageBlockView({ block, index, onBookingIntent, locale }: { block: Exclude<ContentPageBlock, { type: 'HERO' }>; index: number; onBookingIntent?: (intent: BookingIntent) => void; locale: 'ko' | 'en' }) {
+function ContentPageBlockView({ block, index, onBookingIntent, locale, previewMode }: { block: Exclude<ContentPageBlock, { type: 'HERO' }>; index: number; onBookingIntent?: (intent: BookingIntent) => void; locale: 'ko' | 'en'; previewMode?: boolean }) {
   if (block.type === 'TEXT') {
     return <section className="content-section content-page-text" key={`text-${index}`}>
       {block.eyebrow && <p className="section-kicker">{block.eyebrow}</p>}
@@ -68,7 +70,7 @@ function ContentPageBlockView({ block, index, onBookingIntent, locale }: { block
   </section>
 
   if (block.type === 'LOCATION') return <section className="content-section content-page-detail" aria-labelledby={`location-${index}`}>
-    <h2 id={`location-${index}`}>{block.title}</h2><address>{block.address}</address>{block.directions && <p>{block.directions}</p>}{block.mapHref && <a className="text-link dark" href={block.mapHref}>{locale === 'en' ? 'View directions' : '오시는 길 보기'} <ArrowRight size={17} /></a>}
+    <h2 id={`location-${index}`}>{block.title}</h2><address>{block.address}</address>{block.directions && <p>{block.directions}</p>}{block.mapHref && (previewMode ? <button type="button" className="text-link dark" disabled>{locale === 'en' ? 'View directions' : '오시는 길 보기'} <ArrowRight size={17} /></button> : <a className="text-link dark" href={block.mapHref}>{locale === 'en' ? 'View directions' : '오시는 길 보기'} <ArrowRight size={17} /></a>)}
   </section>
 
   if (block.type === 'PROMOTION_SUMMARY') return <section className="content-section content-page-detail" aria-labelledby={`promotion-${index}`}>
@@ -80,7 +82,7 @@ function ContentPageBlockView({ block, index, onBookingIntent, locale }: { block
   </section>
 
   if (block.type === 'BOOKING_CTA') return <section className="content-page-booking-cta" aria-labelledby={`booking-cta-${index}`}>
-    <div>{block.eyebrow && <p className="section-kicker">{block.eyebrow}</p>}<h2 id={`booking-cta-${index}`}>{block.title}</h2><p>{block.description}</p></div><button type="button" className="primary" onClick={() => onBookingIntent?.({ hotelId: block.hotelId, roomTypeId: block.roomTypeId })}>{block.label} <ArrowRight size={18} /></button>
+    <div>{block.eyebrow && <p className="section-kicker">{block.eyebrow}</p>}<h2 id={`booking-cta-${index}`}>{block.title}</h2><p>{block.description}</p></div><button type="button" className="primary" disabled={previewMode} onClick={() => !previewMode && onBookingIntent?.({ hotelId: block.hotelId, roomTypeId: block.roomTypeId })}>{block.label} <ArrowRight size={18} /></button>
   </section>
 
   if (!block.cta) return null
@@ -90,7 +92,7 @@ function ContentPageBlockView({ block, index, onBookingIntent, locale }: { block
       <h2>{block.title}</h2>
       {block.description && <p>{block.description}</p>}
     </div>
-    <a href={block.cta.href} className="outline">{block.cta.label} <ArrowRight size={17} /></a>
+    {previewMode ? <button type="button" className="outline" disabled>{block.cta.label} <ArrowRight size={17} /></button> : <a href={block.cta.href} className="outline">{block.cta.label} <ArrowRight size={17} /></a>}
   </section>
 }
 
@@ -145,31 +147,31 @@ function ContentPageGallery({ block, index, locale }: { block: Extract<ContentPa
     <BlockHeading block={block} id={`gallery-${index}`} />
     <div className={`content-gallery-stage${outgoing ? ' is-transitioning' : ''}`} data-direction={outgoing?.direction} onPointerDown={startSwipe} onPointerUp={finishSwipe} onPointerCancel={cancelSwipe}>
       <div className="content-gallery-media">
-        {outgoing && <img className="content-gallery-image content-gallery-image-exit" src={outgoing.item.imageSrc} alt="" aria-hidden="true" onAnimationEnd={() => setOutgoing(current => current?.key === outgoing.key ? null : current)} />}
-        <img key={`${selected}-${motionKey}`} className="content-gallery-image content-gallery-image-enter" src={item.imageSrc} alt={item.imageAlt} />
+        {outgoing && <ResponsiveCmsImage className="content-gallery-image content-gallery-image-exit" src={outgoing.item.imageSrc} imageVariants={outgoing.item.imageVariants} sizes="(max-width: 760px) 90vw, 1180px" alt="" aria-hidden="true" onAnimationEnd={() => setOutgoing(current => current?.key === outgoing.key ? null : current)} />}
+        <ResponsiveCmsImage key={`${selected}-${motionKey}`} className="content-gallery-image content-gallery-image-enter" src={item.imageSrc} imageVariants={item.imageVariants} sizes="(max-width: 760px) 90vw, 1180px" alt={item.imageAlt} />
       </div>
       <div className="content-gallery-controls"><button type="button" aria-label={locale === 'en' ? 'Previous image' : '이전 이미지'} onClick={() => selectByOffset(-1)}><ArrowLeft size={20} /></button><span key={`position-${motionKey}`} className="content-gallery-position" aria-live="polite">{selected + 1} / {block.items.length}</span><button type="button" aria-label={locale === 'en' ? 'Next image' : '다음 이미지'} onClick={() => selectByOffset(1)}><ArrowRight size={20} /></button></div>
       {item.caption && <p key={`caption-${motionKey}`} className="content-gallery-caption">{item.caption}</p>}
     </div>
-    <div className="content-gallery-thumbnails" aria-label={locale === 'en' ? 'Select gallery image' : '갤러리 이미지 선택'}>{block.items.map((thumbnail, thumbnailIndex) => <button type="button" aria-label={locale === 'en' ? `View image ${thumbnailIndex + 1}` : `${thumbnailIndex + 1}번 이미지 보기`} aria-pressed={thumbnailIndex === selected} onClick={() => selectThumbnail(thumbnailIndex)} key={thumbnailIndex}><img src={thumbnail.imageSrc} alt="" /></button>)}</div>
+    <div className="content-gallery-thumbnails" aria-label={locale === 'en' ? 'Select gallery image' : '갤러리 이미지 선택'}>{block.items.map((thumbnail, thumbnailIndex) => <button type="button" aria-label={locale === 'en' ? `View image ${thumbnailIndex + 1}` : `${thumbnailIndex + 1}번 이미지 보기`} aria-pressed={thumbnailIndex === selected} onClick={() => selectThumbnail(thumbnailIndex)} key={thumbnailIndex}><ResponsiveCmsImage src={thumbnail.imageSrc} imageVariants={thumbnail.imageVariants} sizes="80px" alt="" /></button>)}</div>
   </section>
 }
 
-export function ContentPageAfterHero({ page, onBookingIntent, locale = 'ko' }: { page: ContentPageDocument; onBookingIntent?: (intent: BookingIntent) => void; locale?: 'ko' | 'en' }) {
+export function ContentPageAfterHero({ page, onBookingIntent, locale = 'ko', previewMode = false }: { page: ContentPageDocument; onBookingIntent?: (intent: BookingIntent) => void; locale?: 'ko' | 'en'; previewMode?: boolean }) {
   const firstBlockIsHero = page.blocks[0]?.type === 'HERO'
   return <>
     {!firstBlockIsHero && page.contentKind && <p className="content-kind-label content-section">{page.contentKind}</p>}
     {page.blocks.slice(firstBlockIsHero ? 1 : 0).map((block, index) => {
       if (block.type === 'HERO') return null
       const blockIndex = index + (firstBlockIsHero ? 1 : 0)
-      return <ContentPageBlockView block={block} index={blockIndex} onBookingIntent={onBookingIntent} locale={locale} key={`${block.type.toLowerCase()}-${blockIndex}`} />
+      return <ContentPageBlockView block={block} index={blockIndex} previewMode={previewMode} onBookingIntent={onBookingIntent} locale={locale} key={`${block.type.toLowerCase()}-${blockIndex}`} />
     })}
   </>
 }
 
-export function ContentPage({ page, onBookingIntent, locale = 'ko' }: { page: ContentPageDocument; onBookingIntent?: (intent: BookingIntent) => void; locale?: 'ko' | 'en' }) {
+export function ContentPage({ page, onBookingIntent, locale = 'ko', previewMode = false }: { page: ContentPageDocument; onBookingIntent?: (intent: BookingIntent) => void; locale?: 'ko' | 'en'; previewMode?: boolean }) {
   return <>
-    <ContentPageHero page={page} />
-    <ContentPageAfterHero page={page} onBookingIntent={onBookingIntent} locale={locale} />
+    <ContentPageHero page={page} previewMode={previewMode} />
+    <ContentPageAfterHero page={page} previewMode={previewMode} onBookingIntent={onBookingIntent} locale={locale} />
   </>
 }

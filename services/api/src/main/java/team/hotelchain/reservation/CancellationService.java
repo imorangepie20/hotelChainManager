@@ -33,11 +33,40 @@ public class CancellationService {
 
     @Transactional(noRollbackFor = RefundFailedException.class)
     public CancellationResult cancel(UUID reservationId, String token, String idempotencyKey) {
-        if (idempotencyKey == null || idempotencyKey.isBlank() || idempotencyKey.length() > 100) {
-            throw new IllegalArgumentException("올바른 Idempotency-Key가 필요합니다.");
-        }
+        validateIdempotencyKey(idempotencyKey);
         CancellationReservation reservation = lockReservation(reservationId, access.hashToken(token));
-        String requestHash = access.sha256(REQUEST_HASH_SOURCE.getBytes(StandardCharsets.UTF_8));
+        return cancelLocked(reservationId, idempotencyKey, reservation, null);
+    }
+
+    StaffCancellationPreview previewForStaff(UUID reservationId) {
+        CancellationReservation reservation = findReservationForStaff(reservationId, false);
+        var cutoff = cutoff(reservation);
+        boolean confirmed = "CONFIRMED".equals(reservation.status());
+        boolean beforeCutoff = clock.instant().isBefore(cutoff);
+        String unavailableReason = !confirmed
+                ? "확정된 예약만 취소할 수 있습니다."
+                : beforeCutoff ? null : "취소 가능 시간이 지났습니다.";
+        return new StaffCancellationPreview(
+                reservationId,
+                reservation.status(),
+                confirmed && beforeCutoff,
+                confirmed && beforeCutoff ? reservation.total() : 0,
+                "KRW",
+                cutoff,
+                unavailableReason
+        );
+    }
+
+    @Transactional(noRollbackFor = RefundFailedException.class)
+    CancellationResult cancelForStaff(UUID reservationId, UUID staffId, String idempotencyKey) {
+        validateIdempotencyKey(idempotencyKey);
+        return cancelLocked(reservationId, idempotencyKey, findReservationForStaff(reservationId, true), staffId);
+    }
+
+    private CancellationResult cancelLocked(UUID reservationId, String idempotencyKey,
+            CancellationReservation reservation, UUID staffId) {
+        String requestHashSource = staffId == null ? REQUEST_HASH_SOURCE : REQUEST_HASH_SOURCE + ":STAFF:" + staffId;
+        String requestHash = access.sha256(requestHashSource.getBytes(StandardCharsets.UTF_8));
         ExistingCancellation existing = findExisting(reservationId, idempotencyKey);
         if (existing != null) {
             if (!existing.requestHash().equals(requestHash)) {
@@ -50,20 +79,23 @@ public class CancellationService {
         }
 
         if ("CANCELLED".equals(reservation.status())) {
-            insertAttempt(reservationId, idempotencyKey, requestHash, reservation.total(), "SUCCEEDED", "CANCELLED");
+            if (staffId != null) {
+                throw new BusinessConflictException(
+                        "RESERVATION_STATE_CONFLICT", "확정된 예약만 취소할 수 있습니다.");
+            }
+            insertAttempt(reservationId, idempotencyKey, requestHash, reservation.total(), "SUCCEEDED", "CANCELLED", staffId);
             return new CancellationResult(reservationId, "CANCELLED", reservation.total(), "KRW");
         }
         if (!"CONFIRMED".equals(reservation.status())) {
             throw new BusinessConflictException("RESERVATION_STATE_CONFLICT", "확정된 예약만 취소할 수 있습니다.");
         }
 
-        var cutoff = LocalDateTime.of(reservation.checkIn().minusDays(reservation.cutoffDays()), reservation.cutoffTime())
-                .atZone(ZoneId.of(reservation.timezone())).toInstant();
+        var cutoff = cutoff(reservation);
         if (!clock.instant().isBefore(cutoff)) {
             throw new CancellationNotAllowedException();
         }
         if (!refundGateway.refund(reservationId, reservation.total())) {
-            insertAttempt(reservationId, idempotencyKey, requestHash, reservation.total(), "FAILED", "CONFIRMED");
+            insertAttempt(reservationId, idempotencyKey, requestHash, reservation.total(), "FAILED", "CONFIRMED", staffId);
             throw new RefundFailedException();
         }
 
@@ -80,8 +112,19 @@ public class CancellationService {
             throw new IllegalStateException("취소할 확정 재고가 예약 숙박일과 일치하지 않습니다.");
         }
         jdbc.update("update reservation set status = 'CANCELLED' where id = ?", reservationId);
-        insertAttempt(reservationId, idempotencyKey, requestHash, reservation.total(), "SUCCEEDED", "CANCELLED");
+        insertAttempt(reservationId, idempotencyKey, requestHash, reservation.total(), "SUCCEEDED", "CANCELLED", staffId);
         return new CancellationResult(reservationId, "CANCELLED", reservation.total(), "KRW");
+    }
+
+    private void validateIdempotencyKey(String idempotencyKey) {
+        if (idempotencyKey == null || idempotencyKey.isBlank() || idempotencyKey.length() > 100) {
+            throw new IllegalArgumentException("올바른 Idempotency-Key가 필요합니다.");
+        }
+    }
+
+    private java.time.Instant cutoff(CancellationReservation reservation) {
+        return LocalDateTime.of(reservation.checkIn().minusDays(reservation.cutoffDays()), reservation.cutoffTime())
+                .atZone(ZoneId.of(reservation.timezone())).toInstant();
     }
 
     private CancellationReservation lockReservation(UUID id, String tokenHash) {
@@ -101,6 +144,22 @@ public class CancellationService {
         return reservation;
     }
 
+    private CancellationReservation findReservationForStaff(UUID id, boolean lock) {
+        String sql = """
+                SELECT id, room_type_id, check_in, check_out, rooms, status, total_krw,
+                       COALESCE(policy_snapshot->>'timezone', 'Asia/Seoul') AS timezone,
+                       COALESCE((policy_snapshot->>'refundCutoffDaysBefore')::integer, 1) AS cutoff_days,
+                       COALESCE((policy_snapshot->>'refundCutoffLocalTime')::time, '18:00'::time) AS cutoff_time,
+                       (SELECT count(*) FROM reservation_night rn WHERE rn.reservation_id = r.id) AS nights
+                  FROM reservation r
+                 WHERE id = ?
+                """ + (lock ? " FOR UPDATE" : "");
+        CancellationReservation reservation = jdbc.query(
+                sql, rs -> rs.next() ? mapReservation(rs) : null, id);
+        if (reservation == null) throw new ReservationNotFoundException();
+        return reservation;
+    }
+
     private ExistingCancellation findExisting(UUID reservationId, String idempotencyKey) {
         return jdbc.query("""
                 SELECT request_hash, refund_amount_krw, refund_status, reservation_status
@@ -110,12 +169,21 @@ public class CancellationService {
     }
 
     private void insertAttempt(UUID reservationId, String key, String hash, long refund,
-            String refundStatus, String reservationStatus) {
+            String refundStatus, String reservationStatus, UUID staffId) {
+        if (staffId == null) {
+            jdbc.update("""
+                    INSERT INTO cancellation_attempt
+                        (id, reservation_id, idempotency_key, request_hash, refund_amount_krw, refund_status, reservation_status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, UUID.randomUUID(), reservationId, key, hash, refund, refundStatus, reservationStatus);
+            return;
+        }
         jdbc.update("""
                 INSERT INTO cancellation_attempt
-                    (id, reservation_id, idempotency_key, request_hash, refund_amount_krw, refund_status, reservation_status)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, UUID.randomUUID(), reservationId, key, hash, refund, refundStatus, reservationStatus);
+                    (id, reservation_id, idempotency_key, request_hash, refund_amount_krw, refund_status,
+                     reservation_status, actor_type, staff_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'STAFF', ?)
+                """, UUID.randomUUID(), reservationId, key, hash, refund, refundStatus, reservationStatus, staffId);
     }
 
     private CancellationReservation mapReservation(ResultSet rs) throws SQLException {

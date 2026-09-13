@@ -10,6 +10,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -22,10 +23,16 @@ import org.springframework.web.bind.annotation.RestController;
 public class StaffOperationsController {
     private final StaffOperationsService operations;
     private final DailyOperationsService dailyOperations;
+    private final StaffReservationQueryService reservationQuery;
+    private final StaffRoomReassignmentService roomReassignment;
 
-    public StaffOperationsController(StaffOperationsService operations, DailyOperationsService dailyOperations) {
+    public StaffOperationsController(StaffOperationsService operations, DailyOperationsService dailyOperations,
+            StaffReservationQueryService reservationQuery,
+            StaffRoomReassignmentService roomReassignment) {
         this.operations = operations;
         this.dailyOperations = dailyOperations;
+        this.reservationQuery = reservationQuery;
+        this.roomReassignment = roomReassignment;
     }
 
     @GetMapping("/hotels/{hotelId}/operations")
@@ -34,6 +41,16 @@ public class StaffOperationsController {
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
             @RequestHeader("X-Staff-Session") String token) {
         return dailyOperations.get(token, hotelId, date);
+    }
+
+    @GetMapping("/hotels/{hotelId}/reservations")
+    public StaffReservationSearchView reservations(
+            @PathVariable UUID hotelId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
+            @RequestParam(required = false) String query,
+            @RequestParam(required = false) String status,
+            @RequestHeader("X-Staff-Session") String token) {
+        return reservationQuery.search(token, hotelId, date, query, status);
     }
 
     @PostMapping("/reservations/{reservationId}/assignments")
@@ -47,6 +64,24 @@ public class StaffOperationsController {
     public java.util.List<AssignableRoom> assignableRooms(@PathVariable UUID reservationId,
             @RequestHeader("X-Staff-Session") String token) {
         return operations.assignableRooms(token, reservationId);
+    }
+
+    @GetMapping("/reservations/{reservationId}/room-reassignment-options")
+    public RoomReassignmentOptions roomReassignmentOptions(
+            @PathVariable UUID reservationId,
+            @RequestHeader("X-Staff-Session") String token) {
+        return roomReassignment.options(token, reservationId);
+    }
+
+    @PatchMapping("/reservations/{reservationId}/assignments/{currentPhysicalRoomId}")
+    public RoomReassignmentResult reassignRoom(
+            @PathVariable UUID reservationId,
+            @PathVariable UUID currentPhysicalRoomId,
+            @RequestHeader("X-Staff-Session") String token,
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @RequestBody RoomReassignmentRequest request) {
+        return roomReassignment.reassign(
+                token, reservationId, currentPhysicalRoomId, idempotencyKey, request);
     }
 
     @PostMapping("/reservations/{reservationId}/check-in")

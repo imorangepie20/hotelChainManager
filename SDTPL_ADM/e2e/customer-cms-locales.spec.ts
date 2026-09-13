@@ -30,8 +30,14 @@ for (const width of [1280, 390]) test(`serves only published English CMS content
   await page.setViewportSize({ width, height: 844 });
   const requestedLocales: string[] = [];
   let missing = false;
+  const variantResponse = await page.request.get(`${customerUrl}${hero.imageSrc}`);
+  expect(variantResponse.ok()).toBe(true);
+  const variantBody = await variantResponse.body();
   await page.route("**/api/**", async route => {
     const url = new URL(route.request().url());
+    if (url.pathname.startsWith(`/api/website/media/${assetId}/variants/`)) {
+      return route.fulfill({ body: variantBody, contentType: "image/png" });
+    }
     if (url.pathname.startsWith("/api/website/")) requestedLocales.push(url.searchParams.get("locale") ?? "missing");
     if (url.pathname === "/api/hotels") return route.fulfill({ json: [] });
     if (url.pathname === "/api/website/navigation") return route.fulfill({ json: [{ id: "story", hotelId: null, label: "Our story", path: "/en/brand/story", children: [] }] });
@@ -39,6 +45,10 @@ for (const width of [1280, 390]) test(`serves only published English CMS content
       if (missing) return route.fulfill({ status: 404, json: { code: "WEBSITE_PAGE_NOT_FOUND", message: "Not published" } });
       const path = url.searchParams.get("path");
       return route.fulfill({ json: { id: "story", type: path === "/en" ? "HOME_PAGE" : "CONTENT_PAGE", contentKind: path === "/en" ? "HOME" : "BRAND", hotelId: null, path,
+        mediaVariants: { [assetId]: [
+          { targetWidth: 640, deliveryUrl: `/api/website/media/${assetId}/variants/640.webp`, mimeType: "image/webp" },
+          { targetWidth: 1280, deliveryUrl: `/api/website/media/${assetId}/variants/1280.webp`, mimeType: "image/webp" },
+        ] },
         connections: { roomTypeIds: [], targetHotelIds: [], relatedPages: [] }, content: {
           seo: { title: "Our story | STAY HANEUL", description: "English story description" }, blocks: [hero,
             { blockId: "15000000-0000-0000-0000-000000000002", type: "IMAGE_GALLERY", title: "Gallery", items: [
@@ -53,6 +63,12 @@ for (const width of [1280, 390]) test(`serves only published English CMS content
   });
   await page.goto(`${customerUrl}/en/brand/story`);
   await expect(page.getByRole("heading", { name: "Our story", exact: true })).toBeVisible();
+  const expectedWidth = width <= 640 ? 640 : 1280;
+  await expect(page.locator(".content-page-hero source[type='image/webp']")).toHaveAttribute("srcset", `/api/website/media/${assetId}/variants/640.webp 640w, /api/website/media/${assetId}/variants/1280.webp 1280w`);
+  await expect.poll(() => page.locator(".content-page-hero img").evaluate(image => {
+    const currentSrc = (image as HTMLImageElement).currentSrc;
+    return currentSrc ? new URL(currentSrc).pathname : "";
+  })).toBe(`/api/website/media/${assetId}/variants/${expectedWidth}.webp`);
   const renderedFontFamilies = await Promise.all([
     page.locator("html").evaluate(element => getComputedStyle(element).fontFamily),
     page.locator(".topbar .brand").evaluate(element => getComputedStyle(element).fontFamily),
@@ -64,6 +80,7 @@ for (const width of [1280, 390]) test(`serves only published English CMS content
   await expect(page.getByRole("link", { name: "English home", exact: true })).toHaveAttribute("href", "/en");
   await page.getByRole("button", { name: "Next image", exact: true }).click();
   await expect(page.getByText("Hotel caption", { exact: true })).toBeVisible();
+  await expect(page.locator(".content-gallery-media picture:has(> img.content-gallery-image-enter) > source[type='image/webp']")).toHaveAttribute("srcset", `/api/website/media/${assetId}/variants/640.webp 640w, /api/website/media/${assetId}/variants/1280.webp 1280w`);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   if (process.env.CMS_LOCALE_SCREENSHOTS) await page.screenshot({ path: `../.tmp/cms-locale-customer-${width}.png`, fullPage: true });
   await page.goto(`${customerUrl}/en`);
@@ -93,6 +110,16 @@ test("keeps the full Korean desktop navigation on one line at 1186px", async ({ 
   }));
   expect(textLineCounts).toEqual(Array(9).fill(1));
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+test("keeps Korean hero title words intact at 390px", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await routeKoreanHeaderPage(page);
+
+  await page.goto(`${customerUrl}/stays/seoraksan`);
+  const heading = page.locator("#hero-title");
+  await expect(heading).toBeVisible();
+  await expect(heading).toHaveCSS("word-break", "keep-all");
 });
 
 test("aligns the desktop booking lookup and active locale indicators", async ({ page }) => {

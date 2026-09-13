@@ -1,6 +1,7 @@
 package team.hotelchain.webcontent;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.UUID;
 
 public record WebsiteMediaAsset(
@@ -16,5 +17,6 @@ public record WebsiteMediaAsset(
         String status,
         int version,
         OffsetDateTime archivedAt,
-        OffsetDateTime permanentDeleteAvailableAt) {
+        OffsetDateTime permanentDeleteAvailableAt,
+        List<WebsiteMediaVariant> variants) {
 }

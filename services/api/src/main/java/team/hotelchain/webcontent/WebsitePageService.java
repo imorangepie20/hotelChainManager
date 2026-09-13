@@ -181,6 +181,51 @@ public class WebsitePageService {
         return saveContentPageDraft(token, activeContentPage(pageId), expectedDraftVersion, metadata, content, nextConnections);
     }
 
+    int replaceDraftMediaReferences(
+            String token,
+            UUID pageId,
+            int expectedDraftVersion,
+            WebsiteMediaService.MediaAssetRow source,
+            WebsiteMediaService.MediaAssetRow target,
+            List<String> expectedFieldPaths) {
+        StaffPrincipal actor = access.requireHeadquarters(token);
+        PageRow current = lockedPageForUpdate(pageId);
+        if (current == null || !"ACTIVE".equals(current.lifecycleStatus())
+                || current.draftVersion() != expectedDraftVersion) {
+            throw WebsiteMediaDraftReplacementService.conflict();
+        }
+        WebsiteMediaReferenceService.MediaReferenceReplacement replacement = mediaReferences.replaceAssetReferences(
+                current.pageType(), current.draftContent(), source, target);
+        List<String> actualPaths = replacement.fieldPaths().stream().sorted().toList();
+        if (!actualPaths.equals(expectedFieldPaths.stream().sorted().toList())) {
+            throw WebsiteMediaDraftReplacementService.conflict();
+        }
+        if ("HOTEL_LANDING".equals(current.pageType())) {
+            WebContentService.validateLandingContent(replacement.content());
+        } else if ("HOME_PAGE".equals(current.pageType())) {
+            contentPages.validate(replacement.content());
+        } else if ("CONTENT_PAGE".equals(current.pageType())) {
+            contentPages.validate(contentKind(current), replacement.content());
+        } else {
+            throw WebsiteMediaDraftReplacementService.conflict();
+        }
+        int updated = jdbc.update("""
+                update website_page
+                   set draft_content = ?::jsonb, draft_version = draft_version + 1,
+                       updated_at = current_timestamp, updated_by = ?
+                 where id = ? and lifecycle_status = 'ACTIVE' and draft_version = ?
+                """, stringify(replacement.content()), actor.id(), current.id(), expectedDraftVersion);
+        if (updated == 0) throw WebsiteMediaDraftReplacementService.conflict();
+        mediaReferences.synchronizeDraft(current.id(), current.pageType(), replacement.content());
+        jdbc.update("""
+                insert into website_page_audit (page_id, action, actor_id, details)
+                values (?, 'DRAFT_SAVED', ?,
+                        jsonb_build_object('operation', 'MEDIA_DRAFT_USAGES_REPLACED', 'locale', 'ko',
+                                           'sourceMediaId', ?, 'targetMediaId', ?, 'count', ?))
+                """, current.id(), actor.id(), source.id(), target.id(), actualPaths.size());
+        return actualPaths.size();
+    }
+
     private WebsitePageDocument saveContentPageDraft(String token, PageRow current, int expectedDraftVersion,
             WebsitePageDraftMetadata metadata, Map<String, Object> content, WebsitePageConnections nextConnections) {
         StaffPrincipal actor = access.requireHeadquarters(token);
@@ -443,8 +488,20 @@ public class WebsitePageService {
                 + "and published_content <> '{}'::jsonb",
                 rs -> rs.next() ? row(rs) : null, path);
         if (page == null) throw new WebsitePageNotFoundException(path);
+        Map<String, Object> content = responseContent(page, page.publishedContent(), page.publishedVersion());
         return new PublishedWebsitePage(page.id(), page.pageType(), contentKind(page), page.publishedPath(), page.hotelId(),
-                responseContent(page, page.publishedContent(), page.publishedVersion()), pageConnections(page.id(), "PUBLISHED"));
+                content, pageConnections(page.id(), "PUBLISHED"), mediaReferences.publicVariants(page.pageType(), content));
+    }
+
+    PublishedWebsitePage previewDraft(UUID pageId, int draftVersion, String previewPath) {
+        PageRow page = jdbc.query("select " + PAGE_COLUMNS + " from website_page where id = ? "
+                + "and lifecycle_status = 'ACTIVE' and page_type in ('HOME_PAGE', 'HOTEL_LANDING', 'CONTENT_PAGE') "
+                + "and draft_version = ? and draft_path = ?",
+                rs -> rs.next() ? row(rs) : null, pageId, draftVersion, previewPath);
+        if (page == null) throw new WebsitePreviewUnavailableException();
+        Map<String, Object> content = responseContent(page, page.draftContent(), page.draftVersion());
+        return new PublishedWebsitePage(page.id(), page.pageType(), contentKind(page), page.draftPath(), page.hotelId(),
+                content, pageConnections(page.id(), "DRAFT"), mediaReferences.publicVariants(page.pageType(), content));
     }
 
     public List<WebsiteContentCollectionItem> publishedCollection(String hotelSlug, ContentKind kind) {

@@ -8,7 +8,7 @@ services:
       POSTGRES_USER: ${HOTEL_DB_USER:-hotel_app}
       POSTGRES_PASSWORD: ${HOTEL_DB_PASSWORD:-hotel_local_only}
     ports:
-      - "127.0.0.1:55432:5432"
+      - "127.0.0.1:${HOTEL_DB_PORT:-55432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 2s
@@ -47,8 +47,15 @@ services:
       STAFF_SEORAKSAN_PASSWORD: ${STAFF_SEORAKSAN_PASSWORD:-}
       STAFF_JEJU_PASSWORD: ${STAFF_JEJU_PASSWORD:-}
       WEBSITE_MEDIA_STORAGE_DIR: /app/media
+      WEBSITE_MEDIA_STORAGE_MODE: ${WEBSITE_MEDIA_STORAGE_MODE:-local}
+      WEBSITE_MEDIA_S3_ENDPOINT: ${WEBSITE_MEDIA_S3_ENDPOINT:-}
+      WEBSITE_MEDIA_S3_REGION: ${WEBSITE_MEDIA_S3_REGION:-}
+      WEBSITE_MEDIA_S3_BUCKET: ${WEBSITE_MEDIA_S3_BUCKET:-}
+      WEBSITE_MEDIA_S3_PATH_STYLE: ${WEBSITE_MEDIA_S3_PATH_STYLE:-false}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
     ports:
-      - "127.0.0.1:4080:4080"
+      - "127.0.0.1:${HOTEL_API_PORT:-4080}:4080"
     depends_on:
       db:
         condition: service_healthy
@@ -65,6 +72,19 @@ services:
     depends_on:
       api:
         condition: service_started
+
+  s3mock:
+    profiles: ["object-storage"]
+    image: adobe/s3mock:5.1.0@sha256:65cf60155a2e235fe7d5bf6c633747d6fc7ed93f9f5a6727d86470026b83c2a2
+    environment:
+      COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: hotel-media-test
+    ports:
+      - "127.0.0.1:${WEBSITE_MEDIA_S3MOCK_PORT:-59090}:9090"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/favicon.ico"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
 
 volumes:
   hotel-db-data:

@@ -133,12 +133,13 @@ sequenceDiagram
 
 - 당일 도착·출발 예약 목록.
 - 예약별 실제 객실 후보 조회와 배정.
+- 체크인 전 배정 객실을 같은 호텔·객실 유형의 청결 객실로 한 실씩 변경.
 - 체크인: 필요한 수의 청결 객실이 모두 배정된 경우만 처리.
 - 체크아웃: 배정 객실을 `NEEDS_CLEANING`으로 전환.
 - 하우스키핑 완료: 객실을 `CLEAN`으로 전환.
 - 노쇼 처리.
 
-객실 변경과 다객실 예약의 복수 배정 UX는 후속 구현 범위다.
+다객실 예약은 예약 상세에서 남은 객실을 한 실씩 배정한다. 기존 배정 객실 변경도 예약 상세에서 한 실씩 처리하며 예약·현재 객실·신규 객실 잠금, 숙박 기간 충돌 재검증, 멱등 키와 직원 감사 이력을 적용한다.
 
 ### 6.2 본사
 
@@ -229,7 +230,14 @@ CMS는 본사가 개발자 도움 없이 지점 랜딩, 오퍼, 안내, 캠페�
 | POST | `/api/staff/sessions` | 로그인 |
 | GET | `/api/staff/me` | 활성 세션 |
 | GET | `/api/staff/hotels/{hotelId}/operations` | 본사 또는 소속 지점 |
+| GET | `/api/staff/hotels/{hotelId}/reservations?date=&query=&status=` | 본사 또는 소속 지점. 기준일 관련 예약을 최대 200건 조회 |
+| GET | `/api/staff/reservations/{id}/cancellation-preview` | 본사 또는 예약 지점. 저장 정책 기준 취소 가능 여부·예상 환불 조회 |
+| POST | `/api/staff/reservations/{id}/cancel` | 본사 또는 예약 지점. 멱등 키로 취소·환불·재고 복구 후 직원 감사 기록 |
+| PATCH | `/api/staff/reservations/{id}/guest` | 본사 또는 예약 지점. 확정 예약의 이름·이메일만 멱등 정정하고 직원 감사 기록 |
+| PATCH | `/api/staff/reservations/{id}/party` | 본사 또는 예약 지점. 확정 예약의 성인·아동 수를 수용 인원 안에서 멱등 변경하고 직원 감사 기록 |
 | POST | `/api/staff/reservations/{id}/assignments` | 본사 또는 소속 지점 |
+| GET | `/api/staff/reservations/{id}/room-reassignment-options` | 본사 또는 예약 지점. 현재 배정과 같은 유형의 변경 후보 조회 |
+| PATCH | `/api/staff/reservations/{id}/assignments/{physicalRoomId}` | 본사 또는 예약 지점. 확정 예약의 객실 한 실을 멱등 변경하고 직원 감사 기록 |
 | PUT | `/api/staff/web-content/hotels/{hotelId}` | 본사만 |
 | POST | `/api/staff/web-content/hotels/{hotelId}/publish` | 본사만 |
 | GET | `/api/staff/web-content/hotels/{hotelId}/versions` | 본사만 |

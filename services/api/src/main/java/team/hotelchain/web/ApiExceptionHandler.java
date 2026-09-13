@@ -7,14 +7,32 @@ import team.hotelchain.staff.StaffAuthenticationException;
 import team.hotelchain.webcontent.WebsitePageNotFoundException;
 import team.hotelchain.webcontent.WebsiteMediaNotFoundException;
 import team.hotelchain.webcontent.WebsiteTranslationReviewValidationException;
+import team.hotelchain.webcontent.WebsitePreviewNotFoundException;
+import team.hotelchain.webcontent.WebsitePreviewUnavailableException;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.http.CacheControl;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
+
+    @ExceptionHandler(WebsitePreviewNotFoundException.class)
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    public ResponseEntity<ApiError> websitePreviewNotFound(WebsitePreviewNotFoundException exception) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).cacheControl(CacheControl.noStore())
+                .body(new ApiError(exception.code(), exception.getMessage()));
+    }
+
+    @ExceptionHandler(WebsitePreviewUnavailableException.class)
+    @ResponseStatus(HttpStatus.GONE)
+    public ResponseEntity<ApiError> websitePreviewUnavailable(WebsitePreviewUnavailableException exception) {
+        return ResponseEntity.status(HttpStatus.GONE).cacheControl(CacheControl.noStore())
+                .body(new ApiError(exception.code(), exception.getMessage()));
+    }
 
     @ExceptionHandler(WebsiteTranslationReviewValidationException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)

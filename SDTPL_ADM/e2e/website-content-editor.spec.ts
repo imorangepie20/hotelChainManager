@@ -647,8 +647,46 @@ function mediaAsset(overrides: Record<string, unknown> = {}) {
     version: 1,
     archivedAt: null,
     permanentDeleteAvailableAt: null,
+    variants: [],
     ...overrides,
   };
+}
+
+function draftReplacementImpact() {
+  return {
+    sourceAsset: mediaAsset(),
+    targetAsset: mediaAsset({ id: UPLOADED_ASSET, displayName: "새로운 제주 이미지", deliveryUrl: `/api/website/media/${UPLOADED_ASSET}/content`, defaultAltText: "제주 해안의 오후", usageCount: 0 }),
+    replaceableUsages: [
+      { pageId: HOME_PAGE, pageLabel: "홈", pagePath: "/", pageType: "HOME_PAGE", locale: "ko", fieldPath: "blocks[0].imageAssetId", expectedDraftVersion: 1 },
+      { pageId: STORY_PAGE, pageLabel: "브랜드 이야기", pagePath: "/en/brand/story", pageType: "CONTENT_PAGE", locale: "en", fieldPath: "blocks[0].imageAssetId", expectedDraftVersion: 1 },
+    ],
+    publishedUsageCount: 1,
+    archivedDraftUsageCount: 1,
+  };
+}
+
+async function mockDraftReplacementImpact(page: Page) {
+  const impact = draftReplacementImpact();
+  await page.route(`**/api/staff/website/media/${BUNDLED_ASSET}/usages`, (route) => route.fulfill({
+    json: impact.replaceableUsages.map((usage) => ({ ...usage, documentState: "DRAFT", altText: usage.locale === "en" ? "English coast" : "속초 해안" })),
+  }));
+  await page.route(`**/api/staff/website/media/${BUNDLED_ASSET}/draft-replacement-impact?*`, (route) => route.fulfill({ json: impact }));
+}
+
+async function openBulkReplacementImpact(page: Page) {
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "홈", exact: true }).click();
+  await page.getByRole("button", { name: "미디어 선택" }).click();
+  const picker = page.getByRole("dialog", { name: "미디어 선택" });
+  await picker.getByRole("button", { name: "속초 해안 대표 이미지 선택" }).click();
+  await picker.getByRole("button", { name: "초안 사용 위치 일괄 교체" }).click();
+  const dialog = page.getByRole("dialog", { name: "초안 사용 위치 일괄 교체" });
+  await dialog.getByLabel("새 이미지 파일").setInputFiles({ name: "replacement.jpg", mimeType: "image/jpeg", buffer: Buffer.from("mock-jpeg") });
+  await dialog.getByLabel("새 자산명").fill("새로운 제주 이미지");
+  await dialog.getByLabel("새 기본 대체 텍스트").fill("제주 해안의 오후");
+  await dialog.getByRole("button", { name: "업로드하고 영향 확인" }).click();
+  await expect(dialog.getByText("한국어 초안 1곳 · 영어 초안 1곳")).toBeVisible();
+  return { picker, dialog };
 }
 
 function contentPageDocument(overrides: Record<string, unknown> = {}) {
@@ -986,6 +1024,270 @@ test.beforeEach(async ({ page }) => {
       }),
     });
   });
+});
+
+test("미디어 variant 재시도 응답이 편집 중 메타데이터 버전을 바꾸지 않는다", async ({ page }) => {
+  const original = mediaAsset({
+    id: UPLOADED_ASSET, displayName: "원래 자산명", defaultAltText: "원래 대체 텍스트",
+    deliveryUrl: `/api/website/media/${UPLOADED_ASSET}/content`, usageCount: 0,
+    variants: [{
+      id: "variant-640", format: "WEBP", targetWidth: 640, status: "FAILED", deliveryUrl: null,
+      mimeType: null, byteSize: null, width: null, height: null, attemptCount: 3,
+      lastError: "변환 실패", updatedAt: "2026-09-13T00:00:00Z",
+    }],
+  });
+  await page.route("**/api/staff/website/media?includeArchived=true", (route) => route.fulfill({
+    json: [original],
+  }));
+  await page.route(`**/api/staff/website/media/${UPLOADED_ASSET}/variants/640/retry`, (route) => route.fulfill({
+    json: { ...original, displayName: "다른 관리자의 변경", defaultAltText: "다른 관리자의 설명", version: 2,
+      variants: [{
+        id: "variant-640", format: "WEBP", targetWidth: 640, status: "PENDING", deliveryUrl: null,
+        mimeType: null, byteSize: null, width: null, height: null, attemptCount: 0,
+        lastError: null, updatedAt: "2026-09-13T00:00:01Z",
+      }], },
+  }));
+  await page.route(`**/api/staff/website/media/${UPLOADED_ASSET}`, (route) => route.fulfill({
+    status: 409, json: { code: "WEBSITE_MEDIA_VERSION_CONFLICT", message: "자산 버전 충돌" },
+  }));
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "홈", exact: true }).click();
+  await page.getByRole("button", { name: "미디어 선택" }).click();
+  const picker = page.getByRole("dialog", { name: "미디어 선택" });
+  await picker.getByLabel("선택한 자산 이름").fill("편집 중인 자산명");
+  await picker.getByRole("button", { name: "640px 다시 시도", exact: true }).click();
+  await expect(picker.getByText("640px · 변환 대기 중")).toBeVisible();
+  await expect(picker.getByLabel("선택한 자산 이름")).toHaveValue("편집 중인 자산명");
+  await expect(picker.getByLabel("선택한 자산 기본 대체 텍스트")).toHaveValue("원래 대체 텍스트");
+  const savedRequest = page.waitForRequest((request) => request.method() === "PATCH"
+    && request.url().endsWith(`/api/staff/website/media/${UPLOADED_ASSET}`));
+  await picker.getByRole("button", { name: "자산 정보 저장" }).click();
+  expect((await savedRequest).postDataJSON()).toEqual({
+    displayName: "편집 중인 자산명", defaultAltText: "원래 대체 텍스트", expectedVersion: 1,
+  });
+});
+
+for (const attemptCount of [1, 2]) {
+  test(`미디어 variant 자동 재시도 ${attemptCount}회 backoff 중에도 상태를 갱신한다`, async ({ page }) => {
+    let catalogRequests = 0;
+    const failed = {
+      id: "variant-640", format: "WEBP", targetWidth: 640, status: "FAILED", deliveryUrl: null,
+      mimeType: null, byteSize: null, width: null, height: null, attemptCount,
+      lastError: "변환 실패", updatedAt: "2026-09-13T00:00:00Z",
+    };
+    await page.route("**/api/staff/website/media?includeArchived=true", (route) => {
+      catalogRequests += 1;
+      const variant = catalogRequests === 1 ? failed : catalogRequests === 2
+        ? { ...failed, status: "PROCESSING", attemptCount: attemptCount + 1, lastError: null }
+        : { ...failed, status: "READY", attemptCount: attemptCount + 1, lastError: null,
+          deliveryUrl: `/api/website/media/${UPLOADED_ASSET}/variants/640.webp`,
+          mimeType: "image/webp", byteSize: 2048, width: 640, height: 360 };
+      return route.fulfill({ json: [mediaAsset({
+        id: UPLOADED_ASSET, deliveryUrl: `/api/website/media/${UPLOADED_ASSET}/content`, usageCount: 0,
+        variants: [variant, { ...failed, id: "variant-1280", targetWidth: 1280, attemptCount: 3 }],
+      })] });
+    });
+    await page.goto("/dashboard/website");
+    await page.getByRole("button", { name: "홈", exact: true }).click();
+    await page.clock.install({ time: new Date("2026-09-13T00:00:00Z") });
+    await page.clock.pauseAt(new Date("2026-09-13T00:00:01Z"));
+    await page.getByRole("button", { name: "미디어 선택" }).click();
+    const picker = page.getByRole("dialog", { name: "미디어 선택" });
+    await expect(picker.getByText(`640px · 변환 실패 · ${attemptCount}/3회`)).toBeVisible();
+    await page.clock.runFor(2_100);
+    await expect(picker.getByText("640px · 변환 중")).toBeVisible();
+    await page.clock.runFor(2_100);
+    await expect(picker.getByRole("link", { name: "640 × 360 · WebP · 2 KB" })).toBeVisible();
+    await expect(picker.getByText("1280px · 변환 실패 · 3/3회")).toBeVisible();
+    await page.clock.runFor(10_000);
+    expect(catalogRequests).toBe(3);
+  });
+}
+
+test("미디어 variant 보관 자산의 대기 작업은 polling하지 않는다", async ({ page }) => {
+  let catalogRequests = 0;
+  await page.route("**/api/staff/website/media?includeArchived=true", (route) => {
+    catalogRequests += 1;
+    return route.fulfill({ json: [mediaAsset({
+      id: UPLOADED_ASSET, deliveryUrl: `/api/website/media/${UPLOADED_ASSET}/content`, usageCount: 0,
+      status: "ARCHIVED", version: 2, archivedAt: "2026-09-01T00:00:00Z", permanentDeleteAvailableAt: "2026-10-01T00:00:00Z",
+      variants: [{
+        id: "variant-640", format: "WEBP", targetWidth: 640, status: "PENDING", deliveryUrl: null,
+        mimeType: null, byteSize: null, width: null, height: null, attemptCount: 0,
+        lastError: null, updatedAt: "2026-09-13T00:00:00Z",
+      }],
+    })] });
+  });
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "홈", exact: true }).click();
+  await page.clock.install({ time: new Date("2026-09-13T00:00:00Z") });
+  await page.clock.pauseAt(new Date("2026-09-13T00:00:01Z"));
+  await page.getByRole("button", { name: "미디어 선택" }).click();
+  const picker = page.getByRole("dialog", { name: "미디어 선택" });
+  await expect(picker.getByRole("button", { name: "복원", exact: true })).toBeVisible();
+  await expect(picker.getByText("640px · 변환 대기 중")).toBeVisible();
+  await page.clock.runFor(10_000);
+  await page.waitForTimeout(250);
+  expect(catalogRequests).toBe(1);
+});
+
+test("미디어 variant 필드가 없는 이전 API 카탈로그에서도 자산을 선택한다", async ({ page }) => {
+  const runtimeErrors: string[] = [];
+  page.on("pageerror", (error) => runtimeErrors.push(error.message));
+  const { variants: _variants, ...legacyAsset } = mediaAsset();
+  await page.route("**/api/staff/website/media?includeArchived=true", (route) => route.fulfill({ json: [legacyAsset] }));
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "홈", exact: true }).click();
+  await page.getByRole("button", { name: "미디어 선택" }).click();
+  const picker = page.getByRole("dialog", { name: "미디어 선택" });
+  await expect(picker.getByText("생성된 반응형 이미지가 없습니다.")).toBeVisible();
+  await expect(picker.getByLabel("선택한 자산 이름")).toHaveValue("속초 해안 대표 이미지");
+  await picker.getByRole("button", { name: "선택", exact: true }).click();
+  await expect(picker).not.toBeVisible();
+  expect(runtimeErrors).toEqual([]);
+});
+
+test("미디어 variant 상태를 갱신하고 실패 항목을 다시 시도한다", async ({ page }) => {
+  let catalogRequestCount = 0;
+  const retryRequests: string[] = [];
+  let releaseRetryFailure!: () => void;
+  let releaseRetrySuccess!: () => void;
+  let releaseOtherRetry!: () => void;
+  const retryFailure = new Promise<void>((resolve) => { releaseRetryFailure = resolve; });
+  const retrySuccess = new Promise<void>((resolve) => { releaseRetrySuccess = resolve; });
+  const otherRetry = new Promise<void>((resolve) => { releaseOtherRetry = resolve; });
+  const otherRetryRequests: string[] = [];
+  const pending = mediaAsset({
+    id: UPLOADED_ASSET,
+    displayName: "변환 중인 제주 이미지",
+    deliveryUrl: `/api/website/media/${UPLOADED_ASSET}/content`,
+    usageCount: 0,
+    variants: [{
+      id: "variant-640", format: "WEBP", targetWidth: 640, status: "PENDING", deliveryUrl: null,
+      mimeType: null, byteSize: null, width: null, height: null, attemptCount: 0, lastError: null, updatedAt: "2026-09-13T00:00:00Z",
+    }],
+  });
+  const processing = mediaAsset({
+    id: UPLOADED_ASSET,
+    displayName: "변환 중인 제주 이미지",
+    deliveryUrl: `/api/website/media/${UPLOADED_ASSET}/content`,
+    usageCount: 0,
+    variants: [{
+      id: "variant-640", format: "WEBP", targetWidth: 640, status: "PROCESSING", deliveryUrl: null,
+      mimeType: null, byteSize: null, width: null, height: null, attemptCount: 1, lastError: null, updatedAt: "2026-09-13T00:00:02Z",
+    }],
+  });
+  const terminal = mediaAsset({
+    id: UPLOADED_ASSET,
+    displayName: "변환 중인 제주 이미지",
+    deliveryUrl: `/api/website/media/${UPLOADED_ASSET}/content`,
+    usageCount: 0,
+    variants: [
+      {
+        id: "variant-640", format: "WEBP", targetWidth: 640, status: "READY", deliveryUrl: `/api/website/media/${UPLOADED_ASSET}/variants/640.webp`,
+        mimeType: "image/webp", byteSize: 34567, width: 640, height: 360, attemptCount: 1, lastError: null, updatedAt: "2026-09-13T00:00:02Z",
+      },
+      {
+        id: "variant-1280", format: "WEBP", targetWidth: 1280, status: "FAILED", deliveryUrl: null,
+        mimeType: null, byteSize: null, width: null, height: null, attemptCount: 3, lastError: "변환 작업이 시간 초과되었습니다.", updatedAt: "2026-09-13T00:00:02Z",
+      },
+    ],
+  });
+  const otherFailed = mediaAsset({
+    id: "other-failed-asset",
+    displayName: "다른 실패 이미지",
+    deliveryUrl: "/images/sokcho-coast-hero.png",
+    usageCount: 0,
+    variants: [
+      {
+        id: "other-variant-640", format: "WEBP", targetWidth: 640, status: "FAILED", deliveryUrl: null,
+        mimeType: null, byteSize: null, width: null, height: null, attemptCount: 1, lastError: "이전 변환 실패", updatedAt: "2026-09-13T00:00:04Z",
+      },
+      {
+        id: "other-variant-1280", format: "WEBP", targetWidth: 1280, status: "FAILED", deliveryUrl: null,
+        mimeType: null, byteSize: null, width: null, height: null, attemptCount: 1, lastError: "이전 변환 실패", updatedAt: "2026-09-13T00:00:04Z",
+      },
+    ],
+  });
+  const undersized = mediaAsset({
+    id: "undersized-asset",
+    displayName: "작은 원본 이미지",
+    deliveryUrl: "/images/sokcho-coast-hero.png",
+    width: 320,
+    height: 180,
+    usageCount: 0,
+    variants: [],
+  });
+
+  await page.unroute("**/api/staff/website/media?includeArchived=true");
+  await page.route("**/api/staff/website/media?includeArchived=true", (route) => {
+    catalogRequestCount += 1;
+    const current = catalogRequestCount === 1 ? pending : catalogRequestCount === 2 ? processing : terminal;
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify([current, otherFailed, undersized]) });
+  });
+  await page.route(`**/api/staff/website/media/${UPLOADED_ASSET}/variants/1280/retry`, async (route) => {
+    retryRequests.push(`${UPLOADED_ASSET}:1280`);
+    if (retryRequests.length === 1) {
+      await retryFailure;
+      return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ message: "변환 재시도를 시작하지 못했습니다." }) });
+    }
+    await retrySuccess;
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify(pending) });
+  });
+  await page.route("**/api/staff/website/media/other-failed-asset/variants/1280/retry", async (route) => {
+    otherRetryRequests.push("1280");
+    await otherRetry;
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify(otherFailed) });
+  });
+  await page.route("**/api/staff/website/media/other-failed-asset/variants/640/retry", (route) => {
+    otherRetryRequests.push("640");
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify(otherFailed) });
+  });
+
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "홈", exact: true }).click();
+  await page.getByRole("button", { name: "미디어 선택" }).click();
+
+  const picker = page.getByRole("dialog", { name: "미디어 선택" });
+  await expect(picker.getByText("640px · 변환 대기 중")).toBeVisible();
+  await picker.getByLabel("선택한 자산 이름").fill("편집 중인 자산명");
+  await expect.poll(() => catalogRequestCount).toBeGreaterThanOrEqual(2);
+  await expect(picker.getByText("640px · 변환 중")).toBeVisible();
+  await expect.poll(() => catalogRequestCount).toBeGreaterThanOrEqual(3);
+  await expect(picker.getByText("640 × 360 · WebP · 34 KB")).toBeVisible();
+  await expect(picker.getByText("1280px · 변환 실패 · 3/3회")).toBeVisible();
+  await expect(picker.getByLabel("선택한 자산 이름")).toHaveValue("편집 중인 자산명");
+
+  const catalogRequestsAfterTerminal = catalogRequestCount;
+  await page.waitForTimeout(2_500);
+  expect(catalogRequestCount).toBe(catalogRequestsAfterTerminal);
+
+  await picker.getByRole("button", { name: "1280px 다시 시도" }).click();
+  await expect(picker.getByRole("button", { name: "1280px 다시 시도 중" })).toBeDisabled();
+  releaseRetryFailure();
+  await expect(picker.getByRole("alert")).toContainText("변환 재시도를 시작하지 못했습니다.");
+
+  await picker.getByRole("button", { name: "1280px 다시 시도" }).click();
+  await picker.getByRole("button", { name: "다른 실패 이미지 선택" }).click();
+  await expect(picker.getByRole("button", { name: "1280px 다시 시도" })).toBeEnabled();
+  releaseRetrySuccess();
+  await expect(picker.getByText("다른 실패 이미지")).toBeVisible();
+
+  await picker.getByRole("button", { name: "1280px 다시 시도" }).click();
+  await expect(picker.getByRole("button", { name: "1280px 다시 시도 중" })).toBeDisabled();
+  await expect(picker.getByRole("button", { name: "640px 다시 시도" })).toBeEnabled();
+  await picker.getByRole("button", { name: "640px 다시 시도" }).click();
+  expect(otherRetryRequests).toEqual(["1280", "640"]);
+  releaseOtherRetry();
+
+  await picker.getByRole("button", { name: "작은 원본 이미지 선택" }).click();
+  await expect(picker.getByText("원본보다 큰 이미지는 생성하지 않습니다.")).toBeVisible();
+  expect(retryRequests).toEqual([`${UPLOADED_ASSET}:1280`, `${UPLOADED_ASSET}:1280`]);
+
+  await picker.getByRole("button", { name: "취소", exact: true }).click();
+  const catalogRequestsAfterClose = catalogRequestCount;
+  await page.waitForTimeout(2_500);
+  expect(catalogRequestCount).toBe(catalogRequestsAfterClose);
 });
 
 test("edits a landing block and requires saving before publishing", async ({ page }) => {
@@ -1522,6 +1824,113 @@ test("selects a catalog asset for a structured page and saves its identifier", a
   });
 });
 
+test("previews and replaces every active draft usage of a media asset", async ({ page }) => {
+  const targets = [
+    { pageId: HOME_PAGE, pageLabel: "홈", pagePath: "/", pageType: "HOME_PAGE", locale: "ko", fieldPath: "blocks[0].imageAssetId", expectedDraftVersion: 1 },
+    { pageId: STORY_PAGE, pageLabel: "브랜드 이야기", pagePath: "/en/brand/story", pageType: "CONTENT_PAGE", locale: "en", fieldPath: "blocks[0].imageAssetId", expectedDraftVersion: 1 },
+  ];
+  let replacementBody: Record<string, unknown> | null = null;
+  await page.route(`**/api/staff/website/media/${BUNDLED_ASSET}/usages`, (route) => route.fulfill({
+    json: [
+      { ...targets[0], documentState: "DRAFT", altText: "속초 해안" },
+      { ...targets[1], documentState: "DRAFT", altText: "English coast" },
+      { pageId: HOME_PAGE, pageLabel: "홈", pagePath: "/", pageType: "HOME_PAGE", locale: "ko", documentState: "PUBLISHED", fieldPath: "blocks[0].imageAssetId", altText: "공개 속초 해안" },
+    ],
+  }));
+  await page.route(`**/api/staff/website/media/${BUNDLED_ASSET}/draft-replacement-impact?*`, (route) => route.fulfill({
+    json: {
+      sourceAsset: mediaAsset(),
+      targetAsset: mediaAsset({ id: UPLOADED_ASSET, displayName: "새로운 제주 이미지", deliveryUrl: `/api/website/media/${UPLOADED_ASSET}/content`, defaultAltText: "제주 해안의 오후", usageCount: 0 }),
+      replaceableUsages: targets,
+      publishedUsageCount: 1,
+      archivedDraftUsageCount: 1,
+    },
+  }));
+  await page.route(`**/api/staff/website/media/${BUNDLED_ASSET}/draft-replacements`, (route) => {
+    replacementBody = route.request().postDataJSON();
+    return route.fulfill({
+      json: { sourceMediaId: BUNDLED_ASSET, targetMediaId: UPLOADED_ASSET, replacedUsageCount: 2, changedDraftCount: 2 },
+    });
+  });
+
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "홈", exact: true }).click();
+  await page.getByRole("button", { name: "미디어 선택" }).click();
+  const picker = page.getByRole("dialog", { name: "미디어 선택" });
+  await picker.getByRole("button", { name: "속초 해안 대표 이미지 선택" }).click();
+  await picker.getByRole("button", { name: "초안 사용 위치 일괄 교체" }).click();
+
+  const dialog = page.getByRole("dialog", { name: "초안 사용 위치 일괄 교체" });
+  await dialog.getByLabel("새 이미지 파일").setInputFiles({ name: "replacement.jpg", mimeType: "image/jpeg", buffer: Buffer.from("mock-jpeg") });
+  await dialog.getByLabel("새 자산명").fill("새로운 제주 이미지");
+  await dialog.getByLabel("새 기본 대체 텍스트").fill("제주 해안의 오후");
+  await dialog.getByRole("button", { name: "업로드하고 영향 확인" }).click();
+
+  await expect(dialog).toContainText("한국어 초안 1곳 · 영어 초안 1곳");
+  await expect(dialog).toContainText("발행 사용 위치 1곳은 바뀌지 않습니다.");
+  await expect(dialog).toContainText("보관 페이지 초안 1곳은 바뀌지 않습니다.");
+  expect(replacementBody).toBeNull();
+  await dialog.getByRole("button", { name: "초안 위치 교체하기" }).click();
+
+  expect(replacementBody).toEqual({
+    targetMediaId: UPLOADED_ASSET,
+    expectedSourceVersion: 1,
+    expectedTargetVersion: 1,
+    targets: targets.map(({ pageId, locale, fieldPath, expectedDraftVersion }) => ({ pageId, locale, fieldPath, expectedDraftVersion })),
+  });
+  await expect(dialog).not.toBeVisible();
+  await expect(picker.getByRole("status")).toContainText("초안 2개에서 사용 위치 2곳을 교체했습니다.");
+});
+
+test("cancels bulk draft media replacement before mutation and restores focus", async ({ page }) => {
+  await mockDraftReplacementImpact(page);
+  let replacementPostCount = 0;
+  await page.route(`**/api/staff/website/media/${BUNDLED_ASSET}/draft-replacements`, (route) => {
+    replacementPostCount += 1;
+    return route.fulfill({ json: {} });
+  });
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "홈", exact: true }).click();
+  await page.getByRole("button", { name: "미디어 선택" }).click();
+  const picker = page.getByRole("dialog", { name: "미디어 선택" });
+  await picker.getByRole("button", { name: "속초 해안 대표 이미지 선택" }).click();
+  const trigger = picker.getByRole("button", { name: "초안 사용 위치 일괄 교체" });
+  await trigger.click();
+  await page.getByRole("dialog", { name: "초안 사용 위치 일괄 교체" }).getByRole("button", { name: "취소" }).click();
+  expect(replacementPostCount).toBe(0);
+  await expect(trigger).toBeFocused();
+});
+
+test("keeps impact visible when bulk draft media replacement conflicts", async ({ page }) => {
+  await mockDraftReplacementImpact(page);
+  let replacementPostCount = 0;
+  await page.route(`**/api/staff/website/media/${BUNDLED_ASSET}/draft-replacements`, (route) => {
+    replacementPostCount += 1;
+    return route.fulfill({
+      status: 409,
+      json: { code: "WEBSITE_MEDIA_REPLACEMENT_CONFLICT", message: "미디어 사용 위치가 변경되었습니다." },
+    });
+  });
+  const { dialog } = await openBulkReplacementImpact(page);
+  await dialog.getByRole("button", { name: "초안 위치 교체하기" }).click();
+  await expect(dialog.getByRole("alert")).toContainText("영향 범위가 변경되었습니다. 다시 확인해 주세요.");
+  await expect(dialog.getByText("한국어 초안 1곳 · 영어 초안 1곳")).toBeVisible();
+  expect(replacementPostCount).toBe(1);
+});
+
+test("shows bulk draft media replacement impact at 390px", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockDraftReplacementImpact(page);
+  const { dialog } = await openBulkReplacementImpact(page);
+  const button = dialog.getByRole("button", { name: "초안 위치 교체하기" });
+  const box = await button.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+  await page.keyboard.press("Escape");
+  await expect(dialog).not.toBeVisible();
+});
+
 for (const mobile of [false, true]) {
   test(`replaces only the current landing image after upload and confirmation${mobile ? " on mobile" : ""}`, async ({ page }) => {
     if (mobile) await page.setViewportSize({ width: 390, height: 844 });
@@ -1685,6 +2094,158 @@ test("uploads an asset for a landing page and keeps its page-specific alt text",
     heroImage: `/api/website/media/${UPLOADED_ASSET}/content`,
     heroAlt: "석양을 바라보는 제주 스테이",
   });
+});
+
+test("runs a read-only media storage audit and displays categorized storage keys", async ({ page }) => {
+  let auditMethod = "";
+  await page.route("**/api/staff/website/media/storage-audit", (route) => {
+    auditMethod = route.request().method();
+    return route.fulfill({ json: {
+      checkedAt: "2026-09-13T04:30:00Z",
+      healthy: false,
+      missingStorageKeys: ["missing-original.png"],
+      orphanStorageKeys: ["unreachable-orphan.jpg"],
+      staleTemporaryStorageKeys: ["abandoned-variant.webp.tmp"],
+    } });
+  });
+
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "미디어 선택" }).click();
+  const dialog = page.getByRole("dialog", { name: "미디어 선택" });
+  await dialog.getByRole("button", { name: "저장소 점검", exact: true }).click();
+
+  expect(auditMethod).toBe("GET");
+  const audit = dialog.getByLabel("미디어 저장소 점검");
+  await expect(audit.getByText("누락 1개 · orphan 1개 · 오래된 임시 파일 1개", { exact: true })).toBeVisible();
+  await expect(audit.getByText("missing-original.png", { exact: true })).toBeVisible();
+  await expect(audit.getByText("unreachable-orphan.jpg", { exact: true })).toBeVisible();
+  await expect(audit.getByText("abandoned-variant.webp.tmp", { exact: true })).toBeVisible();
+  await expect(audit.getByRole("button", { name: "다음 100개 복사", exact: true })).toHaveCount(0);
+});
+
+test("shows healthy media storage and replaces it with a later audit error", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  let requestCount = 0;
+  await page.route("**/api/staff/website/media/storage-audit", (route) => {
+    requestCount += 1;
+    if (requestCount === 1) {
+      return route.fulfill({ json: {
+        checkedAt: "2026-09-13T04:30:00Z",
+        healthy: true,
+        missingStorageKeys: [],
+        orphanStorageKeys: [],
+        staleTemporaryStorageKeys: [],
+      } });
+    }
+    return route.fulfill({ status: 500, json: { message: "저장소를 읽지 못했습니다." } });
+  });
+
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "미디어 선택" }).click();
+  const audit = page.getByRole("dialog", { name: "미디어 선택" }).getByLabel("미디어 저장소 점검");
+  await audit.getByRole("button", { name: "저장소 점검", exact: true }).click();
+  await expect(audit.getByText("DB 참조와 저장 파일이 모두 일치합니다.", { exact: true })).toBeVisible();
+
+  await audit.getByRole("button", { name: "저장소 점검", exact: true }).click();
+  await expect(audit.getByRole("alert")).toHaveText("저장소를 읽지 못했습니다.");
+  await expect(audit.getByText("DB 참조와 저장 파일이 모두 일치합니다.", { exact: true })).toHaveCount(0);
+});
+
+test("manages storage migration and S3 backfill", async ({ page }) => {
+  let backfillMethod = "";
+  await page.route("**/api/staff/website/media/storage-audit", (route) => route.fulfill({ json: {
+    checkedAt: "2026-09-13T04:30:00Z",
+    healthy: false,
+    missingStorageKeys: [],
+    orphanStorageKeys: [],
+    staleTemporaryStorageKeys: [],
+    mode: "mirror",
+    stores: [
+      { storeName: "local", healthy: true, missingStorageKeys: [], orphanStorageKeys: [], staleTemporaryStorageKeys: [] },
+      { storeName: "s3", healthy: false, missingStorageKeys: ["one.png", "two.webp"], orphanStorageKeys: [], staleTemporaryStorageKeys: [] },
+    ],
+  } }));
+  await page.route("**/api/staff/website/media/storage-migration", (route) => route.fulfill({ json: {
+    mode: "mirror", total: 10, both: 8, localOnly: 2, s3Only: 0, mismatch: 0, missing: 0, fallbackCount: 0,
+  } }));
+  await page.route("**/api/staff/website/media/storage-migration/backfill", (route) => {
+    backfillMethod = route.request().method();
+    return route.fulfill({ json: {
+      examined: 2, copied: 2, skipped: 0, mismatch: 0, failed: 0, failedStorageKeys: [],
+    } });
+  });
+
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "미디어 선택" }).click();
+  const audit = page.getByRole("dialog", { name: "미디어 선택" }).getByLabel("미디어 저장소 점검");
+  await audit.getByRole("button", { name: "저장소 점검", exact: true }).click();
+
+  await expect(audit.getByText("mirror · 양쪽 일치 8개", { exact: true })).toBeVisible();
+  await expect(audit.getByText("S3에 없는 파일 2개", { exact: true })).toBeVisible();
+  await audit.getByRole("button", { name: "다음 100개 복사", exact: true }).click();
+  expect(backfillMethod).toBe("POST");
+  await expect(audit.getByRole("status")).toContainText("2개를 S3에 복사했습니다.");
+});
+
+test("disables S3 backfill and reports mismatch with a partial failure", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  let releaseBackfill!: () => void;
+  const backfillGate = new Promise<void>((resolve) => { releaseBackfill = resolve; });
+  await page.route("**/api/staff/website/media/storage-audit", (route) => route.fulfill({ json: {
+    checkedAt: "2026-09-13T04:30:00Z", healthy: false,
+    missingStorageKeys: [], orphanStorageKeys: [], staleTemporaryStorageKeys: [], mode: "mirror",
+    stores: [
+      { storeName: "local", healthy: true, missingStorageKeys: [], orphanStorageKeys: [], staleTemporaryStorageKeys: [] },
+      { storeName: "s3", healthy: false, missingStorageKeys: ["one.png"], orphanStorageKeys: [], staleTemporaryStorageKeys: [] },
+    ],
+  } }));
+  await page.route("**/api/staff/website/media/storage-migration", (route) => route.fulfill({ json: {
+    mode: "mirror", total: 10, both: 7, localOnly: 2, s3Only: 0, mismatch: 1, missing: 0, fallbackCount: 0,
+  } }));
+  await page.route("**/api/staff/website/media/storage-migration/backfill", async (route) => {
+    await backfillGate;
+    return route.fulfill({ json: {
+      examined: 3, copied: 1, skipped: 0, mismatch: 1, failed: 1, failedStorageKeys: ["too-long/path/failed.png"],
+    } });
+  });
+
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "미디어 선택" }).click();
+  const audit = page.getByRole("dialog", { name: "미디어 선택" }).getByLabel("미디어 저장소 점검");
+  await audit.getByRole("button", { name: "저장소 점검", exact: true }).click();
+  await expect(audit.getByRole("alert")).toContainText("체크섬이 다른 파일이 1개");
+
+  await audit.getByRole("button", { name: "다음 100개 복사", exact: true }).click();
+  const pending = audit.getByRole("button", { name: "복사 중", exact: true });
+  await expect(pending).toBeDisabled();
+  releaseBackfill();
+  await expect(audit.getByRole("alert")).toContainText("복사하지 못한 파일이 1개");
+  await expect(audit.getByRole("status")).toContainText("1개를 S3에 복사했습니다.");
+  await expect(audit).toBeVisible();
+});
+
+test("ignores a late media storage audit response after close", async ({ page }) => {
+  let releaseAudit!: () => void;
+  const auditGate = new Promise<void>((resolve) => { releaseAudit = resolve; });
+  await page.route("**/api/staff/website/media/storage-audit", async (route) => {
+    await auditGate;
+    return route.fulfill({ json: {
+      checkedAt: "2026-09-13T04:30:00Z", healthy: false,
+      missingStorageKeys: ["late.png"], orphanStorageKeys: [], staleTemporaryStorageKeys: [],
+    } });
+  });
+
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "미디어 선택" }).click();
+  const dialog = page.getByRole("dialog", { name: "미디어 선택" });
+  await dialog.getByRole("button", { name: "저장소 점검", exact: true }).click();
+  await page.keyboard.press("Escape");
+  releaseAudit();
+  await expect(dialog).toHaveCount(0);
+
+  await page.getByRole("button", { name: "미디어 선택" }).click();
+  const reopened = page.getByRole("dialog", { name: "미디어 선택" }).getByLabel("미디어 저장소 점검");
+  await expect(reopened.getByText("late.png", { exact: true })).toHaveCount(0);
 });
 
 test("shows the upload validation error without changing the selected page image", async ({ page }) => {

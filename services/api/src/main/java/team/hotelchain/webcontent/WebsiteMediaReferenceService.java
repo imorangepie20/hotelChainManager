@@ -2,9 +2,12 @@ package team.hotelchain.webcontent;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -14,11 +17,36 @@ public class WebsiteMediaReferenceService {
     private final JdbcTemplate jdbc;
     private final ObjectMapper json;
     private final WebsiteMediaService media;
+    private final WebsiteMediaVariantService variants;
 
-    public WebsiteMediaReferenceService(JdbcTemplate jdbc, ObjectMapper json, WebsiteMediaService media) {
+    public WebsiteMediaReferenceService(JdbcTemplate jdbc, ObjectMapper json, WebsiteMediaService media,
+            WebsiteMediaVariantService variants) {
         this.jdbc = jdbc;
         this.json = json;
         this.media = media;
+        this.variants = variants;
+    }
+
+    public Map<UUID, List<PublicWebsiteMediaVariant>> publicVariants(String pageType, Map<String, Object> content) {
+        Set<UUID> assetIds = new LinkedHashSet<>();
+        if ("HOTEL_LANDING".equals(pageType)) {
+            addAssetId(assetIds, content.get("heroAssetId"));
+        } else if ("HOME_PAGE".equals(pageType) || "CONTENT_PAGE".equals(pageType)) {
+            Object blocksValue = content.get("blocks");
+            if (blocksValue instanceof List<?> blocks) {
+                for (Object value : blocks) {
+                    if (!(value instanceof Map<?, ?> block)) continue;
+                    if ("HERO".equals(block.get("type"))) {
+                        addAssetId(assetIds, block.get("imageAssetId"));
+                    } else if ("IMAGE_GALLERY".equals(block.get("type")) && block.get("items") instanceof List<?> items) {
+                        for (Object item : items) {
+                            if (item instanceof Map<?, ?> image) addAssetId(assetIds, image.get("imageAssetId"));
+                        }
+                    }
+                }
+            }
+        }
+        return variants.findPublicReadyByAssetIds(List.copyOf(assetIds));
     }
 
     public Map<String, Object> normalizeStructuredContent(Map<String, Object> content) {
@@ -76,6 +104,41 @@ public class WebsiteMediaReferenceService {
         }
     }
 
+    MediaReferenceReplacement replaceAssetReferences(
+            String pageType,
+            Map<String, Object> content,
+            WebsiteMediaService.MediaAssetRow source,
+            WebsiteMediaService.MediaAssetRow target) {
+        Map<String, Object> replaced = copy(content);
+        List<String> fieldPaths = new ArrayList<>();
+        if ("HOTEL_LANDING".equals(pageType)) {
+            replacePair(replaced, "heroAssetId", "heroImage", "heroAssetId", source, target, fieldPaths);
+            return new MediaReferenceReplacement(normalizeLandingContent(replaced), List.copyOf(fieldPaths));
+        }
+        if (!"HOME_PAGE".equals(pageType) && !"CONTENT_PAGE".equals(pageType)) {
+            return new MediaReferenceReplacement(replaced, List.of());
+        }
+        Object blocksValue = replaced.get("blocks");
+        if (blocksValue instanceof List<?> blocks) {
+            for (int blockIndex = 0; blockIndex < blocks.size(); blockIndex++) {
+                if (!(blocks.get(blockIndex) instanceof Map<?, ?> rawBlock)) continue;
+                Map<String, Object> block = asWritableMap(rawBlock);
+                if ("HERO".equals(block.get("type"))) {
+                    replacePair(block, "imageAssetId", "imageSrc", "blocks[" + blockIndex + "].imageAssetId",
+                            source, target, fieldPaths);
+                } else if ("IMAGE_GALLERY".equals(block.get("type")) && block.get("items") instanceof List<?> items) {
+                    for (int itemIndex = 0; itemIndex < items.size(); itemIndex++) {
+                        if (!(items.get(itemIndex) instanceof Map<?, ?> rawItem)) continue;
+                        replacePair(asWritableMap(rawItem), "imageAssetId", "imageSrc",
+                                "blocks[" + blockIndex + "].items[" + itemIndex + "].imageAssetId",
+                                source, target, fieldPaths);
+                    }
+                }
+            }
+        }
+        return new MediaReferenceReplacement(normalizeStructuredContent(replaced), List.copyOf(fieldPaths));
+    }
+
     private void normalizeGallery(Map<String, Object> block, int blockIndex) {
         Object value = block.get("items");
         if (!(value instanceof List<?> items)) return;
@@ -115,6 +178,21 @@ public class WebsiteMediaReferenceService {
         target.put(pathKey, asset.deliveryPath());
     }
 
+    private void replacePair(
+            Map<String, Object> content,
+            String assetKey,
+            String deliveryKey,
+            String fieldPath,
+            WebsiteMediaService.MediaAssetRow source,
+            WebsiteMediaService.MediaAssetRow target,
+            List<String> fieldPaths) {
+        if (!source.id().toString().equals(content.get(assetKey))) return;
+        if (!source.deliveryPath().equals(content.get(deliveryKey))) return;
+        content.put(assetKey, target.id().toString());
+        content.put(deliveryKey, target.deliveryPath());
+        fieldPaths.add(fieldPath);
+    }
+
     @SuppressWarnings("unchecked")
     private Map<String, Object> asWritableMap(Map<?, ?> value) {
         return (Map<String, Object>) value;
@@ -144,5 +222,17 @@ public class WebsiteMediaReferenceService {
 
     private IllegalArgumentException invalid(String message) {
         return new IllegalArgumentException("미디어 참조 오류: " + message);
+    }
+
+    private void addAssetId(Set<UUID> target, Object value) {
+        if (!(value instanceof String raw)) return;
+        try {
+            target.add(UUID.fromString(raw));
+        } catch (IllegalArgumentException ignored) {
+            // Legacy public content without a valid media reference keeps its original renderer behavior.
+        }
+    }
+
+    record MediaReferenceReplacement(Map<String, Object> content, List<String> fieldPaths) {
     }
 }

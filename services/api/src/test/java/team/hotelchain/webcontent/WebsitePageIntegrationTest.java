@@ -1,8 +1,11 @@
 package team.hotelchain.webcontent;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -30,6 +33,7 @@ class WebsitePageIntegrationTest {
     private static final String BUNDLED_ASSET = WebsiteMediaService.BUNDLED_ASSET_ID.toString();
 
     @Autowired JdbcTemplate jdbc;
+    @Autowired ObjectMapper json;
     @Autowired StaffAccessService staffAccess;
     @Autowired WebsitePageService pages;
     @Autowired PublicWebsitePageController publicPages;
@@ -84,6 +88,50 @@ class WebsitePageIntegrationTest {
                 assertThat(landing.status()).isEqualTo("PUBLISHED");
             });
         });
+    }
+
+    @Test
+    void exposesOnlyReadyResponsiveVariantsInPublishedAndPreviewResponsesWithoutPersistingThem() throws Exception {
+        StaffSessionView session = staffAccess.login("pages-hq@example.com", "hq-password");
+        UUID assetId = UUID.randomUUID();
+        String originalUrl = "/api/website/media/" + assetId + "/content";
+        jdbc.update("""
+                insert into website_media_asset (
+                    id, origin, delivery_path, storage_key, display_name, default_alt_text,
+                    mime_type, byte_size, width, height, status, version
+                ) values (?, 'UPLOADED', ?, ?, '반응형 테스트 이미지', '속초 해안',
+                          'image/png', 1000, 1600, 900, 'ACTIVE', 1)
+                """, assetId, originalUrl, assetId + ".png");
+        jdbc.update("""
+                insert into website_media_variant (
+                    id, asset_id, format, target_width, status, storage_key,
+                    mime_type, byte_size, width, height, attempt_count
+                ) values (?, ?, 'WEBP', 640, 'READY', ?, 'image/webp', 500, 640, 360, 1),
+                         (?, ?, 'WEBP', 1280, 'PENDING', null, null, null, null, null, 0)
+                """, UUID.randomUUID(), assetId, assetId + "-640.webp", UUID.randomUUID(), assetId);
+
+        WebsitePageDocument initial = pages.landingDraft(session.token(), HOTEL);
+        Map<String, Object> content = new LinkedHashMap<>(validContent("반응형 이미지 페이지"));
+        content.put("heroAssetId", assetId.toString());
+        content.put("heroImage", originalUrl);
+        WebsitePageDocument saved = pages.saveLandingDraft(session.token(), HOTEL, initial.draftVersion(),
+                new WebsitePageDraftMetadata("responsive-media", "반응형 이미지", true, 30), content);
+        WebsitePageDocument published = pages.publishLanding(
+                session.token(), HOTEL, saved.draftVersion(), saved.publishedVersion());
+
+        JsonNode publicJson = json.valueToTree(pages.resolvePublished("/stays/responsive-media"));
+        JsonNode previewJson = json.valueToTree(pages.previewDraft(
+                published.id(), published.draftVersion(), published.draftMetadata().path()));
+        for (JsonNode response : List.of(publicJson, previewJson)) {
+            JsonNode variants = response.path("mediaVariants").path(assetId.toString());
+            assertThat(variants).hasSize(1);
+            assertThat(variants.get(0).path("targetWidth").asInt()).isEqualTo(640);
+            assertThat(variants.get(0).path("deliveryUrl").asText())
+                    .isEqualTo("/api/website/media/" + assetId + "/variants/640.webp");
+            assertThat(variants.get(0).path("mimeType").asText()).isEqualTo("image/webp");
+        }
+        assertThat(jdbc.queryForObject("select jsonb_exists(published_content, 'mediaVariants') from website_page where id = ?",
+                Boolean.class, published.id())).isFalse();
     }
 
     @Test

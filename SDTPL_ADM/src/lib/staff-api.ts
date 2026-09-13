@@ -29,6 +29,73 @@ export type DailyOperationsView = {
 
 export type AssignableRoom = { id: string; roomNumber: string };
 
+export type RoomReassignmentOptions = {
+  reservationId: string;
+  assignments: AssignableRoom[];
+  candidates: AssignableRoom[];
+};
+
+export type RoomReassignmentResult = {
+  reservationId: string;
+  previousPhysicalRoomId: string;
+  previousRoomNumber: string;
+  physicalRoomId: string;
+  roomNumber: string;
+};
+
+export type StaffReservationSummary = {
+  reservationId: string;
+  guestName: string;
+  guestEmail: string;
+  roomTypeName: string;
+  ratePlanName: string;
+  checkIn: string;
+  checkOut: string;
+  adults: number;
+  children: number;
+  rooms: number;
+  status: string;
+  totalKrw: number;
+  currency: string;
+  assignedRoomNumbers: string[];
+};
+
+export type StaffReservationSearchView = {
+  hotelId: string;
+  date: string;
+  truncated: boolean;
+  reservations: StaffReservationSummary[];
+};
+
+export type StaffCancellationPreview = {
+  reservationId: string;
+  status: string;
+  cancellable: boolean;
+  refundAmount: number;
+  currency: string;
+  cutoffAt: string;
+  unavailableReason: string | null;
+};
+
+export type StaffCancellationResult = {
+  reservationId: string;
+  status: string;
+  refundAmount: number;
+  currency: string;
+};
+
+export type StaffReservationGuestUpdateResult = {
+  reservationId: string;
+  guestName: string;
+  guestEmail: string;
+};
+
+export type StaffReservationPartyUpdateResult = {
+  reservationId: string;
+  adults: number;
+  children: number;
+};
+
 
 type SessionResponse = { token: string; staff: StaffPrincipal };
 
@@ -249,6 +316,20 @@ export type WebsitePageMoveImpactItem = {
   depth: number; published: boolean;
 };
 export type WebsitePageMoveImpact = { pageId: string; newParentId: string; newRootDraftPath: string; items: WebsitePageMoveImpactItem[] };
+export type WebsiteMediaVariant = {
+  id: string;
+  format: "WEBP";
+  targetWidth: 640 | 1280;
+  status: "PENDING" | "PROCESSING" | "READY" | "FAILED";
+  deliveryUrl: string | null;
+  mimeType: "image/webp" | null;
+  byteSize: number | null;
+  width: number | null;
+  height: number | null;
+  attemptCount: number;
+  lastError: string | null;
+  updatedAt: string;
+};
 export type WebsiteMediaAsset = {
   id: string;
   displayName: string;
@@ -263,6 +344,7 @@ export type WebsiteMediaAsset = {
   version: number;
   archivedAt: string | null;
   permanentDeleteAvailableAt: string | null;
+  variants: WebsiteMediaVariant[];
 };
 export type WebsiteMediaUsage = {
   locale?: "ko" | "en";
@@ -273,6 +355,40 @@ export type WebsiteMediaUsage = {
   documentState: "DRAFT" | "PUBLISHED";
   fieldPath: string;
   altText: string;
+};
+export type WebsiteMediaStoreAudit = {
+  storeName: string;
+  healthy: boolean;
+  missingStorageKeys: string[];
+  orphanStorageKeys: string[];
+  staleTemporaryStorageKeys: string[];
+};
+export type WebsiteMediaStorageAudit = {
+  checkedAt: string;
+  healthy: boolean;
+  missingStorageKeys: string[];
+  orphanStorageKeys: string[];
+  staleTemporaryStorageKeys: string[];
+  mode: "local" | "mirror" | "s3-primary";
+  stores: WebsiteMediaStoreAudit[];
+};
+export type WebsiteMediaStorageMigrationStatus = {
+  mode: "local" | "mirror" | "s3-primary";
+  total: number;
+  both: number;
+  localOnly: number;
+  s3Only: number;
+  mismatch: number;
+  missing: number;
+  fallbackCount: number;
+};
+export type WebsiteMediaStorageBackfillResult = {
+  examined: number;
+  copied: number;
+  skipped: number;
+  mismatch: number;
+  failed: number;
+  failedStorageKeys: string[];
 };
 export type UploadWebsiteMediaInput = {
   file: File;
@@ -285,6 +401,34 @@ export type WebsiteMediaMetadataInput = {
   expectedVersion: number;
 };
 export type WebsiteMediaVersionInput = { expectedVersion: number };
+export type WebsiteMediaDraftReplacementUsage = {
+  pageId: string;
+  pageLabel: string;
+  pagePath: string;
+  pageType: string;
+  locale: "ko" | "en";
+  fieldPath: string;
+  expectedDraftVersion: number;
+};
+export type WebsiteMediaDraftReplacementImpact = {
+  sourceAsset: WebsiteMediaAsset;
+  targetAsset: WebsiteMediaAsset;
+  replaceableUsages: WebsiteMediaDraftReplacementUsage[];
+  publishedUsageCount: number;
+  archivedDraftUsageCount: number;
+};
+export type ReplaceWebsiteMediaDraftUsagesInput = {
+  targetMediaId: string;
+  expectedSourceVersion: number;
+  expectedTargetVersion: number;
+  targets: Pick<WebsiteMediaDraftReplacementUsage, "pageId" | "locale" | "fieldPath" | "expectedDraftVersion">[];
+};
+export type WebsiteMediaDraftReplacementResult = {
+  sourceMediaId: string;
+  targetMediaId: string;
+  replacedUsageCount: number;
+  changedDraftCount: number;
+};
 
 async function contentRequest<T>(path: string, token: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, { ...init, headers: { "X-Staff-Session": token, "Content-Type": "application/json", ...init?.headers } });
@@ -302,6 +446,153 @@ async function mediaRequest<T>(path: string, token: string, init?: RequestInit):
     throw new StaffApiError(error.message ?? "미디어 요청을 처리하지 못했습니다.", response.status, error.code);
   }
   return response.json() as Promise<T>;
+}
+
+export async function getRoomReassignmentOptions(
+  token: string,
+  reservationId: string,
+): Promise<RoomReassignmentOptions> {
+  const response = await fetch(`/api/staff/reservations/${reservationId}/room-reassignment-options`, {
+    headers: { "X-Staff-Session": token },
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(error.message ?? "객실 변경 후보를 불러오지 못했습니다.", response.status, error.code);
+  }
+  return response.json() as Promise<RoomReassignmentOptions>;
+}
+
+export async function reassignRoom(
+  token: string,
+  reservationId: string,
+  currentPhysicalRoomId: string,
+  newPhysicalRoomId: string,
+  idempotencyKey: string,
+): Promise<RoomReassignmentResult> {
+  const response = await fetch(`/api/staff/reservations/${reservationId}/assignments/${currentPhysicalRoomId}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Staff-Session": token,
+      "Idempotency-Key": idempotencyKey,
+    },
+    body: JSON.stringify({ newPhysicalRoomId }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(error.message ?? "배정 객실을 변경하지 못했습니다.", response.status, error.code);
+  }
+  return response.json() as Promise<RoomReassignmentResult>;
+}
+
+export async function getStaffReservations(
+  token: string,
+  hotelId: string,
+  date: string,
+  filters: { query?: string; status?: string } = {},
+): Promise<StaffReservationSearchView> {
+  const searchParams = new URLSearchParams({ date });
+  if (filters.query?.trim()) searchParams.set("query", filters.query.trim());
+  if (filters.status?.trim()) searchParams.set("status", filters.status.trim());
+  const response = await fetch(`/api/staff/hotels/${hotelId}/reservations?${searchParams}`, {
+    headers: { "X-Staff-Session": token },
+  });
+  if (!response.ok) throw new StaffApiError("예약 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.");
+  return response.json() as Promise<StaffReservationSearchView>;
+}
+
+export async function getStaffCancellationPreview(token: string, reservationId: string): Promise<StaffCancellationPreview> {
+  const response = await fetch(`/api/staff/reservations/${reservationId}/cancellation-preview`, {
+    headers: { "X-Staff-Session": token },
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(error.message ?? "예약 취소 조건을 확인하지 못했습니다.", response.status, error.code);
+  }
+  return response.json() as Promise<StaffCancellationPreview>;
+}
+
+export async function cancelStaffReservation(
+  token: string,
+  reservationId: string,
+  idempotencyKey: string,
+): Promise<StaffCancellationResult> {
+  const response = await fetch(`/api/staff/reservations/${reservationId}/cancel`, {
+    method: "POST",
+    headers: { "X-Staff-Session": token, "Idempotency-Key": idempotencyKey },
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(error.message ?? "예약을 취소하지 못했습니다.", response.status, error.code);
+  }
+  return response.json() as Promise<StaffCancellationResult>;
+}
+
+export async function updateStaffReservationGuest(
+  token: string,
+  reservationId: string,
+  idempotencyKey: string,
+  guest: { guestName: string; guestEmail: string },
+): Promise<StaffReservationGuestUpdateResult> {
+  const response = await fetch(`/api/staff/reservations/${reservationId}/guest`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Staff-Session": token,
+      "Idempotency-Key": idempotencyKey,
+    },
+    body: JSON.stringify(guest),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(error.message ?? "예약자 정보를 수정하지 못했습니다.", response.status, error.code);
+  }
+  return response.json() as Promise<StaffReservationGuestUpdateResult>;
+}
+
+export async function updateStaffReservationParty(
+  token: string,
+  reservationId: string,
+  idempotencyKey: string,
+  party: { adults: number; children: number },
+): Promise<StaffReservationPartyUpdateResult> {
+  const response = await fetch(`/api/staff/reservations/${reservationId}/party`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Staff-Session": token,
+      "Idempotency-Key": idempotencyKey,
+    },
+    body: JSON.stringify(party),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(error.message ?? "투숙 인원을 변경하지 못했습니다.", response.status, error.code);
+  }
+  return response.json() as Promise<StaffReservationPartyUpdateResult>;
+}
+
+type WebsiteMediaAssetResponse = Omit<WebsiteMediaAsset, "variants"> & { variants?: WebsiteMediaVariant[] };
+
+function normalizeWebsiteMediaAsset(asset: WebsiteMediaAssetResponse): WebsiteMediaAsset {
+  return { ...asset, variants: asset.variants ?? [] };
+}
+
+async function mediaAssetRequest(path: string, token: string, init?: RequestInit): Promise<WebsiteMediaAsset> {
+  return normalizeWebsiteMediaAsset(await mediaRequest<WebsiteMediaAssetResponse>(path, token, init));
+}
+
+export type WebsitePreviewGrantResponse = { grantId: string; previewToken: string; previewPath: string; expiresAt: string };
+export function issueWebsitePreviewGrant(token: string, pageId: string, input: { locale: "ko" | "en"; expectedDraftVersion: number }) {
+  return contentRequest<WebsitePreviewGrantResponse>(`/api/staff/website/pages/${pageId}/preview-grants`, token,
+    { method: "POST", body: JSON.stringify(input) });
+}
+export async function revokeWebsitePreviewGrant(token: string, grantId: string): Promise<void> {
+  const response = await fetch(`/api/staff/website/preview-grants/${grantId}`, { method: "DELETE", headers: { "X-Staff-Session": token } });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(error.message ?? "미리보기 링크를 폐기하지 못했습니다.", response.status, error.code);
+  }
 }
 
 export function getWebContent(token: string, hotelId: string) { return contentRequest<WebContentDocument>(`/api/staff/web-content/hotels/${hotelId}`, token); }
@@ -327,31 +618,70 @@ export function publishWebsiteHome(token: string, expectedDraftVersion: number, 
 export function getWebsiteHomeVersions(token: string) {
   return contentRequest<WebContentVersion[]>("/api/staff/website/home/versions", token);
 }
-export function getWebsiteMedia(token: string, includeArchived = false) {
-  return mediaRequest<WebsiteMediaAsset[]>(`/api/staff/website/media${includeArchived ? "?includeArchived=true" : ""}`, token);
+export async function getWebsiteMedia(token: string, includeArchived = false): Promise<WebsiteMediaAsset[]> {
+  const assets = await mediaRequest<WebsiteMediaAssetResponse[]>(`/api/staff/website/media${includeArchived ? "?includeArchived=true" : ""}`, token);
+  return assets.map(normalizeWebsiteMediaAsset);
+}
+export async function getWebsiteMediaStorageAudit(token: string): Promise<WebsiteMediaStorageAudit> {
+  type AuditResponse = Omit<WebsiteMediaStorageAudit, "mode" | "stores"> & {
+    mode?: WebsiteMediaStorageAudit["mode"];
+    stores?: WebsiteMediaStoreAudit[];
+  };
+  const result = await mediaRequest<AuditResponse>("/api/staff/website/media/storage-audit", token);
+  const local = {
+    storeName: "local",
+    healthy: result.healthy,
+    missingStorageKeys: result.missingStorageKeys,
+    orphanStorageKeys: result.orphanStorageKeys,
+    staleTemporaryStorageKeys: result.staleTemporaryStorageKeys,
+  };
+  return { ...result, mode: result.mode ?? "local", stores: result.stores ?? [local] };
+}
+export function getWebsiteMediaStorageMigration(token: string) {
+  return mediaRequest<WebsiteMediaStorageMigrationStatus>("/api/staff/website/media/storage-migration", token);
+}
+export function backfillWebsiteMediaStorage(token: string) {
+  return mediaRequest<WebsiteMediaStorageBackfillResult>(
+    "/api/staff/website/media/storage-migration/backfill", token, { method: "POST" },
+  );
 }
 export function uploadWebsiteMedia(token: string, input: UploadWebsiteMediaInput) {
   const formData = new FormData();
   formData.append("file", input.file);
   formData.append("displayName", input.displayName);
   formData.append("defaultAltText", input.defaultAltText);
-  return mediaRequest<WebsiteMediaAsset>("/api/staff/website/media", token, { method: "POST", body: formData });
+  return mediaAssetRequest("/api/staff/website/media", token, { method: "POST", body: formData });
 }
 export function getWebsiteMediaUsages(token: string, mediaId: string) {
   return mediaRequest<WebsiteMediaUsage[]>(`/api/staff/website/media/${mediaId}/usages`, token);
 }
+export function retryWebsiteMediaVariant(token: string, mediaId: string, targetWidth: 640 | 1280) {
+  return mediaAssetRequest(`/api/staff/website/media/${mediaId}/variants/${targetWidth}/retry`, token, { method: "POST" });
+}
+export async function getWebsiteMediaDraftReplacementImpact(token: string, sourceMediaId: string, targetMediaId: string): Promise<WebsiteMediaDraftReplacementImpact> {
+  const query = new URLSearchParams({ targetMediaId });
+  const impact = await mediaRequest<Omit<WebsiteMediaDraftReplacementImpact, "sourceAsset" | "targetAsset"> & {
+    sourceAsset: WebsiteMediaAssetResponse; targetAsset: WebsiteMediaAssetResponse;
+  }>(`/api/staff/website/media/${sourceMediaId}/draft-replacement-impact?${query}`, token);
+  return { ...impact, sourceAsset: normalizeWebsiteMediaAsset(impact.sourceAsset), targetAsset: normalizeWebsiteMediaAsset(impact.targetAsset) };
+}
+export function replaceWebsiteMediaDraftUsages(token: string, sourceMediaId: string, input: ReplaceWebsiteMediaDraftUsagesInput) {
+  return mediaRequest<WebsiteMediaDraftReplacementResult>(`/api/staff/website/media/${sourceMediaId}/draft-replacements`, token, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+  });
+}
 export function updateWebsiteMedia(token: string, mediaId: string, input: WebsiteMediaMetadataInput) {
-  return mediaRequest<WebsiteMediaAsset>(`/api/staff/website/media/${mediaId}`, token, {
+  return mediaAssetRequest(`/api/staff/website/media/${mediaId}`, token, {
     method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
   });
 }
 export function archiveWebsiteMedia(token: string, mediaId: string, input: WebsiteMediaVersionInput) {
-  return mediaRequest<WebsiteMediaAsset>(`/api/staff/website/media/${mediaId}/archive`, token, {
+  return mediaAssetRequest(`/api/staff/website/media/${mediaId}/archive`, token, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
   });
 }
 export function restoreWebsiteMedia(token: string, mediaId: string, input: WebsiteMediaVersionInput) {
-  return mediaRequest<WebsiteMediaAsset>(`/api/staff/website/media/${mediaId}/restore`, token, {
+  return mediaAssetRequest(`/api/staff/website/media/${mediaId}/restore`, token, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
   });
 }

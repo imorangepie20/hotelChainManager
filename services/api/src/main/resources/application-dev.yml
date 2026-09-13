@@ -15,3 +15,6 @@ staff:
     sokcho-password: ${STAFF_SOKCHO_PASSWORD:}
     seoraksan-password: ${STAFF_SEORAKSAN_PASSWORD:}
     jeju-password: ${STAFF_JEJU_PASSWORD:}
+website:
+  preview:
+    require-https: false
