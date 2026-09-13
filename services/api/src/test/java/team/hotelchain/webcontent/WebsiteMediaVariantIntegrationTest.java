@@ -44,8 +44,9 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.SingleConnectionDataSource;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.web.multipart.MultipartFile;
 import team.hotelchain.staff.StaffAccessService;
 
@@ -220,9 +221,14 @@ class WebsiteMediaVariantIntegrationTest {
                 """, (rs, rowNumber) -> new VariantResultRow(
                 rs.getString("status"), rs.getString("storage_key"), rs.getString("mime_type"),
                 rs.getLong("byte_size"), rs.getInt("width"), rs.getInt("height")), asset.id());
-        assertThat(result).isEqualTo(new VariantResultRow(
-                "READY", asset.id() + "-640.webp", "image/webp",
-                Files.size(storageDirectory().resolve(asset.id() + "-640.webp")), 640, 360));
+        assertThat(result.status()).isEqualTo("READY");
+        assertThat(result.storageKey())
+                .startsWith(asset.id() + "-640-")
+                .endsWith(".webp");
+        assertThat(result.mimeType()).isEqualTo("image/webp");
+        assertThat(result.byteSize()).isEqualTo(Files.size(storageDirectory().resolve(result.storageKey())));
+        assertThat(result.width()).isEqualTo(640);
+        assertThat(result.height()).isEqualTo(360);
         assertThat(ImageIO.read(storageDirectory().resolve(result.storageKey()).toFile())).isNotNull();
     }
 
@@ -335,9 +341,9 @@ class WebsiteMediaVariantIntegrationTest {
                 overwriteWithWhitePng(storageDirectory().resolve(asset.id() + ".png"), 640, 360);
 
                 assertThat(job.processNext()).isTrue();
-                Path readyFile = storageDirectory().resolve(asset.id() + "-640.webp");
-                byte[] reclaimerChecksum = sha256(readyFile);
                 VariantResultRow reclaimerMetadata = variantResultRow(asset.id());
+                Path readyFile = storageDirectory().resolve(reclaimerMetadata.storageKey());
+                byte[] reclaimerChecksum = sha256(readyFile);
                 assertThat(staleChecksum.get()).isNotEqualTo(reclaimerChecksum);
 
                 resumeStaleWorker.countDown();
@@ -351,6 +357,67 @@ class WebsiteMediaVariantIntegrationTest {
             }
         } finally {
             removeCommittedWorkerFixtures();
+            deleteStorage();
+        }
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void rollbackCompensationCannotDeleteTheNewerClaimsPublishedFile() throws Exception {
+        try {
+            WebsiteMediaAsset asset = uploadImage(640, 360);
+            WebsiteMediaVariantService.VariantClaim claimA = variants.claimNext().orElseThrow();
+            String legacySharedKey = asset.id() + "-640.webp";
+            Path oldTemporaryTarget = storageDirectory().resolve(legacySharedKey + ".old.tmp");
+            Path oldFinalTarget = storageDirectory().resolve(legacySharedKey);
+            Files.write(oldTemporaryTarget, "old-worker-publication".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+            WebsiteMediaVariantService.ReadyFilePublication oldPublication =
+                    new WebsiteMediaVariantService.ReadyFilePublication(
+                            claimA.variantId(), oldTemporaryTarget, oldFinalTarget);
+            oldPublication.publish();
+
+            jdbc.update("""
+                    update website_media_variant
+                       set lease_expires_at = ?
+                     where id = ?
+                    """, OffsetDateTime.ofInstant(START.minusSeconds(1), ZoneOffset.UTC), claimA.variantId());
+
+            assertThat(job.processNext()).isTrue();
+            VariantResultRow newerMetadata = variantResultRow(asset.id());
+            Path newerReadyFile = storageDirectory().resolve(newerMetadata.storageKey());
+            byte[] newerChecksum = sha256(newerReadyFile);
+
+            oldPublication.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK);
+
+            assertThat(newerReadyFile).exists();
+            assertThat(sha256(newerReadyFile)).isEqualTo(newerChecksum);
+            assertThat(variantResultRow(asset.id())).isEqualTo(newerMetadata);
+        } finally {
+            removeCommittedWorkerFixtures();
+            deleteStorage();
+        }
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void unknownTransactionOutcomePreservesThePublishedUniqueFile() throws Exception {
+        try {
+            Files.createDirectories(storageDirectory());
+            Path temporaryTarget = storageDirectory().resolve("unknown-outcome.tmp");
+            Path uniqueFinalTarget = storageDirectory().resolve("asset-640-claim-unique.webp");
+            byte[] encodedBytes = "encoded-webp".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            Files.write(temporaryTarget, encodedBytes);
+
+            WebsiteMediaVariantService.ReadyFilePublication publication =
+                    new WebsiteMediaVariantService.ReadyFilePublication(
+                            UUID.randomUUID(), temporaryTarget, uniqueFinalTarget);
+            publication.publish();
+            publication.afterCompletion(TransactionSynchronization.STATUS_UNKNOWN);
+
+            assertThat(uniqueFinalTarget).exists();
+            assertThat(Files.readAllBytes(uniqueFinalTarget)).isEqualTo(encodedBytes);
+        } finally {
             deleteStorage();
         }
     }

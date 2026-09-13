@@ -2,6 +2,7 @@ package team.hotelchain.webcontent;
 
 import java.io.IOException;
 import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -138,19 +139,21 @@ public class WebsiteMediaVariantService {
             Path temporaryTarget,
             Path finalTarget) throws IOException {
         List<VariantState> states = jdbc.query("""
-                select status, attempt_count
+                select status, attempt_count, storage_key
                   from website_media_variant
                  where id = ?
                  for update
                 """, (rs, rowNumber) -> new VariantState(
-                rs.getString("status"), rs.getInt("attempt_count")), variantId);
+                rs.getString("status"), rs.getInt("attempt_count"), rs.getString("storage_key")), variantId);
         if (states.isEmpty()
                 || !"PROCESSING".equals(states.getFirst().status())
                 || states.getFirst().attemptCount() != attemptCount) {
             return false;
         }
 
-        ReadyFilePublication publication = new ReadyFilePublication(variantId, temporaryTarget, finalTarget);
+        Path previousTarget = previousTarget(finalTarget, states.getFirst().storageKey());
+        ReadyFilePublication publication = new ReadyFilePublication(
+                variantId, temporaryTarget, finalTarget, previousTarget);
         TransactionSynchronizationManager.registerSynchronization(publication);
         publication.publish();
         int updated = jdbc.update("""
@@ -198,30 +201,40 @@ public class WebsiteMediaVariantService {
             int attemptCount) {
     }
 
-    private record VariantState(String status, int attemptCount) {
+    private Path previousTarget(Path finalTarget, String storageKey) {
+        if (storageKey == null || finalTarget.getParent() == null) return null;
+        Path root = finalTarget.getParent().toAbsolutePath().normalize();
+        Path candidate = root.resolve(storageKey).toAbsolutePath().normalize();
+        return candidate.startsWith(root) && !candidate.equals(finalTarget) ? candidate : null;
     }
 
-    private static final class ReadyFilePublication implements TransactionSynchronization {
+    private record VariantState(String status, int attemptCount, String storageKey) {
+    }
+
+    static final class ReadyFilePublication implements TransactionSynchronization {
         private final UUID variantId;
         private final Path temporaryTarget;
         private final Path finalTarget;
         private final Path previousTarget;
-        private boolean previousMoved;
         private boolean published;
 
-        private ReadyFilePublication(UUID variantId, Path temporaryTarget, Path finalTarget) {
+        ReadyFilePublication(UUID variantId, Path temporaryTarget, Path finalTarget) {
+            this(variantId, temporaryTarget, finalTarget, null);
+        }
+
+        private ReadyFilePublication(
+                UUID variantId,
+                Path temporaryTarget,
+                Path finalTarget,
+                Path previousTarget) {
             this.variantId = variantId;
             this.temporaryTarget = temporaryTarget;
             this.finalTarget = finalTarget;
-            this.previousTarget = finalTarget.resolveSibling(
-                    finalTarget.getFileName() + "." + UUID.randomUUID() + ".rollback");
+            this.previousTarget = previousTarget;
         }
 
-        private void publish() throws IOException {
-            if (Files.exists(finalTarget)) {
-                moveWithoutReplacement(finalTarget, previousTarget);
-                previousMoved = true;
-            }
+        void publish() throws IOException {
+            if (Files.exists(finalTarget)) throw new FileAlreadyExistsException(finalTarget.toString());
             moveWithoutReplacement(temporaryTarget, finalTarget);
             published = true;
         }
@@ -230,16 +243,13 @@ public class WebsiteMediaVariantService {
         public void afterCompletion(int status) {
             try {
                 if (status == STATUS_COMMITTED) {
-                    Files.deleteIfExists(previousTarget);
+                    if (previousTarget != null) Files.deleteIfExists(previousTarget);
                     return;
                 }
-                if (published) Files.deleteIfExists(finalTarget);
-                if (previousMoved && Files.exists(previousTarget)) {
-                    Files.move(previousTarget, finalTarget, StandardCopyOption.REPLACE_EXISTING);
-                }
+                if (status == STATUS_ROLLED_BACK && published) Files.deleteIfExists(finalTarget);
             } catch (IOException exception) {
                 log.error(
-                        "미디어 variant 파일 발행 상태를 복구하지 못했습니다. variantId={}, target={}, previous={}, transactionStatus={}",
+                        "미디어 variant 파일 발행 상태를 정리하지 못했습니다. variantId={}, target={}, previous={}, transactionStatus={}",
                         variantId, finalTarget, previousTarget, status, exception);
             }
         }

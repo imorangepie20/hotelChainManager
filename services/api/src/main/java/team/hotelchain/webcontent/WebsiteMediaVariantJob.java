@@ -41,11 +41,12 @@ public final class WebsiteMediaVariantJob {
 
         WebsiteMediaVariantService.VariantClaim claim = claimed.orElseThrow();
         Path root = storageDirectory.toAbsolutePath().normalize();
-        String finalStorageKey = claim.assetId() + "-" + claim.targetWidth() + ".webp";
+        String finalStorageKey = claim.assetId() + "-" + claim.targetWidth()
+                + "-" + claim.variantId() + "-" + claim.attemptCount()
+                + "-" + UUID.randomUUID() + ".webp";
         Path source = root.resolve(claim.sourceStorageKey()).normalize();
         Path target = root.resolve(finalStorageKey).normalize();
-        Path temporaryTarget = root.resolve(
-                finalStorageKey + "." + UUID.randomUUID() + ".tmp").normalize();
+        Path temporaryTarget = root.resolve(finalStorageKey + ".tmp").normalize();
         try {
             requireInsideRoot(root, source);
             requireInsideRoot(root, target);
