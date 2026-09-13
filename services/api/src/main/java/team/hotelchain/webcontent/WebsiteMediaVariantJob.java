@@ -1,10 +1,8 @@
 package team.hotelchain.webcontent;
 
 import java.io.IOException;
-import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -55,8 +53,9 @@ public final class WebsiteMediaVariantJob {
             if (!Files.isRegularFile(source)) throw new IOException("원본 미디어 파일을 찾을 수 없습니다.");
             Files.createDirectories(root);
             WebsiteMediaVariantEncoder.Result result = encoder.encode(source, temporaryTarget, claim.targetWidth());
-            moveCompletedFile(temporaryTarget, target);
-            variants.completeReady(claim.variantId(), claim.attemptCount(), finalStorageKey, result);
+            boolean completed = variants.completeReady(
+                    claim.variantId(), claim.attemptCount(), finalStorageKey, result, temporaryTarget, target);
+            if (!completed) deleteTemporaryFile(temporaryTarget);
         } catch (Exception exception) {
             deleteTemporaryFile(temporaryTarget);
             variants.completeFailed(claim.variantId(), claim.attemptCount(), failureSummary(exception));
@@ -66,14 +65,6 @@ public final class WebsiteMediaVariantJob {
 
     private void requireInsideRoot(Path root, Path path) throws IOException {
         if (!path.startsWith(root)) throw new IOException("미디어 저장 경로가 올바르지 않습니다.");
-    }
-
-    private void moveCompletedFile(Path source, Path target) throws IOException {
-        try {
-            Files.move(source, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        } catch (AtomicMoveNotSupportedException exception) {
-            Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
-        }
     }
 
     private String failureSummary(Exception exception) {

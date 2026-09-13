@@ -1,5 +1,10 @@
 package team.hotelchain.webcontent;
 
+import java.io.IOException;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.OffsetDateTime;
@@ -12,12 +17,17 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Service
 public class WebsiteMediaVariantService {
+    private static final Logger log = LoggerFactory.getLogger(WebsiteMediaVariantService.class);
     private static final List<Integer> TARGET_WIDTHS = List.of(640, 1280);
     private static final Duration LEASE_DURATION = Duration.ofMinutes(5);
     private static final String GENERIC_FAILURE = "미디어 variant 생성에 실패했습니다.";
@@ -119,12 +129,30 @@ public class WebsiteMediaVariantService {
         return Optional.of(claim);
     }
 
-    @Transactional
+    @Transactional(rollbackFor = IOException.class)
     public boolean completeReady(
             UUID variantId,
             int attemptCount,
             String storageKey,
-            WebsiteMediaVariantEncoder.Result result) {
+            WebsiteMediaVariantEncoder.Result result,
+            Path temporaryTarget,
+            Path finalTarget) throws IOException {
+        List<VariantState> states = jdbc.query("""
+                select status, attempt_count
+                  from website_media_variant
+                 where id = ?
+                 for update
+                """, (rs, rowNumber) -> new VariantState(
+                rs.getString("status"), rs.getInt("attempt_count")), variantId);
+        if (states.isEmpty()
+                || !"PROCESSING".equals(states.getFirst().status())
+                || states.getFirst().attemptCount() != attemptCount) {
+            return false;
+        }
+
+        ReadyFilePublication publication = new ReadyFilePublication(variantId, temporaryTarget, finalTarget);
+        TransactionSynchronizationManager.registerSynchronization(publication);
+        publication.publish();
         int updated = jdbc.update("""
                 update website_media_variant
                    set status = 'READY', storage_key = ?, mime_type = ?, byte_size = ?,
@@ -133,7 +161,8 @@ public class WebsiteMediaVariantService {
                  where id = ? and status = 'PROCESSING' and attempt_count = ?
                 """, storageKey, result.mimeType(), result.byteSize(), result.width(), result.height(),
                 now(), variantId, attemptCount);
-        return updated == 1;
+        if (updated != 1) throw new IllegalStateException("현재 미디어 variant claim을 완료할 수 없습니다.");
+        return true;
     }
 
     @Transactional
@@ -167,5 +196,60 @@ public class WebsiteMediaVariantService {
             int targetWidth,
             String sourceStorageKey,
             int attemptCount) {
+    }
+
+    private record VariantState(String status, int attemptCount) {
+    }
+
+    private static final class ReadyFilePublication implements TransactionSynchronization {
+        private final UUID variantId;
+        private final Path temporaryTarget;
+        private final Path finalTarget;
+        private final Path previousTarget;
+        private boolean previousMoved;
+        private boolean published;
+
+        private ReadyFilePublication(UUID variantId, Path temporaryTarget, Path finalTarget) {
+            this.variantId = variantId;
+            this.temporaryTarget = temporaryTarget;
+            this.finalTarget = finalTarget;
+            this.previousTarget = finalTarget.resolveSibling(
+                    finalTarget.getFileName() + "." + UUID.randomUUID() + ".rollback");
+        }
+
+        private void publish() throws IOException {
+            if (Files.exists(finalTarget)) {
+                moveWithoutReplacement(finalTarget, previousTarget);
+                previousMoved = true;
+            }
+            moveWithoutReplacement(temporaryTarget, finalTarget);
+            published = true;
+        }
+
+        @Override
+        public void afterCompletion(int status) {
+            try {
+                if (status == STATUS_COMMITTED) {
+                    Files.deleteIfExists(previousTarget);
+                    return;
+                }
+                if (published) Files.deleteIfExists(finalTarget);
+                if (previousMoved && Files.exists(previousTarget)) {
+                    Files.move(previousTarget, finalTarget, StandardCopyOption.REPLACE_EXISTING);
+                }
+            } catch (IOException exception) {
+                log.error(
+                        "미디어 variant 파일 발행 상태를 복구하지 못했습니다. variantId={}, target={}, previous={}, transactionStatus={}",
+                        variantId, finalTarget, previousTarget, status, exception);
+            }
+        }
+
+        private static void moveWithoutReplacement(Path source, Path target) throws IOException {
+            try {
+                Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException exception) {
+                Files.move(source, target);
+            }
+        }
     }
 }

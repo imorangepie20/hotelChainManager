@@ -2,7 +2,12 @@ package team.hotelchain.webcontent;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
 
+import java.awt.Color;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -10,6 +15,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -21,6 +27,7 @@ import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.imageio.ImageIO;
 import javax.sql.DataSource;
@@ -290,6 +297,64 @@ class WebsiteMediaVariantIntegrationTest {
         }
     }
 
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void staleWorkerCannotOverwriteTheReadyFilePublishedByItsReclaimer() throws Exception {
+        CountDownLatch staleEncoded = new CountDownLatch(1);
+        CountDownLatch resumeStaleWorker = new CountDownLatch(1);
+        AtomicReference<Path> staleTemporaryFile = new AtomicReference<>();
+        AtomicReference<byte[]> staleChecksum = new AtomicReference<>();
+        WebsiteMediaVariantEncoder blockingEncoder = mock(WebsiteMediaVariantEncoder.class);
+        doAnswer(invocation -> {
+            Path source = invocation.getArgument(0);
+            Path temporaryTarget = invocation.getArgument(1);
+            int targetWidth = invocation.getArgument(2);
+            WebsiteMediaVariantEncoder.Result result = encoder.encode(source, temporaryTarget, targetWidth);
+            staleTemporaryFile.set(temporaryTarget);
+            staleChecksum.set(sha256(temporaryTarget));
+            staleEncoded.countDown();
+            if (!resumeStaleWorker.await(10, TimeUnit.SECONDS)) {
+                throw new IOException("stale worker 재개 신호를 받지 못했습니다.");
+            }
+            return result;
+        }).when(blockingEncoder).encode(any(Path.class), any(Path.class), anyInt());
+
+        try (var executor = Executors.newSingleThreadExecutor()) {
+            try {
+                WebsiteMediaAsset asset = uploadImage(640, 360);
+                WebsiteMediaVariantJob staleJob =
+                        new WebsiteMediaVariantJob(variants, blockingEncoder, storageDirectory().toString());
+                Future<Boolean> staleResult = executor.submit(staleJob::processNext);
+                assertThat(staleEncoded.await(10, TimeUnit.SECONDS)).isTrue();
+
+                jdbc.update("""
+                        update website_media_variant
+                           set lease_expires_at = ?
+                         where asset_id = ? and target_width = 640
+                        """, OffsetDateTime.ofInstant(START.minusSeconds(1), ZoneOffset.UTC), asset.id());
+                overwriteWithWhitePng(storageDirectory().resolve(asset.id() + ".png"), 640, 360);
+
+                assertThat(job.processNext()).isTrue();
+                Path readyFile = storageDirectory().resolve(asset.id() + "-640.webp");
+                byte[] reclaimerChecksum = sha256(readyFile);
+                VariantResultRow reclaimerMetadata = variantResultRow(asset.id());
+                assertThat(staleChecksum.get()).isNotEqualTo(reclaimerChecksum);
+
+                resumeStaleWorker.countDown();
+                assertThat(staleResult.get(10, TimeUnit.SECONDS)).isTrue();
+
+                assertThat(sha256(readyFile)).isEqualTo(reclaimerChecksum);
+                assertThat(variantResultRow(asset.id())).isEqualTo(reclaimerMetadata);
+                assertThat(staleTemporaryFile.get()).doesNotExist();
+            } finally {
+                resumeStaleWorker.countDown();
+            }
+        } finally {
+            removeCommittedWorkerFixtures();
+            deleteStorage();
+        }
+    }
+
     private String headquartersToken() {
         return staffAccess.login("variant-hq@example.com", "hq-password").token();
     }
@@ -336,6 +401,32 @@ class WebsiteMediaVariantIntegrationTest {
                 """, (rs, rowNumber) -> new FailureRow(
                 rs.getString("status"), rs.getInt("attempt_count"),
                 rs.getObject("next_attempt_at", OffsetDateTime.class), rs.getString("last_error")), assetId);
+    }
+
+    private VariantResultRow variantResultRow(UUID assetId) {
+        return jdbc.queryForObject("""
+                select status, storage_key, mime_type, byte_size, width, height
+                  from website_media_variant
+                 where asset_id = ? and target_width = 640
+                """, (rs, rowNumber) -> new VariantResultRow(
+                rs.getString("status"), rs.getString("storage_key"), rs.getString("mime_type"),
+                rs.getLong("byte_size"), rs.getInt("width"), rs.getInt("height")), assetId);
+    }
+
+    private void overwriteWithWhitePng(Path path, int width, int height) throws IOException {
+        BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        var graphics = image.createGraphics();
+        try {
+            graphics.setColor(Color.WHITE);
+            graphics.fillRect(0, 0, width, height);
+        } finally {
+            graphics.dispose();
+        }
+        ImageIO.write(image, "png", path.toFile());
+    }
+
+    private byte[] sha256(Path path) throws Exception {
+        return MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(path));
     }
 
     private MemoryMultipartFile imageFile(int width, int height) throws IOException {
