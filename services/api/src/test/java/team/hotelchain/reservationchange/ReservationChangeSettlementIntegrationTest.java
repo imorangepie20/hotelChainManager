@@ -217,6 +217,73 @@ class ReservationChangeSettlementIntegrationTest {
                 """, Integer.class, request.id())).isEqualTo(1);
     }
 
+    @Test
+    void refundUsesOriginalTransactionAndMovesToReadyExactlyOnce() throws Exception {
+        ReservationView reservation = create("change-refund", 0);
+        payments.pay(reservation.id(), TOKEN, "capture-change-refund", PaymentOutcome.SUCCESS);
+        LocalDate targetCheckIn = LocalDate.now().plusDays(42);
+        jdbc.update("""
+                update rate_day set amount_krw = 50000
+                where rate_plan_id = ? and stay_date >= ? and stay_date < ?
+                """, RATE_PLAN, targetCheckIn, targetCheckIn.plusDays(2));
+        String staffToken = staffAccess.login("settlement-hq@example.com", "password").token();
+        ReservationChangeRequestView request = changeRequests.create(
+                staffToken, reservation.id(), "create-change-refund",
+                new CreateReservationChangeRequest(
+                        targetCheckIn, targetCheckIn.plusDays(2), ROOM_TYPE, RATE_PLAN, 100_000L));
+
+        mockMvc.perform(post("/api/staff/reservation-change-requests/{id}/refund", request.id())
+                        .header("X-Staff-Session", staffToken)
+                        .header("Idempotency-Key", "start-refund")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"version":%d}
+                                """.formatted(request.version())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("REFUND_PENDING"));
+
+        assertThat(jdbc.queryForObject("select command_type from reservation_change_outbox", String.class))
+                .isEqualTo("REFUND");
+        assertThat(outboxWorker.processNext()).isTrue();
+        assertThat(jdbc.queryForObject(
+                "select status from reservation_change_request where id = ?", String.class, request.id()))
+                .isEqualTo("READY_TO_APPLY");
+        assertThat(jdbc.queryForObject("""
+                select refunded_amount_krw from payment_transaction
+                where reservation_id = ? and transaction_type = 'ORIGINAL_CHARGE'
+                """, Long.class, reservation.id())).isEqualTo(100_000L);
+        assertThat(outboxWorker.processNext()).isFalse();
+    }
+
+    @Test
+    void refundWithoutOriginalTransactionDoesNotAcquireInventory() throws Exception {
+        ReservationView reservation = create("change-refund-no-payment", 0);
+        jdbc.update("update reservation set status = 'CONFIRMED' where id = ?", reservation.id());
+        LocalDate targetCheckIn = LocalDate.now().plusDays(42);
+        jdbc.update("""
+                update rate_day set amount_krw = 50000
+                where rate_plan_id = ? and stay_date >= ? and stay_date < ?
+                """, RATE_PLAN, targetCheckIn, targetCheckIn.plusDays(2));
+        String staffToken = staffAccess.login("settlement-hq@example.com", "password").token();
+        ReservationChangeRequestView request = changeRequests.create(
+                staffToken, reservation.id(), "create-refund-no-payment",
+                new CreateReservationChangeRequest(
+                        targetCheckIn, targetCheckIn.plusDays(2), ROOM_TYPE, RATE_PLAN, 100_000L));
+
+        mockMvc.perform(post("/api/staff/reservation-change-requests/{id}/refund", request.id())
+                        .header("X-Staff-Session", staffToken)
+                        .header("Idempotency-Key", "refund-without-payment")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"version":%d}
+                                """.formatted(request.version())))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PAYMENT_TRANSACTION_NOT_SETTLEABLE"));
+
+        assertThat(jdbc.queryForObject("select count(*) from reservation_change_hold_day", Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("select count(*) from reservation_change_outbox", Integer.class)).isZero();
+    }
+
     private ReservationView create(String key, int dayOffset) {
         LocalDate checkIn = LocalDate.now().plusDays(40 + dayOffset);
         return reservations.create(key, TOKEN, new ReservationRequest(

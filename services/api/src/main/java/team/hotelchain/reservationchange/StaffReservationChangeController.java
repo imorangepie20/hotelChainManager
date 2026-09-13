@@ -102,4 +102,14 @@ public class StaffReservationChangeController {
             @RequestBody ReservationChangePaymentLinkRequest request) {
         return settlements.createPaymentLink(token, requestId, idempotencyKey, request);
     }
+
+    @PostMapping("/reservation-change-requests/{requestId}/refund")
+    public ReservationChangeRequestView refund(
+            @PathVariable UUID requestId,
+            @RequestHeader("X-Staff-Session") String token,
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @RequestBody ReservationChangeVersionRequest request) {
+        settlements.startRefund(token, requestId, idempotencyKey, request);
+        return requests.get(token, requestId);
+    }
 }

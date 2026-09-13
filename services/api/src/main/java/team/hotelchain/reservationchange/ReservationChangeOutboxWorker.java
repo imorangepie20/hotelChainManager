@@ -92,14 +92,20 @@ public class ReservationChangeOutboxWorker {
 
     private AttemptCommand loadCommand(UUID attemptId) {
         AttemptCommand command = jdbc.query("""
-                select id, adjustment_type, idempotency_key, amount_krw, currency,
-                       original_payment_transaction_id, gateway_transaction_id
-                from payment_adjustment_attempt where id = ?
+                select attempt.id, attempt.adjustment_type, attempt.idempotency_key,
+                       attempt.amount_krw, attempt.currency,
+                       attempt.original_payment_transaction_id,
+                       original.gateway_transaction_id as original_gateway_transaction_id,
+                       attempt.gateway_transaction_id
+                from payment_adjustment_attempt attempt
+                left join payment_transaction original on original.id = attempt.original_payment_transaction_id
+                where attempt.id = ?
                 """, rs -> rs.next() ? new AttemptCommand(
                         rs.getObject("id", UUID.class), rs.getString("adjustment_type"),
                         rs.getString("idempotency_key"), rs.getLong("amount_krw"),
                         rs.getString("currency").trim(),
                         rs.getObject("original_payment_transaction_id", UUID.class),
+                        rs.getString("original_gateway_transaction_id"),
                         rs.getString("gateway_transaction_id")) : null, attemptId);
         if (command == null) throw new IllegalStateException("정산 시도 정보를 찾을 수 없습니다.");
         return command;
@@ -112,7 +118,7 @@ public class ReservationChangeOutboxWorker {
                     URI.create("http://127.0.0.1:4000/reservation-change-payment")));
             case "REFUND_ORIGINAL", "REFUND_ADJUSTMENT" -> gateway.refund(
                     new PaymentAdjustmentGateway.GatewayRefundCommand(
-                            command.id(), command.idempotencyKey(), command.gatewayTransactionId(),
+                            command.id(), command.idempotencyKey(), command.originalGatewayTransactionId(),
                             command.amountKrw(), command.currency()));
             default -> throw new IllegalStateException("지원하지 않는 정산 명령입니다: " + command.adjustmentType());
         };
@@ -130,12 +136,10 @@ public class ReservationChangeOutboxWorker {
         if (updated != 1) return false;
         jdbc.update("""
                 update payment_adjustment_attempt
-                set status = ?, provider_event_id = ?, gateway_transaction_id = ?,
+                set status = 'PROCESSING', provider_event_id = ?, gateway_transaction_id = ?,
                     checkout_url = ?, error_code = ?, updated_at = ?
                 where id = ? and status in ('NEW', 'PROCESSING')
-                """, result.status() == PaymentAdjustmentGateway.GatewayResultStatus.PENDING
-                        ? "PROCESSING" : result.status().name(),
-                result.providerEventId(), result.gatewayTransactionId(),
+                """, result.providerEventId(), result.gatewayTransactionId(),
                 result.checkoutUrl() == null ? null : result.checkoutUrl().toString(),
                 result.errorCode(), Timestamp.from(clock.instant()), claim.attemptId());
         return true;
@@ -166,6 +170,7 @@ public class ReservationChangeOutboxWorker {
             long amountKrw,
             String currency,
             UUID originalPaymentTransactionId,
+            String originalGatewayTransactionId,
             String gatewayTransactionId) {
     }
 }

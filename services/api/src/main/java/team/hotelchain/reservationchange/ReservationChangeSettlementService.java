@@ -31,6 +31,7 @@ public class ReservationChangeSettlementService {
     private final ReservationChangePolicy policy;
     private final Clock clock;
     private final String customerBaseUrl;
+    private final String gatewayMode;
     private final SecureRandom random = new SecureRandom();
 
     public ReservationChangeSettlementService(
@@ -40,7 +41,8 @@ public class ReservationChangeSettlementService {
             ReservationChangeHoldService holds,
             ReservationChangePolicy policy,
             Clock clock,
-            @Value("${reservation.change.customer-base-url:http://127.0.0.1:4000}") String customerBaseUrl) {
+            @Value("${reservation.change.customer-base-url:http://127.0.0.1:4000}") String customerBaseUrl,
+            @Value("${reservation.change.gateway:disabled}") String gatewayMode) {
         this.jdbc = jdbc;
         this.staffAccess = staffAccess;
         this.reservationAccess = reservationAccess;
@@ -48,6 +50,7 @@ public class ReservationChangeSettlementService {
         this.policy = policy;
         this.clock = clock;
         this.customerBaseUrl = customerBaseUrl.replaceAll("/+$", "");
+        this.gatewayMode = gatewayMode;
     }
 
     @Transactional
@@ -135,6 +138,70 @@ public class ReservationChangeSettlementService {
     }
 
     @Transactional
+    public void startRefund(
+            String staffToken,
+            UUID requestId,
+            String idempotencyKey,
+            ReservationChangeVersionRequest input) {
+        validateVersionMutation(idempotencyKey, input);
+        if (!policy.settlementEnabled()) {
+            throw new BusinessConflictException(
+                    "CHANGE_SETTLEMENT_DISABLED", "예약 변경 정산 기능이 비활성화되어 있습니다.");
+        }
+        StaffPrincipal staff = staffAccess.current(staffToken);
+        PaymentContext context = paymentContext(requestId);
+        staffAccess.requireHotel(staff, context.hotelId());
+        String requestHash = reservationAccess.sha256(String.join(":",
+                staff.id().toString(), Long.toString(input.version()), "REFUND")
+                .getBytes(StandardCharsets.UTF_8));
+        ExistingAttempt existing = existingAttempt(requestId, idempotencyKey);
+        if (existing != null) {
+            if (!existing.requestHash().equals(requestHash)) throw idempotencyConflict();
+            return;
+        }
+        if (!"REFUND".equals(context.direction()) || context.differenceKrw() >= 0
+                || !"APPROVED".equals(context.status())) {
+            throw new BusinessConflictException(
+                    "RESERVATION_CHANGE_ACTION_NOT_ALLOWED", "부분 환불이 필요한 승인 요청만 환불을 시작할 수 있습니다.");
+        }
+
+        jdbc.query("select id from reservation where id = ? for update", rs -> { }, context.reservationId());
+        jdbc.query("select id from reservation_change_request where id = ? for update", rs -> { }, requestId);
+        OriginalTransaction original = lockSettleableOriginalTransaction(context.reservationId());
+        long refundAmount = Math.abs(context.differenceKrw());
+        if (original.capturedAmountKrw() - original.refundedAmountKrw() < refundAmount) {
+            throw notSettleable();
+        }
+        ReservationChangeHoldService.HoldResult hold = holds.acquire(requestId, input.version());
+        UUID attemptId = UUID.randomUUID();
+        jdbc.update("""
+                insert into payment_adjustment_attempt (
+                    id, request_id, original_payment_transaction_id, adjustment_type,
+                    provider, idempotency_key, request_hash, amount_krw, currency, status)
+                values (?, ?, ?, 'REFUND_ORIGINAL', ?, ?, ?, ?, ?, 'NEW')
+                """, attemptId, requestId, original.id(), original.provider(), idempotencyKey,
+                requestHash, refundAmount, context.currency());
+        jdbc.update("""
+                insert into reservation_change_outbox (
+                    id, request_id, attempt_id, command_type, dedupe_key, payload)
+                values (?, ?, ?, 'REFUND', ?, '{}'::jsonb)
+                """, UUID.randomUUID(), requestId, attemptId, "refund:" + attemptId);
+        int updated = jdbc.update("""
+                update reservation_change_request
+                set status = 'REFUND_PENDING', settlement_expires_at = ?,
+                    version = version + 1, updated_at = ?
+                where id = ? and version = ?
+                """, Timestamp.from(hold.expiresAt()), Timestamp.from(clock.instant()),
+                requestId, hold.requestVersion());
+        if (updated != 1) {
+            throw new BusinessConflictException(
+                    "RESERVATION_CHANGE_VERSION_CONFLICT", "예약 변경 요청이 갱신되었습니다. 다시 확인해 주세요.");
+        }
+        insertEvent(requestId, "REFUND_REQUESTED", context.status(), "REFUND_PENDING", staff.id(),
+                "refund:" + requestId + ":" + staff.id() + ":" + idempotencyKey, null);
+    }
+
+    @Transactional
     public CustomerSession exchangeCustomerToken(String publicToken) {
         String publicTokenHash = reservationAccess.hashToken(publicToken);
         TokenContext context = jdbc.query("""
@@ -200,7 +267,9 @@ public class ReservationChangeSettlementService {
         jdbc.query("select id from reservation where id = ? for update", rs -> { }, candidate.reservationId());
         jdbc.query("select id from reservation_change_request where id = ? for update", rs -> { }, candidate.requestId());
         GatewayAttempt attempt = gatewayAttempt(attemptId, true);
-        if (!"CREATE_CHECKOUT".equals(attempt.adjustmentType())) {
+        if (!"CREATE_CHECKOUT".equals(attempt.adjustmentType())
+                && !"REFUND_ORIGINAL".equals(attempt.adjustmentType())
+                && !"REFUND_ADJUSTMENT".equals(attempt.adjustmentType())) {
             throw new BusinessConflictException("GATEWAY_RESULT_CONFLICT", "결제 결과 대상이 올바르지 않습니다.");
         }
         if ("SUCCEEDED".equals(attempt.status()) || "FAILED".equals(attempt.status())) return;
@@ -219,15 +288,28 @@ public class ReservationChangeSettlementService {
 
         String requestStatus;
         if (resultStatus == PaymentAdjustmentGateway.GatewayResultStatus.SUCCEEDED) {
-            jdbc.update("""
-                    insert into payment_transaction (
-                        id, reservation_id, change_request_id, provider, merchant_account,
-                        gateway_transaction_id, transaction_type, captured_amount_krw,
-                        refunded_amount_krw, currency)
-                    values (?, ?, ?, ?, 'LOCAL', ?, 'CHANGE_CHARGE', ?, 0, ?)
-                    on conflict (change_request_id) do nothing
-                    """, UUID.randomUUID(), attempt.reservationId(), attempt.requestId(), attempt.provider(),
-                    attempt.gatewayTransactionId(), attempt.amountKrw(), attempt.currency());
+            if ("CREATE_CHECKOUT".equals(attempt.adjustmentType())) {
+                jdbc.update("""
+                        insert into payment_transaction (
+                            id, reservation_id, change_request_id, provider, merchant_account,
+                            gateway_transaction_id, transaction_type, captured_amount_krw,
+                            refunded_amount_krw, currency)
+                        values (?, ?, ?, ?, 'LOCAL', ?, 'CHANGE_CHARGE', ?, 0, ?)
+                        on conflict (change_request_id) do nothing
+                        """, UUID.randomUUID(), attempt.reservationId(), attempt.requestId(), attempt.provider(),
+                        attempt.gatewayTransactionId(), attempt.amountKrw(), attempt.currency());
+            } else {
+                int refunded = jdbc.update("""
+                        update payment_transaction
+                        set refunded_amount_krw = refunded_amount_krw + ?, updated_at = ?
+                        where id = ? and captured_amount_krw - refunded_amount_krw >= ?
+                        """, attempt.amountKrw(), Timestamp.from(clock.instant()),
+                        attempt.originalPaymentTransactionId(), attempt.amountKrw());
+                if (refunded != 1) {
+                    throw new BusinessConflictException(
+                            "PAYMENT_TRANSACTION_NOT_SETTLEABLE", "원 결제 거래의 환불 가능 금액이 부족합니다.");
+                }
+            }
             requestStatus = "READY_TO_APPLY";
         } else if (resultStatus == PaymentAdjustmentGateway.GatewayResultStatus.FAILED) {
             holds.release(attempt.requestId(), "PAYMENT_FAILED");
@@ -283,13 +365,13 @@ public class ReservationChangeSettlementService {
 
     private PaymentContext paymentContext(UUID requestId) {
         PaymentContext context = jdbc.query("""
-                select request.hotel_id, request.status, request.settlement_direction, request.version,
+                select request.reservation_id, request.hotel_id, request.status, request.settlement_direction, request.version,
                        quote.difference_krw, quote.currency, request.settlement_expires_at
                 from reservation_change_request request
                 join reservation_change_quote quote on quote.id = request.current_quote_id
                 where request.id = ?
                 """, rs -> rs.next() ? new PaymentContext(
-                        rs.getObject("hotel_id", UUID.class), rs.getString("status"),
+                        rs.getObject("reservation_id", UUID.class), rs.getObject("hotel_id", UUID.class), rs.getString("status"),
                         rs.getString("settlement_direction"), rs.getLong("version"),
                         rs.getLong("difference_krw"), rs.getString("currency").trim(),
                         rs.getTimestamp("settlement_expires_at") == null ? null
@@ -304,6 +386,25 @@ public class ReservationChangeSettlementService {
                 where request_id = ? and idempotency_key = ?
                 """, rs -> rs.next() ? new ExistingAttempt(rs.getString("request_hash")) : null,
                 requestId, idempotencyKey);
+    }
+
+    private OriginalTransaction lockSettleableOriginalTransaction(UUID reservationId) {
+        OriginalTransaction transaction = jdbc.query("""
+                select id, provider, captured_amount_krw, refunded_amount_krw,
+                       currency, gateway_transaction_id
+                from payment_transaction
+                where reservation_id = ? and transaction_type = 'ORIGINAL_CHARGE'
+                order by created_at limit 1 for update
+                """, rs -> rs.next() ? new OriginalTransaction(
+                        rs.getObject("id", UUID.class), rs.getString("provider"),
+                        rs.getLong("captured_amount_krw"), rs.getLong("refunded_amount_krw"),
+                        rs.getString("currency").trim(), rs.getString("gateway_transaction_id")) : null,
+                reservationId);
+        if (transaction == null || !transaction.currency().equals("KRW")
+                || ("fake".equals(gatewayMode) && !"FAKE".equals(transaction.provider()))) {
+            throw notSettleable();
+        }
+        return transaction;
     }
 
     private boolean replaceableAttempt(UUID requestId) {
@@ -332,7 +433,8 @@ public class ReservationChangeSettlementService {
         String sql = """
                 select attempt.id, attempt.request_id, request.reservation_id, request.status as request_status,
                        attempt.adjustment_type, attempt.provider, attempt.status, attempt.amount_krw,
-                       attempt.currency, attempt.gateway_transaction_id
+                       attempt.currency, attempt.gateway_transaction_id,
+                       attempt.original_payment_transaction_id
                 from payment_adjustment_attempt attempt
                 join reservation_change_request request on request.id = attempt.request_id
                 where attempt.id = ?
@@ -342,7 +444,8 @@ public class ReservationChangeSettlementService {
                 rs.getObject("reservation_id", UUID.class), rs.getString("request_status"),
                 rs.getString("adjustment_type"), rs.getString("provider"), rs.getString("status"),
                 rs.getLong("amount_krw"), rs.getString("currency").trim(),
-                rs.getString("gateway_transaction_id")) : null, attemptId);
+                rs.getString("gateway_transaction_id"),
+                rs.getObject("original_payment_transaction_id", UUID.class)) : null, attemptId);
         if (attempt == null) throw new ReservationNotFoundException();
         return attempt;
     }
@@ -375,6 +478,13 @@ public class ReservationChangeSettlementService {
         }
     }
 
+    private void validateVersionMutation(String idempotencyKey, ReservationChangeVersionRequest input) {
+        if (idempotencyKey == null || idempotencyKey.isBlank() || idempotencyKey.length() > 100
+                || input == null || input.version() < 0) {
+            throw new IllegalArgumentException("올바른 요청 version과 Idempotency-Key가 필요합니다.");
+        }
+    }
+
     private String newToken() {
         byte[] bytes = new byte[32];
         random.nextBytes(bytes);
@@ -390,10 +500,16 @@ public class ReservationChangeSettlementService {
         return new BusinessConflictException("IDEMPOTENCY_CONFLICT", "같은 요청 키에 다른 결제 링크 요청이 사용되었습니다.");
     }
 
+    private BusinessConflictException notSettleable() {
+        return new BusinessConflictException(
+                "PAYMENT_TRANSACTION_NOT_SETTLEABLE", "환불 가능한 원 결제 거래를 찾을 수 없습니다.");
+    }
+
     public record CustomerSession(String token, Instant expiresAt) {
     }
 
     private record PaymentContext(
+            UUID reservationId,
             UUID hotelId,
             String status,
             String direction,
@@ -404,6 +520,15 @@ public class ReservationChangeSettlementService {
     }
 
     private record ExistingAttempt(String requestHash) {
+    }
+
+    private record OriginalTransaction(
+            UUID id,
+            String provider,
+            long capturedAmountKrw,
+            long refundedAmountKrw,
+            String currency,
+            String gatewayTransactionId) {
     }
 
     private record TokenContext(UUID requestId, Instant expiresAt) {
@@ -434,6 +559,7 @@ public class ReservationChangeSettlementService {
             String status,
             long amountKrw,
             String currency,
-            String gatewayTransactionId) {
+            String gatewayTransactionId,
+            UUID originalPaymentTransactionId) {
     }
 }
