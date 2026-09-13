@@ -17,12 +17,15 @@ import org.springframework.web.bind.annotation.RestController;
 public class StaffReservationChangeController {
     private final ReservationChangeRequestService requests;
     private final ReservationChangeApprovalService approvals;
+    private final ReservationChangeSettlementService settlements;
 
     public StaffReservationChangeController(
             ReservationChangeRequestService requests,
-            ReservationChangeApprovalService approvals) {
+            ReservationChangeApprovalService approvals,
+            ReservationChangeSettlementService settlements) {
         this.requests = requests;
         this.approvals = approvals;
+        this.settlements = settlements;
     }
 
     @GetMapping("/reservation-change-policy")
@@ -89,5 +92,14 @@ public class StaffReservationChangeController {
             @RequestHeader("Idempotency-Key") String idempotencyKey,
             @RequestBody ReservationChangeVersionRequest request) {
         return requests.cancel(token, requestId, idempotencyKey, request);
+    }
+
+    @PostMapping("/reservation-change-requests/{requestId}/payment-link")
+    public ReservationChangePaymentLinkView createPaymentLink(
+            @PathVariable UUID requestId,
+            @RequestHeader("X-Staff-Session") String token,
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @RequestBody ReservationChangePaymentLinkRequest request) {
+        return settlements.createPaymentLink(token, requestId, idempotencyKey, request);
     }
 }
