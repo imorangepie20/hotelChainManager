@@ -11,4 +11,5 @@ docs/diagrams/*.visual-check.*.png
 .agents/
 .codex/
 .impeccable/
+.worktrees/
 SDTPL_ADM/debug.log
