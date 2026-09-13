@@ -13,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 import team.hotelchain.reservation.BusinessConflictException;
 import team.hotelchain.reservation.ReservationAccess;
 import team.hotelchain.reservation.ReservationNotFoundException;
+import team.hotelchain.reservationchange.ReservationChangeMutationGuard;
 import team.hotelchain.staff.StaffAccessService;
 import team.hotelchain.staff.StaffPrincipal;
 
@@ -21,14 +22,17 @@ public class StaffRoomReassignmentService {
     private final JdbcTemplate jdbc;
     private final StaffAccessService staffAccess;
     private final ReservationAccess reservationAccess;
+    private final ReservationChangeMutationGuard mutationGuard;
 
     public StaffRoomReassignmentService(
             JdbcTemplate jdbc,
             StaffAccessService staffAccess,
-            ReservationAccess reservationAccess) {
+            ReservationAccess reservationAccess,
+            ReservationChangeMutationGuard mutationGuard) {
         this.jdbc = jdbc;
         this.staffAccess = staffAccess;
         this.reservationAccess = reservationAccess;
+        this.mutationGuard = mutationGuard;
     }
 
     @Transactional
@@ -97,6 +101,7 @@ public class StaffRoomReassignmentService {
                     "ROOM_REASSIGNMENT_UNCHANGED", "현재 객실과 다른 객실을 선택해 주세요.");
         }
 
+        mutationGuard.prepareCriticalMutation(reservationId);
         Map<UUID, Room> rooms = lockRooms(currentPhysicalRoomId, newPhysicalRoomId);
         Room currentRoom = requireRoom(rooms, currentPhysicalRoomId);
         Room newRoom = requireRoom(rooms, newPhysicalRoomId);
@@ -148,6 +153,7 @@ public class StaffRoomReassignmentService {
                 values (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, UUID.randomUUID(), reservationId, idempotencyKey, requestHash, staff.id(),
                 currentRoom.id(), currentRoom.roomNumber(), newRoom.id(), newRoom.roomNumber());
+        mutationGuard.incrementRevision(reservationId);
         return new RoomReassignmentResult(
                 reservationId, currentRoom.id(), currentRoom.roomNumber(), newRoom.id(), newRoom.roomNumber());
     }

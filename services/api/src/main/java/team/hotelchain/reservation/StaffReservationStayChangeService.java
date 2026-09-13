@@ -17,6 +17,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import team.hotelchain.reservationchange.ReservationStayQuote;
+import team.hotelchain.reservationchange.ReservationChangeMutationGuard;
 import team.hotelchain.reservationchange.ReservationStayQuoteService;
 import team.hotelchain.staff.StaffAccessService;
 import team.hotelchain.staff.StaffPrincipal;
@@ -27,6 +28,7 @@ public class StaffReservationStayChangeService {
     private final StaffAccessService staffAccess;
     private final ReservationAccess reservationAccess;
     private final ReservationStayQuoteService quoteService;
+    private final ReservationChangeMutationGuard mutationGuard;
     private final Clock clock;
 
     public StaffReservationStayChangeService(
@@ -34,11 +36,13 @@ public class StaffReservationStayChangeService {
             StaffAccessService staffAccess,
             ReservationAccess reservationAccess,
             ReservationStayQuoteService quoteService,
+            ReservationChangeMutationGuard mutationGuard,
             Clock clock) {
         this.jdbc = jdbc;
         this.staffAccess = staffAccess;
         this.reservationAccess = reservationAccess;
         this.quoteService = quoteService;
+        this.mutationGuard = mutationGuard;
         this.clock = clock;
     }
 
@@ -109,6 +113,7 @@ public class StaffReservationStayChangeService {
                     "RESERVATION_PARTY_CAPACITY_EXCEEDED", "선택한 객실 유형의 최대 수용 인원을 초과했습니다.");
         }
 
+        mutationGuard.prepareCriticalMutation(reservationId);
         Map<InventoryKey, InventoryRow> inventory = lockInventory(reservation, change);
         requireOriginalInventory(reservation, inventory);
         List<RateNight> targetNights = findRateNights(change);
@@ -158,6 +163,7 @@ public class StaffReservationStayChangeService {
                 reservation.roomTypeId(), change.roomTypeId(), reservation.ratePlanId(), change.ratePlanId(),
                 reservation.checkIn(), reservation.checkOut(), change.dates().checkIn(), change.dates().checkOut(),
                 reservation.totalKrw(), totalKrw, differenceKrw);
+        mutationGuard.incrementRevision(reservationId);
 
         return new StaffReservationStayChangeResult(
                 reservationId, change.dates().checkIn(), change.dates().checkOut(),

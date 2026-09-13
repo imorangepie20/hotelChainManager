@@ -8,26 +8,28 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import team.hotelchain.reservation.BusinessConflictException;
+import team.hotelchain.reservationchange.ReservationChangeMutationGuard;
 import team.hotelchain.staff.StaffAccessService;
 
 @Service
 public class StaffOperationsService {
     private final JdbcTemplate jdbc;
     private final StaffAccessService staffAccess;
+    private final ReservationChangeMutationGuard mutationGuard;
 
-    public StaffOperationsService(JdbcTemplate jdbc, StaffAccessService staffAccess) {
+    public StaffOperationsService(
+            JdbcTemplate jdbc,
+            StaffAccessService staffAccess,
+            ReservationChangeMutationGuard mutationGuard) {
         this.jdbc = jdbc;
         this.staffAccess = staffAccess;
+        this.mutationGuard = mutationGuard;
     }
 
     @Transactional
     public void assign(String token, UUID reservationId, UUID physicalRoomId) {
         ReservationOperation reservation = reservation(reservationId);
         staffAccess.requireHotel(token, reservation.hotelId());
-        Room room = room(physicalRoomId);
-        if (!reservation.hotelId().equals(room.hotelId()) || !reservation.roomTypeId().equals(room.roomTypeId())) {
-            throw new BusinessConflictException("ROOM_NOT_MATCHED", "예약 객실 유형과 일치하는 객실만 배정할 수 있습니다.");
-        }
         Integer existingAssignment = jdbc.queryForObject("""
                 select count(*) from reservation_room_assignment
                 where reservation_id = ? and physical_room_id = ?
@@ -36,12 +38,17 @@ public class StaffOperationsService {
         if (!"CONFIRMED".equals(reservation.status())) {
             throw new BusinessConflictException("RESERVATION_NOT_ASSIGNABLE", "확정된 예약만 객실을 배정할 수 있습니다.");
         }
-        if (!"CLEAN".equals(room.housekeepingStatus())) {
-            throw new BusinessConflictException("ROOM_NOT_CLEAN", "청결 상태인 객실만 배정할 수 있습니다.");
-        }
         Integer assignedCount = jdbc.queryForObject("select count(*) from reservation_room_assignment where reservation_id = ?", Integer.class, reservationId);
         if (assignedCount != null && assignedCount >= reservation.rooms()) {
             throw new BusinessConflictException("ROOMS_ALREADY_ASSIGNED", "예약 객실 수만큼 이미 배정되었습니다.");
+        }
+        mutationGuard.prepareCriticalMutation(reservationId);
+        Room room = room(physicalRoomId);
+        if (!reservation.hotelId().equals(room.hotelId()) || !reservation.roomTypeId().equals(room.roomTypeId())) {
+            throw new BusinessConflictException("ROOM_NOT_MATCHED", "예약 객실 유형과 일치하는 객실만 배정할 수 있습니다.");
+        }
+        if (!"CLEAN".equals(room.housekeepingStatus())) {
+            throw new BusinessConflictException("ROOM_NOT_CLEAN", "청결 상태인 객실만 배정할 수 있습니다.");
         }
         Integer conflicts = jdbc.queryForObject("""
                 SELECT count(*) FROM reservation_room_assignment a
@@ -53,6 +60,7 @@ public class StaffOperationsService {
             throw new BusinessConflictException("ROOM_ALREADY_ASSIGNED", "숙박 기간이 겹치는 예약에 이미 배정된 객실입니다.");
         }
         jdbc.update("insert into reservation_room_assignment (reservation_id, physical_room_id) values (?, ?) on conflict do nothing", reservationId, physicalRoomId);
+        mutationGuard.incrementRevision(reservationId);
     }
 
     @Transactional
@@ -93,7 +101,9 @@ public class StaffOperationsService {
         if (readyRooms == null || readyRooms != reservation.rooms()) {
             throw new BusinessConflictException("ROOM_NOT_READY", "모든 배정 객실이 청결 상태여야 체크인할 수 있습니다.");
         }
+        mutationGuard.rejectOperationalTransitionWhenActive(reservationId);
         jdbc.update("update reservation set status = 'CHECKED_IN' where id = ?", reservationId);
+        mutationGuard.incrementRevision(reservationId);
     }
 
     @Transactional
@@ -117,8 +127,10 @@ public class StaffOperationsService {
         if (!"CONFIRMED".equals(reservation.status())) {
             throw new BusinessConflictException("RESERVATION_NOT_NO_SHOW_READY", "확정 상태 예약만 노쇼 처리할 수 있습니다.");
         }
+        mutationGuard.rejectOperationalTransitionWhenActive(reservationId);
         jdbc.update("delete from reservation_room_assignment where reservation_id = ?", reservationId);
         jdbc.update("update reservation set status = 'NO_SHOW' where id = ?", reservationId);
+        mutationGuard.incrementRevision(reservationId);
     }
 
     @Transactional
