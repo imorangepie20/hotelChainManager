@@ -11,6 +11,19 @@ export type Reservation = {
   cancellationPolicy: string; guest: { name: string; email: string }
 }
 
+export type ReservationChangePayment = {
+  reservationNumberSuffix: string
+  targetCheckIn: string
+  targetCheckOut: string
+  roomTypeName: string
+  ratePlanName: string
+  additionalAmountKrw: number
+  currency: string
+  expiresAt: string
+  environmentLabel: string
+  status: string
+}
+
 export type WebsiteNavigationItem = {
   id: string
   hotelId: string | null
@@ -84,6 +97,22 @@ export const api = {
   cancel: (id: string, token: string, key: string) => request<{ status: string; refundAmount: number }>(`/api/reservations/${id}/cancel`, {
     method: 'POST', headers: headers(token, key),
   }),
+  exchangeReservationChangePaymentToken: async (token: string) => {
+    const response = await fetch('/api/reservation-change-payments/session', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'X-Reservation-Change-Token': token },
+    })
+    if (!response.ok) throw await apiFailure(response)
+  },
+  reservationChangePayment: () => request<ReservationChangePayment>(
+    '/api/reservation-change-payments/current',
+    { credentials: 'include', cache: 'no-store' },
+  ),
+  reservationChangeCheckout: () => request<{ checkoutUrl: string }>(
+    '/api/reservation-change-payments/current/checkout',
+    { method: 'POST', credentials: 'include' },
+  ),
 }
 
 export function createManagementToken() {

@@ -1,5 +1,6 @@
 export type CustomerRoute = (
   | { kind: 'home'; pathname: '/' | '/en' }
+  | { kind: 'reservation-change-payment'; pathname: '/reservation-change-payment' }
   | { kind: 'collection'; pathname: string; hotelSlug?: string; contentKind: 'ROOM' | 'DINING' | 'FACILITY' | 'EXPERIENCE' | 'PROMOTION' | 'GUIDE' | 'BRAND' }
   | { kind: 'page'; pathname: string; segments: string[] }) & { locale?: 'ko' | 'en' }
 
@@ -37,6 +38,9 @@ function resolveBaseRoute(pathname: string): CustomerRoute | null {
   const normalizedPathname = normalizeCustomerPathname(pathname)
   if (!normalizedPathname) return null
   if (normalizedPathname === '/') return { kind: 'home', pathname: '/' }
+  if (normalizedPathname === '/reservation-change-payment') {
+    return { kind: 'reservation-change-payment', pathname: '/reservation-change-payment' }
+  }
   const hotelCollection = normalizedPathname.match(/^\/stays\/([a-z0-9]+(?:-[a-z0-9]+)*)\/(rooms|dining|facilities|experiences)$/)
   if (hotelCollection) {
     const kindBySegment = { rooms: 'ROOM', dining: 'DINING', facilities: 'FACILITY', experiences: 'EXPERIENCE' } as const

@@ -15,6 +15,7 @@ import { ResponsiveCmsImage } from './components/responsive-cms-image'
 import { ContentCollectionPage } from './components/content-collection-page'
 import { GuestSelector } from './components/guest-selector'
 import { HotelSelector } from './components/hotel-selector'
+import { ReservationChangePaymentPage } from './components/reservation-change-payment-page'
 
 import { ConciergePanel, type ConciergeCriteria } from './components/concierge-panel'
 import { StayDatePicker } from './components/stay-date-picker'
@@ -35,10 +36,18 @@ const previewStorage = {
   setItem: (key: string, value: string) => window.sessionStorage.setItem(key, value),
   removeItem: (key: string) => window.sessionStorage.removeItem(key),
 }
-const initialPreview = captureWebsitePreview(window.location, previewStorage, url => window.history.replaceState({}, '', url))
-  ?? storedWebsitePreviewForPath(window.location.pathname, previewStorage)
+const reservationChangePaymentRoute = resolveCustomerRoute(window.location.pathname)?.kind === 'reservation-change-payment'
+const initialPreview = reservationChangePaymentRoute
+  ? null
+  : captureWebsitePreview(window.location, previewStorage, url => window.history.replaceState({}, '', url))
+    ?? storedWebsitePreviewForPath(window.location.pathname, previewStorage)
 
 export default function App() {
+  if (reservationChangePaymentRoute) return <ReservationChangePaymentPage />
+  return <BookingApp />
+}
+
+function BookingApp() {
 
   const [hotels, setHotels] = useState<Hotel[]>([]); const [hotelsReady, setHotelsReady] = useState(false); const [hotelId, setHotelId] = useState(''); const [checkIn, setCheckIn] = useState(addDays(7)); const [checkOut, setCheckOut] = useState(addDays(9)); const [adults, setAdults] = useState(2); const [children, setChildren] = useState(0); const [rooms, setRooms] = useState(1)
   const [offers, setOffers] = useState<Offer[]>([]); const [breakfastOnly, setBreakfastOnly] = useState(false); const [roomTypeId, setRoomTypeId] = useState<string | undefined>(); const [selected, setSelected] = useState<Offer | null>(null); const [guest, setGuest] = useState({ name: '', email: '' }); const [reservation, setReservation] = useState<Reservation | null>(null)
