@@ -22,10 +22,13 @@ import org.springframework.web.bind.annotation.RestController;
 public class StaffOperationsController {
     private final StaffOperationsService operations;
     private final DailyOperationsService dailyOperations;
+    private final StaffReservationQueryService reservationQuery;
 
-    public StaffOperationsController(StaffOperationsService operations, DailyOperationsService dailyOperations) {
+    public StaffOperationsController(StaffOperationsService operations, DailyOperationsService dailyOperations,
+            StaffReservationQueryService reservationQuery) {
         this.operations = operations;
         this.dailyOperations = dailyOperations;
+        this.reservationQuery = reservationQuery;
     }
 
     @GetMapping("/hotels/{hotelId}/operations")
@@ -34,6 +37,16 @@ public class StaffOperationsController {
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
             @RequestHeader("X-Staff-Session") String token) {
         return dailyOperations.get(token, hotelId, date);
+    }
+
+    @GetMapping("/hotels/{hotelId}/reservations")
+    public StaffReservationSearchView reservations(
+            @PathVariable UUID hotelId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
+            @RequestParam(required = false) String query,
+            @RequestParam(required = false) String status,
+            @RequestHeader("X-Staff-Session") String token) {
+        return reservationQuery.search(token, hotelId, date, query, status);
     }
 
     @PostMapping("/reservations/{reservationId}/assignments")

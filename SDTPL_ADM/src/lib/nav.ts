@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { ClipboardCheck, Globe, LayoutDashboard } from "lucide-react";
+import { CalendarDays, ClipboardCheck, Globe, LayoutDashboard } from "lucide-react";
 
 export type NavItem = { title: string; href: string; icon?: LucideIcon };
 export type NavGroup = { label: string; items: NavItem[] };
@@ -9,6 +9,7 @@ const operationsGroup: NavGroup = {
   label: "운영",
   items: [
     { title: "운영 대시보드", href: "/dashboard/default", icon: LayoutDashboard },
+    { title: "예약 관리", href: "/dashboard/reservations", icon: CalendarDays },
     { title: "오늘의 운영", href: "/dashboard/operations", icon: ClipboardCheck },
   ],
 };

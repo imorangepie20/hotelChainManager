@@ -29,6 +29,30 @@ export type DailyOperationsView = {
 
 export type AssignableRoom = { id: string; roomNumber: string };
 
+export type StaffReservationSummary = {
+  reservationId: string;
+  guestName: string;
+  guestEmail: string;
+  roomTypeName: string;
+  ratePlanName: string;
+  checkIn: string;
+  checkOut: string;
+  adults: number;
+  children: number;
+  rooms: number;
+  status: string;
+  totalKrw: number;
+  currency: string;
+  assignedRoomNumbers: string[];
+};
+
+export type StaffReservationSearchView = {
+  hotelId: string;
+  date: string;
+  truncated: boolean;
+  reservations: StaffReservationSummary[];
+};
+
 
 type SessionResponse = { token: string; staff: StaffPrincipal };
 
@@ -379,6 +403,22 @@ async function mediaRequest<T>(path: string, token: string, init?: RequestInit):
     throw new StaffApiError(error.message ?? "미디어 요청을 처리하지 못했습니다.", response.status, error.code);
   }
   return response.json() as Promise<T>;
+}
+
+export async function getStaffReservations(
+  token: string,
+  hotelId: string,
+  date: string,
+  filters: { query?: string; status?: string } = {},
+): Promise<StaffReservationSearchView> {
+  const searchParams = new URLSearchParams({ date });
+  if (filters.query?.trim()) searchParams.set("query", filters.query.trim());
+  if (filters.status?.trim()) searchParams.set("status", filters.status.trim());
+  const response = await fetch(`/api/staff/hotels/${hotelId}/reservations?${searchParams}`, {
+    headers: { "X-Staff-Session": token },
+  });
+  if (!response.ok) throw new StaffApiError("예약 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.");
+  return response.json() as Promise<StaffReservationSearchView>;
 }
 
 type WebsiteMediaAssetResponse = Omit<WebsiteMediaAsset, "variants"> & { variants?: WebsiteMediaVariant[] };
