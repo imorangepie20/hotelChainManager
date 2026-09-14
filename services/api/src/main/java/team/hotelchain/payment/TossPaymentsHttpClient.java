@@ -98,6 +98,10 @@ public final class TossPaymentsHttpClient implements TossPaymentsClient {
             String currency = textValue(body.path("currency"));
             String providerStatus = textValue(body.path("status"));
             boolean done = "DONE".equals(providerStatus);
+            // 상점 키로 인증한 응답이 권위다. 선택적 mId가 있으면 설정과 추가 대조한다.
+            if (body.has("mId") && !properties.merchantAccount().equals(textValue(body.path("mId")))) {
+                return unknown("MERCHANT_MISMATCH");
+            }
             if (done && (!hasText(paymentKey) || !hasText(orderId) || amountKrw <= 0 || !"KRW".equals(currency))) {
                 return unknown("INCOMPLETE_DONE_RESPONSE");
             }

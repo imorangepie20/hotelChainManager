@@ -75,6 +75,20 @@ class TossPaymentsHttpClientTest {
         assertThat(result.errorCode()).isEqualTo("INCOMPLETE_DONE_RESPONSE");
     }
 
+    @Test
+    void rejectsPresentMismatchedMerchantButAcceptsAbsentOrMatchingMerchant() {
+        String done = "{\"paymentKey\":\"pay\",\"orderId\":\"order\",\"totalAmount\":120000,\"currency\":\"KRW\",\"status\":\"DONE\"";
+        var command = new TossPaymentsClient.ConfirmCommand("pay", "order", 120000, "KRW", "idem-1");
+        var wrong = new TossPaymentsHttpClient(properties("test_ck_x", "test_sk_x"),
+                new CapturingHttpClient(done + ",\"mId\":\"foreign-merchant\"}"));
+        assertThat(wrong.confirm(command).status()).isEqualTo(TossPaymentsClient.ProviderStatus.UNKNOWN);
+        var absent = new TossPaymentsHttpClient(properties("test_ck_x", "test_sk_x"), new CapturingHttpClient(done + "}"));
+        assertThat(absent.confirm(command).status()).isEqualTo(TossPaymentsClient.ProviderStatus.DONE);
+        var matching = new TossPaymentsHttpClient(properties("test_ck_x", "test_sk_x"),
+                new CapturingHttpClient(done + ",\"mId\":\"hotel-test\"}"));
+        assertThat(matching.confirm(command).status()).isEqualTo(TossPaymentsClient.ProviderStatus.DONE);
+    }
+
     @ParameterizedTest
     @MethodSource("incompleteDoneResponses")
     void mapsNonContractDoneFieldsToUnknown(String responseBody) {
