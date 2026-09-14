@@ -20,6 +20,9 @@ test("lets a branch employee complete checkout and housekeeping from daily opera
   await page.route("**/api/staff/reservations/arrival-1/no-show", (route) => route.fulfill({ status: 204 }));
 
   await page.goto("/dashboard/operations");
+  await expect(page.getByText("도착 예정", { exact: true })).toBeVisible();
+  await expect(page.getByText("출발 예정", { exact: true })).toBeVisible();
+  await expect(page.getByText("청소 필요 객실", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "체크아웃 처리" })).toBeVisible();
   await expect(page.getByRole("button", { name: "청소 완료" })).toBeVisible();
   await page.getByRole("button", { name: "객실 배정" }).click();

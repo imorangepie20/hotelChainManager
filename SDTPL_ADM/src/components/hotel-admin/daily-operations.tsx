@@ -93,9 +93,9 @@ export function DailyOperations() {
       {hotelId && <RoomOperationsPanel key={hotelId} hotelId={hotelId} />}
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <OperationsCard title="\uB3C4\uCC29 \uC608\uC815" subtitle={hotelName} items={data?.arrivals ?? []} onAction={runOperation} processing={processing} onAssigned={(roomNumber) => { setNotice(`${roomNumber}호를 배정했습니다.`); setRefreshVersion((version) => version + 1); }} />
-        <OperationsCard title="\uCD9C\uBC1C \uC608\uC815" subtitle={hotelName} items={data?.departures ?? []} onAction={runOperation} processing={processing} onAssigned={() => {}} />
-        <OperationsCard title="\uCCAD\uC18C \uD544\uC694 \uAC1D\uC2E4" subtitle={hotelName} items={data?.roomsNeedingCleaning ?? []} roomList onAction={runOperation} processing={processing} onAssigned={() => {}} />
+        <OperationsCard title={"\uB3C4\uCC29 \uC608\uC815"} subtitle={hotelName} items={data?.arrivals ?? []} onAction={runOperation} processing={processing} onAssigned={(roomNumber) => { setNotice(`${roomNumber}호를 배정했습니다.`); setRefreshVersion((version) => version + 1); }} />
+        <OperationsCard title={"\uCD9C\uBC1C \uC608\uC815"} subtitle={hotelName} items={data?.departures ?? []} onAction={runOperation} processing={processing} onAssigned={() => {}} />
+        <OperationsCard title={"\uCCAD\uC18C \uD544\uC694 \uAC1D\uC2E4"} subtitle={hotelName} items={data?.roomsNeedingCleaning ?? []} roomList onAction={runOperation} processing={processing} onAssigned={() => {}} />
       </div>
     </div>
   );
