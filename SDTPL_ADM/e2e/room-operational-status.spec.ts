@@ -1,0 +1,129 @@
+import { expect, test } from "@playwright/test";
+
+const SOKCHO = "11000000-0000-0000-0000-000000000001";
+
+async function seedSession(page: import("@playwright/test").Page) {
+  await page.addInitScript((hotelId) => {
+    localStorage.setItem("hotel-chain-staff-session", "test-session-token");
+    localStorage.setItem("hotel-chain-staff", JSON.stringify({
+      id: "staff",
+      email: "sokcho@hotel-chain.local",
+      displayName: "속초 직원",
+      role: "BRANCH_STAFF",
+      hotelId,
+    }));
+  }, SOKCHO);
+  await page.route("**/api/staff/me", (route) => route.fulfill({ status: 200, contentType: "application/json", body: "{}" }));
+  await page.route("**/api/staff/hotels/*/operations?date=*", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ hotelId: SOKCHO, date: "2026-09-14", arrivals: [], departures: [], roomsNeedingCleaning: [] }),
+  }));
+}
+
+test("shows impacted reservations and blocks an unsafe sales stop", async ({ page }) => {
+  await seedSession(page);
+  await page.route("**/api/staff/hotels/*/room-operations", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      hotelId: SOKCHO,
+      summary: { inspectionRequired: 1, outOfService: 0, overdueRecovery: 0 },
+      rooms: [{
+        physicalRoomId: "room-702",
+        roomNumber: "702",
+        roomTypeName: "디럭스 오션",
+        housekeepingStatus: "CLEAN",
+        operationalStatus: "INSPECTION_REQUIRED",
+        operationalReason: "소음 점검",
+        expectedRecoveryAt: null,
+        operationalVersion: 1,
+        impactedAssignments: [{
+          reservationId: "reservation-1",
+          guestName: "김하늘",
+          status: "CHECKED_IN",
+          checkIn: "2026-09-13",
+          checkOut: "2026-09-15",
+        }],
+        events: [],
+      }],
+    }),
+  }));
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/dashboard/operations");
+  const trigger = page.getByRole("button", { name: "702호 판매 중지" });
+  await expect(page.getByRole("region", { name: "객실 운영 상태" })).toBeVisible();
+  await expect(page.getByText("점검 필요 1건")).toBeVisible();
+  await trigger.press("Enter");
+
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog.getByText("영향 예약 1건")).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "판매 중지 확정" })).toBeDisabled();
+  await expect(dialog.getByRole("link", { name: "김하늘 예약 보기" }))
+    .toHaveAttribute("href", "/dashboard/reservations?date=2026-09-14&reservationId=reservation-1");
+  const box = await dialog.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.x).toBeGreaterThanOrEqual(12);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(378);
+
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(trigger).toBeFocused();
+});
+
+test("keeps the idempotency key for a retry and refreshes after success", async ({ page }) => {
+  await seedSession(page);
+  let reads = 0;
+  const requestKeys: string[] = [];
+  const requestBodies: unknown[] = [];
+  await page.route("**/api/staff/hotels/*/room-operations", (route) => {
+    reads += 1;
+    return route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        hotelId: SOKCHO,
+        summary: { inspectionRequired: reads > 1 ? 1 : 0, outOfService: 0, overdueRecovery: 0 },
+        rooms: [{
+          physicalRoomId: "room-701", roomNumber: "701", roomTypeName: "디럭스 오션",
+          housekeepingStatus: "CLEAN", operationalStatus: reads > 1 ? "INSPECTION_REQUIRED" : "AVAILABLE",
+          operationalReason: reads > 1 ? "배관 점검" : null, expectedRecoveryAt: null,
+          operationalVersion: reads > 1 ? 1 : 0, impactedAssignments: [], events: [],
+        }],
+      }),
+    });
+  });
+  await page.route("**/api/staff/rooms/room-701/operational-transitions", (route) => {
+    requestKeys.push(route.request().headers()["idempotency-key"] ?? "");
+    requestBodies.push(route.request().postDataJSON());
+    if (requestKeys.length === 1) {
+      return route.fulfill({ status: 502, contentType: "application/json", body: JSON.stringify({ message: "응답을 확인하지 못했습니다." }) });
+    }
+    return route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        physicalRoomId: "room-701", roomNumber: "701", housekeepingStatus: "CLEAN",
+        operationalStatus: "INSPECTION_REQUIRED", operationalReason: "배관 점검",
+        expectedRecoveryAt: null, operationalVersion: 1,
+      }),
+    });
+  });
+
+  await page.goto("/dashboard/operations");
+  await page.getByRole("button", { name: "701호 점검 필요로 변경" }).click();
+  const dialog = page.getByRole("alertdialog");
+  await dialog.getByLabel("변경 사유").fill("  배관 점검  ");
+  const submit = dialog.getByRole("button", { name: "점검 필요 확정" });
+  await submit.click();
+  await expect(dialog.getByRole("alert")).toContainText("응답을 확인하지 못했습니다");
+  await submit.click();
+
+  await expect(dialog).toBeHidden();
+  await expect(page.getByText("객실 운영 상태를 변경했습니다.")).toBeVisible();
+  expect(requestKeys).toHaveLength(2);
+  expect(requestKeys[0]).not.toBe("");
+  expect(requestKeys[1]).toBe(requestKeys[0]);
+  expect(requestBodies).toEqual([
+    { targetStatus: "INSPECTION_REQUIRED", reason: "배관 점검", expectedRecoveryAt: null, expectedVersion: 0 },
+    { targetStatus: "INSPECTION_REQUIRED", reason: "배관 점검", expectedRecoveryAt: null, expectedVersion: 0 },
+  ]);
+  expect(reads).toBeGreaterThan(1);
+});
