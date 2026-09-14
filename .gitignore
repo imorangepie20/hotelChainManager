@@ -6,6 +6,7 @@
 **/dist/
 **/*.tsbuildinfo
 .logs/
+.local-runtime/
 .nested-git-backups/
 docs/diagrams/*.visual-check.*.png
 .agents/
