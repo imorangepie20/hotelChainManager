@@ -116,6 +116,7 @@ function parseDate(value: string) {
 export function ReservationManagement() {
   const searchParams = useSearchParams();
   const deepLinkDate = useRef(searchParams.get("date"));
+  const deepLinkHotelId = useRef(searchParams.get("hotelId"));
   const deepLinkReservationId = useRef(searchParams.get("reservationId"));
   const deepLinkHandled = useRef(false);
   const [staff, setStaff] = useState<StaffPrincipal | null>(null);
@@ -152,7 +153,11 @@ export function ReservationManagement() {
       try {
         const principal = JSON.parse(stored) as StaffPrincipal;
         setStaff(principal);
-        setHotelId(principal.hotelId ?? hotels[0].id);
+        const requestedHotelId = deepLinkHotelId.current;
+        const canUseRequestedHotel = principal.role !== "BRANCH_STAFF"
+          && requestedHotelId
+          && hotels.some((hotel) => hotel.id === requestedHotelId);
+        setHotelId(principal.hotelId ?? (canUseRequestedHotel ? requestedHotelId : hotels[0].id));
       } catch {
         setError("직원 정보를 읽지 못했습니다. 다시 로그인해 주세요.");
       }
@@ -270,22 +275,9 @@ export function ReservationManagement() {
   }
 
   function checkedInRoomMoved(result: CheckedInRoomMoveResult) {
-    const replaceAssignedRoom = (reservation: StaffReservationSummary) => ({
-      ...reservation,
-      assignedRoomNumbers: reservation.assignedRoomNumbers.map((roomNumber) => (
-        roomNumber === result.previousRoomNumber ? result.roomNumber : roomNumber
-      )),
-    });
-    setData((current) => current ? {
-      ...current,
-      reservations: current.reservations.map((reservation) => (
-        reservation.reservationId === result.reservationId ? replaceAssignedRoom(reservation) : reservation
-      )),
-    } : current);
-    setSelectedReservation((current) => (
-      current?.reservationId === result.reservationId ? replaceAssignedRoom(current) : current
-    ));
     setNotice(`${result.roomNumber}호로 이동했습니다.`);
+    setSelectedReservation(null);
+    setRefreshVersion((version) => version + 1);
   }
 
   function partyUpdated(result: StaffReservationPartyUpdateResult) {

@@ -127,12 +127,13 @@ public class RoomOperationsService {
                 insert into physical_room_operational_event
                     (id, physical_room_id, previous_status, status, previous_reason, reason,
                      previous_expected_recovery_at, expected_recovery_at, staff_id,
-                     idempotency_key, request_hash, created_at)
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     idempotency_key, request_hash, created_at,
+                     resulting_housekeeping_status, resulting_version)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, eventId, roomId, room.operationalStatus(), normalized.targetStatus(),
                 room.operationalReason(), normalized.reason(), timestamp(room.expectedRecoveryAt()),
                 timestamp(storedRecovery), staff.id(), idempotencyKey.trim(), requestHash,
-                Timestamp.from(clock.instant()));
+                Timestamp.from(clock.instant()), room.housekeepingStatus(), room.operationalVersion() + 1);
         return result(roomId);
     }
 
@@ -158,19 +159,25 @@ public class RoomOperationsService {
 
     private ExistingEvent existingEvent(UUID roomId, String idempotencyKey) {
         return jdbc.query("""
-                select request_hash, status, reason, expected_recovery_at
+                select request_hash, status, reason, expected_recovery_at,
+                       resulting_housekeeping_status, resulting_version
                   from physical_room_operational_event
                  where physical_room_id = ? and idempotency_key = ?
                 """, rs -> rs.next() ? new ExistingEvent(
                         rs.getString("request_hash"), rs.getString("status"), rs.getString("reason"),
-                        instant(rs, "expected_recovery_at")) : null,
+                        instant(rs, "expected_recovery_at"), rs.getString("resulting_housekeeping_status"),
+                        (Long) rs.getObject("resulting_version")) : null,
                 roomId, idempotencyKey);
     }
 
     private RoomOperationalTransitionResult replayResult(LockedRoom room, ExistingEvent event) {
         String operationalReason = "AVAILABLE".equals(event.status()) ? null : event.reason();
-        return new RoomOperationalTransitionResult(room.id(), room.roomNumber(), room.housekeepingStatus(),
-                event.status(), operationalReason, event.expectedRecoveryAt(), room.operationalVersion());
+        String housekeepingStatus = event.resultingHousekeepingStatus() == null
+                ? room.housekeepingStatus() : event.resultingHousekeepingStatus();
+        long operationalVersion = event.resultingVersion() == null
+                ? room.operationalVersion() : event.resultingVersion();
+        return new RoomOperationalTransitionResult(room.id(), room.roomNumber(), housekeepingStatus,
+                event.status(), operationalReason, event.expectedRecoveryAt(), operationalVersion);
     }
 
     private RoomOperationalTransitionResult result(UUID roomId) {
@@ -227,7 +234,7 @@ public class RoomOperationsService {
         if (reason.isEmpty() || reason.length() > 500) {
             throw new IllegalArgumentException("변경 사유는 1자 이상 500자 이하로 입력해야 합니다.");
         }
-        if (request.expectedVersion() < 0) {
+        if (request.expectedVersion() == null || request.expectedVersion() < 0) {
             throw new IllegalArgumentException("운영 상태 버전은 0 이상이어야 합니다.");
         }
         if (request.expectedRecoveryAt() != null && request.expectedRecoveryAt().isBefore(clock.instant())) {
@@ -269,7 +276,9 @@ public class RoomOperationsService {
             long operationalVersion,
             ZoneId zoneId) {}
 
-    private record ExistingEvent(String requestHash, String status, String reason, Instant expectedRecoveryAt) {}
+    private record ExistingEvent(
+            String requestHash, String status, String reason, Instant expectedRecoveryAt,
+            String resultingHousekeepingStatus, Long resultingVersion) {}
 
     private record NormalizedRequest(
             String targetStatus, String reason, Instant expectedRecoveryAt, long expectedVersion) {}

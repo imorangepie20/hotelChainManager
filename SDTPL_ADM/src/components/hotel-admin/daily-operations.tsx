@@ -90,7 +90,7 @@ export function DailyOperations() {
       {notice && <p className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm text-primary">{notice}</p>}
       {loading && <p className="text-sm text-muted-foreground">{"\uB2F9\uC77C \uC6B4\uC601 \uB370\uC774\uD130\uB97C \uBD88\uB7EC\uC624\uB294 \uC911\uC785\uB2C8\uB2E4."}</p>}
 
-      {hotelId && <RoomOperationsPanel hotelId={hotelId} />}
+      {hotelId && <RoomOperationsPanel key={hotelId} hotelId={hotelId} />}
 
       <div className="grid gap-4 lg:grid-cols-3">
         <OperationsCard title="\uB3C4\uCC29 \uC608\uC815" subtitle={hotelName} items={data?.arrivals ?? []} onAction={runOperation} processing={processing} onAssigned={(roomNumber) => { setNotice(`${roomNumber}호를 배정했습니다.`); setRefreshVersion((version) => version + 1); }} />

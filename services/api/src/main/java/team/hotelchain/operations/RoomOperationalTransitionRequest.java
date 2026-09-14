@@ -6,4 +6,9 @@ public record RoomOperationalTransitionRequest(
         String targetStatus,
         String reason,
         Instant expectedRecoveryAt,
-        long expectedVersion) {}
+        Long expectedVersion) {
+    public RoomOperationalTransitionRequest(
+            String targetStatus, String reason, Instant expectedRecoveryAt, long expectedVersion) {
+        this(targetStatus, reason, expectedRecoveryAt, Long.valueOf(expectedVersion));
+    }
+}

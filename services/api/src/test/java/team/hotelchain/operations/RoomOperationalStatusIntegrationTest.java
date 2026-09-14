@@ -187,11 +187,14 @@ class RoomOperationalStatusIntegrationTest {
         var request = new RoomOperationalTransitionRequest("INSPECTION_REQUIRED", "전기 점검", null, 0);
 
         RoomOperationalTransitionResult first = roomOperations.transition(firstStaff.token(), ROOM, "retry-1", request);
+        roomOperations.transition(firstStaff.token(), ROOM, "available-after-retry",
+                new RoomOperationalTransitionRequest("AVAILABLE", "점검 완료", null, 1));
+        jdbc.update("update physical_room set housekeeping_status = 'NEEDS_CLEANING' where id = ?", ROOM);
         RoomOperationalTransitionResult replay = roomOperations.transition(firstStaff.token(), ROOM, "retry-1", request);
 
         assertThat(replay).isEqualTo(first);
         assertThat(jdbc.queryForObject("select count(*) from physical_room_operational_event where physical_room_id = ?",
-                Integer.class, ROOM)).isEqualTo(1);
+                Integer.class, ROOM)).isEqualTo(2);
         assertConflict("IDEMPOTENCY_CONFLICT", () -> roomOperations.transition(firstStaff.token(), ROOM, "retry-1",
                 new RoomOperationalTransitionRequest("OUT_OF_SERVICE", "전기 점검", null, 0)));
         assertConflict("IDEMPOTENCY_CONFLICT", () -> roomOperations.transition(secondStaff.token(), ROOM, "retry-1", request));
@@ -218,6 +221,21 @@ class RoomOperationalStatusIntegrationTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThat(jdbc.queryForObject("select count(*) from physical_room_operational_event where physical_room_id = ?",
                 Integer.class, ROOM)).isZero();
+    }
+
+    @Test
+    void rejectsAnHttpTransitionWithoutTheRequiredExpectedVersion() throws Exception {
+        StaffSessionView session = login("room-operations@example.com");
+        var mockMvc = MockMvcBuilders.webAppContextSetup(context).build();
+
+        mockMvc.perform(post("/api/staff/rooms/{roomId}/operational-transitions", ROOM)
+                        .header("X-Staff-Session", session.token())
+                        .header("Idempotency-Key", "missing-version")
+                        .contentType("application/json")
+                        .content("""
+                                {"targetStatus":"INSPECTION_REQUIRED","reason":"점검"}
+                                """))
+                .andExpect(status().isBadRequest());
     }
 
     @Test

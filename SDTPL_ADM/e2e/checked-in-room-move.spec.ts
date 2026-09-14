@@ -4,6 +4,7 @@ const SOKCHO = "11000000-0000-0000-0000-000000000001";
 const RESERVATION = "reservation-1";
 
 async function setup(page: import("@playwright/test").Page) {
+  let reservationReads = 0;
   await page.addInitScript((hotelId) => {
     localStorage.setItem("hotel-chain-staff-session", "test-session-token");
     localStorage.setItem("hotel-chain-staff", JSON.stringify({
@@ -12,9 +13,11 @@ async function setup(page: import("@playwright/test").Page) {
     }));
   }, SOKCHO);
   await page.route("**/api/staff/me", (route) => route.fulfill({ status: 200, contentType: "application/json", body: "{}" }));
-  await page.route("**/api/staff/hotels/*/reservations?*", (route) => route.fulfill({
-    contentType: "application/json",
-    body: JSON.stringify({
+  await page.route("**/api/staff/hotels/*/reservations?*", (route) => {
+    reservationReads += 1;
+    return route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
       hotelId: SOKCHO,
       date: new URL(route.request().url()).searchParams.get("date"),
       truncated: false,
@@ -22,10 +25,11 @@ async function setup(page: import("@playwright/test").Page) {
         reservationId: RESERVATION, guestName: "김하늘", guestEmail: "guest@example.com",
         roomTypeName: "디럭스 오션", ratePlanName: "조식 포함", checkIn: "2026-09-13",
         checkOut: "2026-09-15", adults: 2, children: 0, rooms: 1, status: "CHECKED_IN",
-        totalKrw: 420000, currency: "KRW", assignedRoomNumbers: ["701"],
+        totalKrw: 420000, currency: "KRW", assignedRoomNumbers: [reservationReads > 1 ? "702" : "701"],
       }],
-    }),
-  }));
+      }),
+    });
+  });
   await page.route("**/api/staff/reservations/reservation-1/checked-in-room-move-options", (route) => route.fulfill({
     contentType: "application/json",
     body: JSON.stringify({
@@ -34,10 +38,11 @@ async function setup(page: import("@playwright/test").Page) {
       candidates: [{ id: "room-702", roomNumber: "702" }, { id: "room-703", roomNumber: "703" }],
     }),
   }));
+  return { reservationReads: () => reservationReads };
 }
 
 test("moves a checked-in guest with confirmation and safe retry", async ({ page }) => {
-  await setup(page);
+  const state = await setup(page);
   const keys: string[] = [];
   const bodies: unknown[] = [];
   await page.route("**/api/staff/reservations/reservation-1/checked-in-room-moves", (route) => {
@@ -84,6 +89,8 @@ test("moves a checked-in guest with confirmation and safe retry", async ({ page 
   await submit.click();
 
   await expect(page.getByText("702호로 이동했습니다.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "김하늘 예약 상세" }).locator("xpath=ancestor::li")).toContainText("702");
+  expect(state.reservationReads()).toBeGreaterThan(1);
   expect(keys).toHaveLength(2);
   expect(keys[0]).not.toBe("");
   expect(keys[1]).toBe(keys[0]);
@@ -108,4 +115,42 @@ test("opens the matching reservation once from a room-impact deep link", async (
   await expect(detail).toBeHidden();
   await page.waitForTimeout(100);
   await expect(detail).toBeHidden();
+});
+
+test("reloads candidates after a claimed-room conflict while preserving the reason", async ({ page }) => {
+  await setup(page);
+  let optionReads = 0;
+  await page.unroute("**/api/staff/reservations/reservation-1/checked-in-room-move-options");
+  await page.route("**/api/staff/reservations/reservation-1/checked-in-room-move-options", (route) => {
+    optionReads += 1;
+    return route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        reservationId: RESERVATION,
+        assignments: [{ id: "room-701", roomNumber: "701" }],
+        candidates: optionReads > 1
+          ? [{ id: "room-703", roomNumber: "703" }]
+          : [{ id: "room-702", roomNumber: "702" }],
+      }),
+    });
+  });
+  await page.route("**/api/staff/reservations/reservation-1/checked-in-room-moves", (route) => route.fulfill({
+    status: 409,
+    contentType: "application/json",
+    body: JSON.stringify({ code: "ROOM_ALREADY_ASSIGNED", message: "다른 예약에 배정된 객실입니다." }),
+  }));
+
+  await page.goto("/dashboard/reservations");
+  await page.getByRole("button", { name: "김하늘 예약 상세" }).click();
+  const detail = page.getByRole("dialog");
+  await detail.getByRole("button", { name: "이동 후보 조회" }).click();
+  await detail.getByLabel("이동 사유").fill("소음 문제");
+  await detail.getByRole("button", { name: "객실 이동 확인" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "객실 이동 확정" }).click();
+
+  await expect(page.getByRole("alertdialog")).toBeHidden();
+  await expect(detail.getByLabel("이동 사유")).toHaveValue("소음 문제");
+  await expect(detail.getByLabel("새 객실")).toHaveValue("room-703");
+  await expect(detail.getByRole("alert")).toContainText("다른 예약에 배정된 객실입니다");
+  expect(optionReads).toBeGreaterThan(1);
 });

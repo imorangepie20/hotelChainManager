@@ -103,6 +103,7 @@ public class CheckedInRoomMoveService {
         LockedRoom currentRoom = requireRoom(rooms, validated.currentRoomId());
         LockedRoom newRoom = requireRoom(rooms, validated.newRoomId());
         requireCurrentAssignment(reservationId, validated.currentRoomId());
+        requireTargetNotAssigned(reservationId, validated.newRoomId());
         requireMatchingRoom(reservation, currentRoom);
         requireMatchingRoom(reservation, newRoom);
         if (!"CLEAN".equals(newRoom.housekeepingStatus())) {
@@ -137,12 +138,13 @@ public class CheckedInRoomMoveService {
                 insert into physical_room_operational_event
                     (id, physical_room_id, previous_status, status, previous_reason, reason,
                      previous_expected_recovery_at, expected_recovery_at, staff_id,
-                     idempotency_key, request_hash, created_at)
-                values (?, ?, ?, 'INSPECTION_REQUIRED', ?, ?, ?, null, ?, ?, ?, ?)
+                     idempotency_key, request_hash, created_at,
+                     resulting_housekeeping_status, resulting_version)
+                values (?, ?, ?, 'INSPECTION_REQUIRED', ?, ?, ?, null, ?, ?, ?, ?, 'NEEDS_CLEANING', ?)
                 """, UUID.randomUUID(), currentRoom.id(), currentRoom.operationalStatus(),
                 currentRoom.operationalReason(), validated.reason(), timestamp(currentRoom.expectedRecoveryAt()),
                 staff.id(), operationalEventKey(reservationId, validated.idempotencyKey()), requestHash,
-                Timestamp.from(movedAt));
+                Timestamp.from(movedAt), currentRoom.operationalVersion() + 1);
         jdbc.update("""
                 insert into checked_in_room_move
                     (id, reservation_id, previous_physical_room_id, previous_room_number,
@@ -171,7 +173,7 @@ public class CheckedInRoomMoveService {
     private Map<UUID, LockedRoom> lockRooms(UUID firstRoomId, UUID secondRoomId) {
         List<LockedRoom> rows = jdbc.query("""
                 select id, hotel_id, room_type_id, room_number, housekeeping_status,
-                       operational_status, operational_reason, expected_recovery_at
+                       operational_status, operational_reason, expected_recovery_at, operational_version
                   from physical_room
                  where id in (?, ?)
                  order by id
@@ -180,7 +182,8 @@ public class CheckedInRoomMoveService {
                         rs.getObject("id", UUID.class), rs.getObject("hotel_id", UUID.class),
                         rs.getObject("room_type_id", UUID.class), rs.getString("room_number"),
                         rs.getString("housekeeping_status"), rs.getString("operational_status"),
-                        rs.getString("operational_reason"), instant(rs, "expected_recovery_at")),
+                        rs.getString("operational_reason"), instant(rs, "expected_recovery_at"),
+                        rs.getLong("operational_version")),
                 firstRoomId, secondRoomId);
         Map<UUID, LockedRoom> result = new HashMap<>();
         rows.forEach(room -> result.put(room.id(), room));
@@ -219,6 +222,16 @@ public class CheckedInRoomMoveService {
                 """, Integer.class, reservationId, currentRoomId);
         if (count == null || count == 0) {
             throw new BusinessConflictException("ROOM_ASSIGNMENT_NOT_FOUND", "현재 예약에 배정된 객실을 선택해 주세요.");
+        }
+    }
+
+    private void requireTargetNotAssigned(UUID reservationId, UUID newRoomId) {
+        Integer count = jdbc.queryForObject("""
+                select count(*) from reservation_room_assignment
+                 where reservation_id = ? and physical_room_id = ?
+                """, Integer.class, reservationId, newRoomId);
+        if (count != null && count > 0) {
+            throw new BusinessConflictException("ROOM_ALREADY_ASSIGNED", "이미 이 예약에 배정된 객실입니다.");
         }
     }
 
@@ -280,7 +293,8 @@ public class CheckedInRoomMoveService {
 
     private record LockedRoom(
             UUID id, UUID hotelId, UUID roomTypeId, String roomNumber, String housekeepingStatus,
-            String operationalStatus, String operationalReason, Instant expectedRecoveryAt) {}
+            String operationalStatus, String operationalReason, Instant expectedRecoveryAt,
+            long operationalVersion) {}
 
     private record ValidatedRequest(String idempotencyKey, UUID currentRoomId, UUID newRoomId, String reason) {}
 

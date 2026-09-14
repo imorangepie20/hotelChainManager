@@ -59,7 +59,7 @@ test("shows impacted reservations and blocks an unsafe sales stop", async ({ pag
   await expect(dialog.getByText("영향 예약 1건")).toBeVisible();
   await expect(dialog.getByRole("button", { name: "판매 중지 확정" })).toBeDisabled();
   await expect(dialog.getByRole("link", { name: "김하늘 예약 보기" }))
-    .toHaveAttribute("href", "/dashboard/reservations?date=2026-09-14&reservationId=reservation-1");
+    .toHaveAttribute("href", `/dashboard/reservations?date=2026-09-13&hotelId=${SOKCHO}&reservationId=reservation-1`);
   const box = await dialog.boundingBox();
   expect(box).not.toBeNull();
   expect(box!.x).toBeGreaterThanOrEqual(12);
@@ -125,5 +125,54 @@ test("keeps the idempotency key for a retry and refreshes after success", async 
     { targetStatus: "INSPECTION_REQUIRED", reason: "배관 점검", expectedRecoveryAt: null, expectedVersion: 0 },
     { targetStatus: "INSPECTION_REQUIRED", reason: "배관 점검", expectedRecoveryAt: null, expectedVersion: 0 },
   ]);
+  expect(reads).toBeGreaterThan(1);
+});
+
+test("refreshes impacted reservations and version after a transition conflict", async ({ page }) => {
+  await seedSession(page);
+  let reads = 0;
+  let submittedBody: Record<string, unknown> | null = null;
+  const assignment = {
+    reservationId: "future-reservation", guestName: "박미래", status: "CONFIRMED",
+    checkIn: "2026-10-10", checkOut: "2026-10-12",
+  };
+  await page.route("**/api/staff/hotels/*/room-operations", (route) => {
+    reads += 1;
+    return route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        hotelId: SOKCHO,
+        summary: { inspectionRequired: 0, outOfService: 0, overdueRecovery: 0 },
+        rooms: [{
+          physicalRoomId: "room-801", roomNumber: "801", roomTypeName: "스위트",
+          housekeepingStatus: "CLEAN", operationalStatus: "AVAILABLE", operationalReason: null,
+          expectedRecoveryAt: null, operationalVersion: reads > 1 ? 1 : 0,
+          impactedAssignments: reads > 1 ? [assignment] : [], events: [],
+        }],
+      }),
+    });
+  });
+  await page.route("**/api/staff/rooms/room-801/operational-transitions", (route) => {
+    submittedBody = route.request().postDataJSON();
+    return route.fulfill({
+      status: 409,
+      contentType: "application/json",
+      body: JSON.stringify({ code: "ROOM_HAS_ACTIVE_ASSIGNMENTS", message: "영향 예약이 있습니다.", assignments: [assignment] }),
+    });
+  });
+
+  await page.goto("/dashboard/operations");
+  await page.getByRole("button", { name: "801호 판매 중지" }).click();
+  const dialog = page.getByRole("alertdialog");
+  await dialog.getByLabel("변경 사유").fill("장기 수리");
+  await dialog.getByRole("button", { name: "판매 중지 확정" }).click();
+
+  await expect(dialog.getByText("영향 예약 1건")).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "판매 중지 확정" })).toBeDisabled();
+  await expect(dialog.getByRole("link", { name: "박미래 예약 보기" })).toHaveAttribute(
+    "href",
+    `/dashboard/reservations?date=2026-10-10&hotelId=${SOKCHO}&reservationId=future-reservation`,
+  );
+  expect(submittedBody).toMatchObject({ expectedVersion: 0 });
   expect(reads).toBeGreaterThan(1);
 });

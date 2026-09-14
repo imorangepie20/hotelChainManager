@@ -161,6 +161,21 @@ class CheckedInRoomMoveIntegrationTest {
     }
 
     @Test
+    void rejectsATargetAlreadyAssignedToAnotherRoomOfTheSameReservation() {
+        StaffSessionView session = login("checked-in-move@example.com");
+        jdbc.update("insert into reservation_room_assignment (reservation_id, physical_room_id) values (?, ?)",
+                RESERVATION, NEW_ROOM);
+
+        assertConflict("ROOM_ALREADY_ASSIGNED", () -> move(session, "own-target", NEW_ROOM));
+
+        assertThat(jdbc.queryForObject(
+                "select count(*) from reservation_room_assignment where reservation_id = ?",
+                Integer.class, RESERVATION)).isEqualTo(2);
+        assertThat(jdbc.queryForObject("select count(*) from checked_in_room_move where reservation_id = ?",
+                Integer.class, RESERVATION)).isZero();
+    }
+
+    @Test
     void rollsBackAssignmentRoomStateAndAuditsWhenOperationalEventInsertFails() {
         StaffSessionView session = login("checked-in-move@example.com");
         String eventKey = "checked-in-move:" + RESERVATION + ":rollback";

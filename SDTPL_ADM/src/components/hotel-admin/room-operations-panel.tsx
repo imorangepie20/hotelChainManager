@@ -23,6 +23,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import {
   getRoomOperations,
+  StaffApiError,
   transitionRoomOperationalStatus,
   type RoomOperationalStatus,
   type RoomOperationsView,
@@ -41,10 +42,6 @@ const housekeepingLabel = { CLEAN: "청소 완료", NEEDS_CLEANING: "청소 필�
 
 function newRequestKey() {
   return globalThis.crypto.randomUUID();
-}
-
-function today() {
-  return new Date().toISOString().slice(0, 10);
 }
 
 export function RoomOperationsPanel({ hotelId }: { hotelId: string }) {
@@ -67,12 +64,21 @@ export function RoomOperationsPanel({ hotelId }: { hotelId: string }) {
     let active = true;
     queueMicrotask(() => {
       if (active) {
+        setData(null);
         setLoading(true);
         setError(null);
       }
     });
     void getRoomOperations(token, hotelId)
-      .then((result) => { if (active) setData(result); })
+      .then((result) => {
+        if (!active) return;
+        setData(result);
+        setTransition((current) => {
+          if (!current) return null;
+          const room = result.rooms.find((item) => item.physicalRoomId === current.room.physicalRoomId);
+          return room ? { ...current, room } : null;
+        });
+      })
       .catch((cause: unknown) => {
         if (active) setError(cause instanceof Error ? cause.message : "객실 운영 상태를 불러오지 못했습니다.");
       })
@@ -124,6 +130,19 @@ export function RoomOperationsPanel({ hotelId }: { hotelId: string }) {
       setNotice("객실 운영 상태를 변경했습니다.");
       setRefreshVersion((version) => version + 1);
     } catch (cause) {
+      if (cause instanceof StaffApiError && cause.status === 409) {
+        const assignments = cause.details?.assignments;
+        if (assignments) {
+          setTransition((current) => current ? {
+            ...current,
+            room: { ...current.room, impactedAssignments: assignments },
+          } : null);
+        }
+        if (cause.code === "ROOM_OPERATIONAL_VERSION_CONFLICT") {
+          setRequestKey(newRequestKey());
+        }
+        setRefreshVersion((version) => version + 1);
+      }
       setTransitionError(cause instanceof Error ? cause.message : "객실 운영 상태를 변경하지 못했습니다.");
     } finally {
       setSubmitting(false);
@@ -199,7 +218,9 @@ export function RoomOperationsPanel({ hotelId }: { hotelId: string }) {
                     <Button
                       type="button"
                       size="sm"
+                      className="min-h-11"
                       variant="outline"
+                      disabled={loading || submitting}
                       aria-label={`${room.roomNumber}호 점검 필요로 변경`}
                       onClick={() => openTransition(room, "INSPECTION_REQUIRED")}
                     >
@@ -210,7 +231,9 @@ export function RoomOperationsPanel({ hotelId }: { hotelId: string }) {
                     <Button
                       type="button"
                       size="sm"
+                      className="min-h-11"
                       variant="outline"
+                      disabled={loading || submitting}
                       aria-label={`${room.roomNumber}호 판매 중지`}
                       onClick={() => openTransition(room, "OUT_OF_SERVICE")}
                     >
@@ -221,6 +244,8 @@ export function RoomOperationsPanel({ hotelId }: { hotelId: string }) {
                     <Button
                       type="button"
                       size="sm"
+                      className="min-h-11"
+                      disabled={loading || submitting}
                       aria-label={`${room.roomNumber}호 사용 가능으로 복구`}
                       onClick={() => openTransition(room, "AVAILABLE")}
                     >
@@ -256,7 +281,7 @@ export function RoomOperationsPanel({ hotelId }: { hotelId: string }) {
                         <span>{assignment.guestName} · {assignment.checkIn}~{assignment.checkOut}</span>
                         <a
                           className="font-medium text-primary underline underline-offset-4"
-                          href={`/dashboard/reservations?date=${today()}&reservationId=${assignment.reservationId}`}
+                          href={`/dashboard/reservations?date=${assignment.checkIn}&hotelId=${hotelId}&reservationId=${assignment.reservationId}`}
                         >
                           {assignment.guestName} 예약 보기
                         </a>

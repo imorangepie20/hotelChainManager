@@ -20,6 +20,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   getCheckedInRoomMoveOptions,
   moveCheckedInRoom,
+  StaffApiError,
   type CheckedInRoomMoveOptions,
   type CheckedInRoomMoveResult,
   type StaffReservationSummary,
@@ -93,7 +94,22 @@ export function CheckedInRoomMove({
       setNotice(`${result.roomNumber}호로 이동했습니다. 기존 ${result.previousRoomNumber}호는 청소·점검 필요 상태입니다.`);
       onMoved(result);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "투숙 객실을 이동하지 못했습니다.");
+      const message = cause instanceof Error ? cause.message : "투숙 객실을 이동하지 못했습니다.";
+      if (cause instanceof StaffApiError && cause.status === 409) {
+        try {
+          const refreshed = await getCheckedInRoomMoveOptions(token, reservation.reservationId);
+          setOptions(refreshed);
+          setCurrentRoomId((current) => refreshed.assignments.some((room) => room.id === current)
+            ? current : (refreshed.assignments[0]?.id ?? ""));
+          setNewRoomId((current) => refreshed.candidates.some((room) => room.id === current)
+            ? current : (refreshed.candidates[0]?.id ?? ""));
+          setIdempotencyKey(window.crypto.randomUUID());
+          setConfirming(false);
+        } catch {
+          // Keep the original conflict visible if refreshing the candidate list also fails.
+        }
+      }
+      setError(message);
     } finally {
       setSaving(false);
     }
