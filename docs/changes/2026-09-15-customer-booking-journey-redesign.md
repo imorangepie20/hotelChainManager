@@ -102,3 +102,9 @@ Compose API에 `PAYMENT_PROVIDER`, `TOSS_PAYMENTS_CLIENT_KEY`, `TOSS_PAYMENTS_SE
 - 2차 검증: `booking-copy`, `toss-payments`, `reservation-management-state` 순수 계약, 고객 `tsc -b`·production build, 브라우저 계약 두 파일의 `tsc --ignoreConfig --noEmit --target es2022 --module esnext --moduleResolution bundler --skipLibCheck`가 종료 코드 0으로 통과했다. 첫 정적 검사 명령은 TypeScript 7의 `--ignoreConfig` 요구를 표시해 옵션 추가 후 재실행했다.
 - API `mvnw.cmd -q -DskipTests test-compile` 및 `TossPaymentsHttpClientTest,TossPaymentsPropertiesTest,PaymentProviderSafetyTest,CustomerReservationChangeControllerTest` 비DB 11건이 통과했다. `git diff --check`도 통과했다.
 - 지연된 상세 응답과 새 환불 예상액을 확인하는 브라우저 회귀는 작성·정적 타입 검사만 했으며, DB fixture도 컴파일만 했다. 관리자 코드는 변경하지 않아 이번 2차에는 관리자 검사를 반복하지 않았다.
+
+### 같은 조건의 예약 교체 후 취소 미리보기 보완
+
+- 취소 미리보기 effect가 일부 일정/금액 필드 대신 서버에서 교체된 예약 객체를 의존하도록 수정했다. 날짜·총액·객실 수가 그대로여도 객실·요금제 변경 완료 후 취소 미리보기를 다시 가져온다.
+- 기존 지연 상세 회귀 fixture를 같은 날짜·금액·객실 수의 객실/요금제 교체로 바꾸고, 미리보기 재조회 2회와 취소 행동 복구를 검증하도록 작성했다.
+- 고객 예약 관리 순수 계약, 해당 브라우저 계약 파일의 정적 TypeScript, 고객 `tsc -b`·production build와 `git diff --check`가 통과했다. 편집 중 작업 디렉터리 착오로 파일을 찾지 못한 명령 1회가 있었으며 올바른 경로로 수정 후 재검사했다. 브라우저/라이브/DB는 실행하지 않았다. 서버·관리자 변경은 없다.

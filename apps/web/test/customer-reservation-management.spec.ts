@@ -108,28 +108,30 @@ test('예약 변경 결제는 만료와 조정 필요 상태에서 결제를 다
   }
 })
 
-test('변경 완료는 지연된 예약 상세와 새 환불 예상을 함께 반영한다', async ({ page }) => {
+test('같은 날짜와 금액의 객실·요금제 변경도 지연된 상세와 취소 미리보기를 갱신한다', async ({ page }) => {
   await storeAccess(page)
   await mockApi(page)
   let summaryReads = 0
   let reservationReads = 0
   let previewReads = 0
   await page.route(`**/api/reservations/${id}/change-summary`, route => route.fulfill({ json: {
-    reservationId: id, status: ++summaryReads === 1 ? 'APPLYING' : 'COMPLETED', checkIn: '2026-09-24', checkOut: '2026-09-26',
-    roomTypeName: '디럭스 오션', ratePlanName: '유연 취소', differenceKrw: 100000, currency: 'KRW', expiresAt: '2026-09-20T10:00:00Z', refundStatus: null,
+    reservationId: id, status: ++summaryReads === 1 ? 'APPLYING' : 'COMPLETED', checkIn: confirmed.checkIn, checkOut: confirmed.checkOut,
+    roomTypeName: '디럭스 오션', ratePlanName: '룸 온리', differenceKrw: 0, currency: 'KRW', expiresAt: '2026-09-20T10:00:00Z', refundStatus: null,
   } }))
   await page.route(`**/api/reservations/${id}`, async route => {
     if (++reservationReads === 1) return route.fulfill({ json: confirmed })
     await new Promise(resolve => setTimeout(resolve, 50))
-    return route.fulfill({ json: { ...confirmed, roomTypeName: '디럭스 오션', checkIn: '2026-09-24', checkOut: '2026-09-26', total: 460000 } })
+    return route.fulfill({ json: { ...confirmed, roomTypeName: '디럭스 오션', ratePlanName: '룸 온리' } })
   })
-  await page.route(`**/api/reservations/${id}/cancellation-preview`, route => route.fulfill({ json: {
-    reservationId: id, status: 'CONFIRMED', cancellable: true, refundAmount: ++previewReads === 1 ? 360000 : 460000,
+  await page.route(`**/api/reservations/${id}/cancellation-preview`, route => { previewReads += 1; return route.fulfill({ json: {
+    reservationId: id, status: 'CONFIRMED', cancellable: true, refundAmount: confirmed.total,
     currency: 'KRW', cutoffAt: '2026-09-23T09:00:00Z', timezone: 'Asia/Seoul', unavailableReason: null,
-  } }))
+  } }) })
   await page.goto(`/reservations/${id}`)
   await expect(page.getByRole('heading', { name: '스탠다드 시티' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '변경 완료' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '디럭스 오션' })).toBeVisible()
-  await expect(page.getByText(/예상 환불액 ₩460,000/)).toBeVisible()
+  await expect(page.getByText(/예상 환불액 ₩360,000/)).toBeVisible()
+  await expect(page.getByRole('button', { name: '예약 취소' })).toBeVisible()
+  expect(previewReads).toBe(2)
 })
