@@ -27,6 +27,14 @@ reservation:
     approval-ttl: 24h
     hold-ttl: 15m
 
+payment:
+  provider: ${PAYMENT_PROVIDER:fake}
+  toss:
+    client-key: ${TOSS_PAYMENTS_CLIENT_KEY:}
+    secret-key: ${TOSS_PAYMENTS_SECRET_KEY:}
+    merchant-account: ${TOSS_PAYMENTS_MERCHANT_ACCOUNT:}
+    customer-origin: ${PAYMENT_CUSTOMER_ORIGIN:http://127.0.0.1:4000}
+
 website:
   media:
     storage-dir: ${WEBSITE_MEDIA_STORAGE_DIR:}

@@ -23,20 +23,26 @@ public class TestPaymentService {
     private final ReservationAccess access;
     private final Clock clock;
     private final boolean changeSettlementEnabled;
+    private final String paymentProvider;
 
     public TestPaymentService(
             JdbcTemplate jdbc,
             ReservationAccess access,
             Clock clock,
-            @Value("${reservation.change.settlement-enabled:false}") boolean changeSettlementEnabled) {
+            @Value("${reservation.change.settlement-enabled:false}") boolean changeSettlementEnabled,
+            @Value("${payment.provider:fake}") String paymentProvider) {
         this.jdbc = jdbc;
         this.access = access;
         this.clock = clock;
         this.changeSettlementEnabled = changeSettlementEnabled;
+        this.paymentProvider = paymentProvider;
     }
 
     @Transactional(noRollbackFor = ReservationExpiredException.class)
     public PaymentResult pay(UUID reservationId, String token, String idempotencyKey, PaymentOutcome outcome) {
+        if (!"fake".equals(paymentProvider)) {
+            throw new BusinessConflictException("PAYMENT_PROVIDER_CONFLICT", "모의 결제는 fake 모드에서만 사용할 수 있습니다.");
+        }
         validate(idempotencyKey, outcome);
         String tokenHash = access.hashToken(token);
         PaymentReservation reservation = lockReservation(reservationId, tokenHash);

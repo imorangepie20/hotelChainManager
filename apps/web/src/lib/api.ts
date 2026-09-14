@@ -1,3 +1,6 @@
+import type { ConfirmationInput, TossCheckout, TossStatus } from './toss-payments'
+import type { PaymentModes } from './payment-recovery'
+
 export type Hotel = { id: string; name: string; region: string; timezone: string }
 export type NightlyPrice = { date: string; amount: number }
 export type Offer = {
@@ -13,8 +16,8 @@ export type Reservation = {
 
 export type ReservationChangePayment = {
   reservationNumberSuffix: string
-  targetCheckIn: string
-  targetCheckOut: string
+  checkIn: string
+  checkOut: string
   roomTypeName: string
   ratePlanName: string
   additionalAmountKrw: number
@@ -70,6 +73,14 @@ const headers = (token: string, key?: string) => ({
 
 export const api = {
   hotels: () => request<Hotel[]>('/api/hotels'),
+  paymentModes: () => request<PaymentModes>('/api/payments/mode', { cache: 'no-store' }),
+  tossCheckout: (id: string, token: string, key: string) => request<TossCheckout>(`/api/reservations/${id}/payment-checkout`, { method: 'POST', headers: headers(token, key) }),
+  tossConfirm: (id: string, token: string, input: ConfirmationInput) => request<TossStatus>(`/api/reservations/${id}/payment-confirm`, { method: 'POST', headers: headers(token), body: JSON.stringify(input) }),
+  tossStatus: (id: string, token: string) => request<TossStatus>(`/api/reservations/${id}/payment-status`, { headers: headers(token), cache: 'no-store' }),
+  tossReconcile: (id: string, token: string) => request<TossStatus>(`/api/reservations/${id}/payment-reconcile`, { method: 'POST', headers: headers(token) }),
+  tossChangeCheckout: () => request<TossCheckout>('/api/reservation-change-payments/current/toss/checkout', { method: 'POST', credentials: 'include' }),
+  tossChangeConfirm: (input: ConfirmationInput) => request<TossStatus>('/api/reservation-change-payments/current/toss/confirm', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }),
+  tossChangeStatus: () => request<TossStatus>('/api/reservation-change-payments/current/toss/status', { credentials: 'include', cache: 'no-store' }),
   hotelContent: (hotelId: string) => request<Record<string, unknown>>(`/api/hotels/${hotelId}/content`),
   websiteNavigation: (locale: 'ko' | 'en' = 'ko') => request<WebsiteNavigationItem[]>(`/api/website/navigation?${new URLSearchParams({ locale })}`),
   websitePage: (path: string, locale: 'ko' | 'en' = 'ko') => request<PublishedWebsitePage>(`/api/website/pages/resolve?${new URLSearchParams({ path, locale })}`),

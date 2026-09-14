@@ -32,6 +32,7 @@ public class ReservationChangeSettlementService {
     private final Clock clock;
     private final String customerBaseUrl;
     private final String gatewayMode;
+    private final String merchantAccount;
     private final SecureRandom random = new SecureRandom();
 
     public ReservationChangeSettlementService(
@@ -42,7 +43,8 @@ public class ReservationChangeSettlementService {
             ReservationChangePolicy policy,
             Clock clock,
             @Value("${reservation.change.customer-base-url:http://127.0.0.1:4000}") String customerBaseUrl,
-            @Value("${reservation.change.gateway:disabled}") String gatewayMode) {
+            @Value("${reservation.change.gateway:disabled}") String gatewayMode,
+            @Value("${payment.toss.merchant-account:}") String merchantAccount) {
         this.jdbc = jdbc;
         this.staffAccess = staffAccess;
         this.reservationAccess = reservationAccess;
@@ -51,6 +53,7 @@ public class ReservationChangeSettlementService {
         this.clock = clock;
         this.customerBaseUrl = customerBaseUrl.replaceAll("/+$", "");
         this.gatewayMode = gatewayMode;
+        this.merchantAccount = merchantAccount;
     }
 
     @Transactional
@@ -84,6 +87,7 @@ public class ReservationChangeSettlementService {
 
         long versionAfterHold;
         Instant expiresAt;
+        if ("toss-test".equals(gatewayMode)) lockSettleableOriginalTransaction(context.reservationId());
         if ("APPROVED".equals(context.status())) {
             ReservationChangeHoldService.HoldResult hold = holds.acquire(requestId, input.version());
             versionAfterHold = hold.requestVersion();
@@ -114,8 +118,8 @@ public class ReservationChangeSettlementService {
                 insert into payment_adjustment_attempt (
                     id, request_id, adjustment_type, provider, idempotency_key, request_hash,
                     amount_krw, currency, status, public_token_hash)
-                values (?, ?, 'CREATE_CHECKOUT', 'FAKE', ?, ?, ?, ?, 'NEW', ?)
-                """, attemptId, requestId, idempotencyKey, requestHash,
+                values (?, ?, 'CREATE_CHECKOUT', ?, ?, ?, ?, ?, 'NEW', ?)
+                """, attemptId, requestId, "toss-test".equals(gatewayMode) ? "TOSS_TEST" : "FAKE", idempotencyKey, requestHash,
                 context.differenceKrw(), context.currency(), publicTokenHash);
         jdbc.update("""
                 insert into reservation_change_outbox (
@@ -267,6 +271,18 @@ public class ReservationChangeSettlementService {
         jdbc.query("select id from reservation where id = ? for update", rs -> { }, candidate.reservationId());
         jdbc.query("select id from reservation_change_request where id = ? for update", rs -> { }, candidate.requestId());
         GatewayAttempt attempt = gatewayAttempt(attemptId, true);
+        if ("TOSS_TEST".equals(attempt.provider()) && resultStatus != PaymentAdjustmentGateway.GatewayResultStatus.UNKNOWN
+                && resultStatus != PaymentAdjustmentGateway.GatewayResultStatus.PENDING) {
+            String expected = resultStatus.name();
+            Boolean verified = jdbc.queryForObject("""
+                    select exists(select 1 from toss_adjustment_order where attempt_id=? and status=?
+                        and (? <> 'SUCCEEDED' or provider_event_id=?)
+                        union all select 1 from toss_refund_command where adjustment_attempt_id=? and status=?
+                        and (? <> 'SUCCEEDED' or provider_event_id=?))
+                    """, Boolean.class, attemptId, expected, expected, providerEventId,
+                    attemptId, expected, expected, providerEventId);
+            if (!Boolean.TRUE.equals(verified)) throw new BusinessConflictException("UNVERIFIED_TOSS_RESULT", "서버에서 검증한 토스 거래 결과가 필요합니다.");
+        }
         if (!"CREATE_CHECKOUT".equals(attempt.adjustmentType())
                 && !"REFUND_ORIGINAL".equals(attempt.adjustmentType())
                 && !"REFUND_ADJUSTMENT".equals(attempt.adjustmentType())) {
@@ -294,11 +310,12 @@ public class ReservationChangeSettlementService {
                             id, reservation_id, change_request_id, provider, merchant_account,
                             gateway_transaction_id, transaction_type, captured_amount_krw,
                             refunded_amount_krw, currency)
-                        values (?, ?, ?, ?, 'LOCAL', ?, 'CHANGE_CHARGE', ?, 0, ?)
+                        values (?, ?, ?, ?, ?, ?, 'CHANGE_CHARGE', ?, 0, ?)
                         on conflict (change_request_id) do nothing
                         """, UUID.randomUUID(), attempt.reservationId(), attempt.requestId(), attempt.provider(),
+                        "TOSS_TEST".equals(attempt.provider()) ? merchantAccount : "LOCAL",
                         attempt.gatewayTransactionId(), attempt.amountKrw(), attempt.currency());
-            } else {
+            } else if (!"TOSS_TEST".equals(attempt.provider())) {
                 int refunded = jdbc.update("""
                         update payment_transaction
                         set refunded_amount_krw = refunded_amount_krw + ?, updated_at = ?
@@ -396,17 +413,19 @@ public class ReservationChangeSettlementService {
     private OriginalTransaction lockSettleableOriginalTransaction(UUID reservationId) {
         OriginalTransaction transaction = jdbc.query("""
                 select id, provider, captured_amount_krw, refunded_amount_krw,
-                       currency, gateway_transaction_id
+                       currency, gateway_transaction_id, merchant_account
                 from payment_transaction
                 where reservation_id = ? and transaction_type = 'ORIGINAL_CHARGE'
                 order by created_at limit 1 for update
                 """, rs -> rs.next() ? new OriginalTransaction(
                         rs.getObject("id", UUID.class), rs.getString("provider"),
                         rs.getLong("captured_amount_krw"), rs.getLong("refunded_amount_krw"),
-                        rs.getString("currency").trim(), rs.getString("gateway_transaction_id")) : null,
+                        rs.getString("currency").trim(), rs.getString("gateway_transaction_id"), rs.getString("merchant_account")) : null,
                 reservationId);
         if (transaction == null || !transaction.currency().equals("KRW")
-                || ("fake".equals(gatewayMode) && !"FAKE".equals(transaction.provider()))) {
+                || ("fake".equals(gatewayMode) && !"FAKE".equals(transaction.provider()))
+                || ("toss-test".equals(gatewayMode) && (!"TOSS_TEST".equals(transaction.provider())
+                    || !merchantAccount.equals(transaction.merchantAccount()) || transaction.gatewayTransactionId().isBlank()))) {
             throw notSettleable();
         }
         return transaction;
@@ -533,7 +552,8 @@ public class ReservationChangeSettlementService {
             long capturedAmountKrw,
             long refundedAmountKrw,
             String currency,
-            String gatewayTransactionId) {
+            String gatewayTransactionId,
+            String merchantAccount) {
     }
 
     private record TokenContext(UUID requestId, Instant expiresAt) {
