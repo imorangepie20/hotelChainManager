@@ -43,6 +43,60 @@ export type RoomReassignmentResult = {
   roomNumber: string;
 };
 
+export type RoomOperationalStatus = "AVAILABLE" | "INSPECTION_REQUIRED" | "OUT_OF_SERVICE";
+
+export type RoomOperationsView = {
+  hotelId: string;
+  summary: { inspectionRequired: number; outOfService: number; overdueRecovery: number };
+  rooms: Array<{
+    physicalRoomId: string;
+    roomNumber: string;
+    roomTypeName: string;
+    housekeepingStatus: "CLEAN" | "NEEDS_CLEANING";
+    operationalStatus: RoomOperationalStatus;
+    operationalReason: string | null;
+    expectedRecoveryAt: string | null;
+    operationalVersion: number;
+    impactedAssignments: Array<{
+      reservationId: string;
+      guestName: string;
+      status: string;
+      checkIn: string;
+      checkOut: string;
+    }>;
+    events: Array<{
+      id: string;
+      previousStatus: RoomOperationalStatus;
+      status: RoomOperationalStatus;
+      reason: string;
+      expectedRecoveryAt: string | null;
+      staffId: string;
+      createdAt: string;
+    }>;
+  }>;
+};
+
+export type RoomOperationalTransitionResult = {
+  physicalRoomId: string;
+  roomNumber: string;
+  housekeepingStatus: "CLEAN" | "NEEDS_CLEANING";
+  operationalStatus: RoomOperationalStatus;
+  operationalReason: string | null;
+  expectedRecoveryAt: string | null;
+  operationalVersion: number;
+};
+
+export type CheckedInRoomMoveOptions = {
+  reservationId: string;
+  assignments: AssignableRoom[];
+  candidates: AssignableRoom[];
+};
+
+export type CheckedInRoomMoveResult = RoomReassignmentResult & {
+  reason: string;
+  movedAt: string;
+};
+
 export type StaffReservationSummary = {
   reservationId: string;
   guestName: string;
@@ -225,13 +279,22 @@ type SessionResponse = { token: string; staff: StaffPrincipal };
 
 
 export class StaffApiError extends Error {
-  constructor(message: string, readonly status?: number, readonly code?: string) {
+  constructor(
+    message: string,
+    readonly status?: number,
+    readonly code?: string,
+    readonly details?: { assignments?: RoomOperationsView["rooms"][number]["impactedAssignments"] },
+  ) {
     super(message);
     this.name = "StaffApiError";
   }
 }
 
 type ApiErrorPayload = { message?: string; code?: string };
+
+type RoomOperationsErrorPayload = ApiErrorPayload & {
+  assignments?: RoomOperationsView["rooms"][number]["impactedAssignments"];
+};
 
 
 export async function loginStaff(email: string, password: string): Promise<SessionResponse> {
@@ -569,6 +632,77 @@ async function mediaRequest<T>(path: string, token: string, init?: RequestInit):
     throw new StaffApiError(error.message ?? "미디어 요청을 처리하지 못했습니다.", response.status, error.code);
   }
   return response.json() as Promise<T>;
+}
+
+async function operationsRequest<T>(path: string, token: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(path, {
+    ...init,
+    headers: {
+      "X-Staff-Session": token,
+      ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      ...init?.headers,
+    },
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as RoomOperationsErrorPayload;
+    throw new StaffApiError(
+      error.message ?? "객실 운영 요청을 처리하지 못했습니다.",
+      response.status,
+      error.code,
+      { assignments: error.assignments ?? [] },
+    );
+  }
+  return response.json() as Promise<T>;
+}
+
+export function getRoomOperations(token: string, hotelId: string) {
+  return operationsRequest<RoomOperationsView>(`/api/staff/hotels/${hotelId}/room-operations`, token);
+}
+
+export function transitionRoomOperationalStatus(
+  token: string,
+  roomId: string,
+  idempotencyKey: string,
+  input: {
+    targetStatus: RoomOperationalStatus;
+    reason: string;
+    expectedRecoveryAt: string | null;
+    expectedVersion: number;
+  },
+) {
+  return operationsRequest<RoomOperationalTransitionResult>(
+    `/api/staff/rooms/${roomId}/operational-transitions`,
+    token,
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export function getCheckedInRoomMoveOptions(token: string, reservationId: string) {
+  return operationsRequest<CheckedInRoomMoveOptions>(
+    `/api/staff/reservations/${reservationId}/checked-in-room-move-options`,
+    token,
+  );
+}
+
+export function moveCheckedInRoom(
+  token: string,
+  reservationId: string,
+  idempotencyKey: string,
+  input: { currentPhysicalRoomId: string; newPhysicalRoomId: string; reason: string },
+) {
+  return operationsRequest<CheckedInRoomMoveResult>(
+    `/api/staff/reservations/${reservationId}/checked-in-room-moves`,
+    token,
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify(input),
+    },
+  );
 }
 
 export async function getRoomReassignmentOptions(
