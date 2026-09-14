@@ -30,5 +30,7 @@ const invalid = captureTossReturn({
 equal(invalid, { kind: 'invalid' }, '중복된 결제 복귀 값은 승인에 전달하지 않아야 한다')
 equal(paymentMessage({ status: 'CONFIRMED', paymentStatus: 'SUCCEEDED' }), { completed: true, text: '결제가 확인되어 예약이 확정되었습니다.' }, '확정은 완료 메시지로 표시해야 한다')
 equal(paymentMessage({ status: 'PENDING_PAYMENT', paymentStatus: 'FAILED' }).completed, false, '실패한 결제는 다시 시도 가능한 상태로 남아야 한다')
+equal(paymentMessage({ status: 'PENDING_PAYMENT', paymentStatus: 'UNKNOWN' }).completed, false, '미확정 결제는 중복 승인 없이 상태 재확인으로 남아야 한다')
+equal(paymentMessage({ status: 'EXPIRED', paymentStatus: 'FAILED' }).text, '객실 확보 시간이 만료되었습니다. 객실을 다시 검색해 주세요.', '만료된 결제 실패는 재검색으로 안내해야 한다')
 
 console.log('toss payment return contracts passed')
