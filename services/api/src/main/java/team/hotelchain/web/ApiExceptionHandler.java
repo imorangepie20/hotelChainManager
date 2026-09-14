@@ -2,6 +2,8 @@ package team.hotelchain.web;
 
 import team.hotelchain.reservation.BusinessConflictException;
 import team.hotelchain.reservation.ReservationNotFoundException;
+import team.hotelchain.operations.RoomHasActiveAssignmentsException;
+import team.hotelchain.operations.RoomOperationsView;
 import team.hotelchain.staff.StaffAccessDeniedException;
 import team.hotelchain.staff.StaffAuthenticationException;
 import team.hotelchain.webcontent.WebsitePageNotFoundException;
@@ -19,6 +21,12 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
+
+    @ExceptionHandler(RoomHasActiveAssignmentsException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public RoomOperationalConflictError roomHasActiveAssignments(RoomHasActiveAssignmentsException exception) {
+        return new RoomOperationalConflictError(exception.code(), exception.getMessage(), exception.assignments());
+    }
 
     @ExceptionHandler(WebsitePreviewNotFoundException.class)
     @ResponseStatus(HttpStatus.NOT_FOUND)
@@ -81,4 +89,9 @@ public class ApiExceptionHandler {
     public ApiError staffAccessDenied(StaffAccessDeniedException exception) {
         return new ApiError("STAFF_HOTEL_ACCESS_DENIED", exception.getMessage());
     }
+
+    public record RoomOperationalConflictError(
+            String code,
+            String message,
+            java.util.List<RoomOperationsView.ImpactedAssignment> assignments) {}
 }

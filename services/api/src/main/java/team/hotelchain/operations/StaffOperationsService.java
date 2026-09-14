@@ -50,6 +50,10 @@ public class StaffOperationsService {
         if (!"CLEAN".equals(room.housekeepingStatus())) {
             throw new BusinessConflictException("ROOM_NOT_CLEAN", "청결 상태인 객실만 배정할 수 있습니다.");
         }
+        if (!"AVAILABLE".equals(room.operationalStatus())) {
+            throw new BusinessConflictException(
+                    "ROOM_NOT_OPERATIONALLY_AVAILABLE", "점검 또는 판매 중지 중인 객실은 배정할 수 없습니다.");
+        }
         Integer conflicts = jdbc.queryForObject("""
                 SELECT count(*) FROM reservation_room_assignment a
                 JOIN reservation r ON r.id = a.reservation_id
@@ -74,6 +78,7 @@ public class StaffOperationsService {
                 SELECT p.id, p.room_number
                   FROM physical_room p
                  WHERE p.hotel_id = ? AND p.room_type_id = ? AND p.housekeeping_status = 'CLEAN'
+                   AND p.operational_status = 'AVAILABLE'
                    AND NOT EXISTS (SELECT 1 FROM reservation_room_assignment own
                                    WHERE own.reservation_id = ? AND own.physical_room_id = p.id)
                    AND NOT EXISTS (
@@ -97,6 +102,7 @@ public class StaffOperationsService {
         Integer readyRooms = jdbc.queryForObject("""
                 SELECT count(*) FROM reservation_room_assignment a JOIN physical_room p ON p.id = a.physical_room_id
                 WHERE a.reservation_id = ? AND p.housekeeping_status = 'CLEAN'
+                  AND p.operational_status = 'AVAILABLE'
                 """, Integer.class, reservationId);
         if (readyRooms == null || readyRooms != reservation.rooms()) {
             throw new BusinessConflictException("ROOM_NOT_READY", "모든 배정 객실이 청결 상태여야 체크인할 수 있습니다.");
@@ -154,12 +160,14 @@ public class StaffOperationsService {
     }
 
     private Room room(UUID id) {
-        Room result = jdbc.query("select id, hotel_id, room_type_id, housekeeping_status from physical_room where id = ? for update",
-                rs -> rs.next() ? new Room(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class), rs.getObject(3, UUID.class), rs.getString(4)) : null, id);
+        Room result = jdbc.query("select id, hotel_id, room_type_id, housekeeping_status, operational_status from physical_room where id = ? for update",
+                rs -> rs.next() ? new Room(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class),
+                        rs.getObject(3, UUID.class), rs.getString(4), rs.getString(5)) : null, id);
         if (result == null) throw new IllegalArgumentException("객실을 찾을 수 없습니다.");
         return result;
     }
 
     private record ReservationOperation(UUID id, UUID hotelId, UUID roomTypeId, java.time.LocalDate checkIn, java.time.LocalDate checkOut, int rooms, String status) {}
-    private record Room(UUID id, UUID hotelId, UUID roomTypeId, String housekeepingStatus) {}
+    private record Room(
+            UUID id, UUID hotelId, UUID roomTypeId, String housekeepingStatus, String operationalStatus) {}
 }
