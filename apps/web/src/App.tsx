@@ -18,7 +18,10 @@ import { GuestSelector } from './components/guest-selector'
 import { HotelSelector } from './components/hotel-selector'
 import { ReservationChangePaymentPage } from './components/reservation-change-payment-page'
 import { BookingSearchPage } from './components/booking-search-page'
+import { BookingCheckoutPage } from './components/booking-checkout-page'
+import { BookingResultPage } from './components/booking-result-page'
 import { CustomerBookingShell } from './components/customer-shell'
+import { captureTossReturn } from './lib/toss-payments'
 
 import { ConciergePanel, type ConciergeCriteria } from './components/concierge-panel'
 import { StayDatePicker } from './components/stay-date-picker'
@@ -33,8 +36,13 @@ const previewStorage = {
   setItem: (key: string, value: string) => window.sessionStorage.setItem(key, value),
   removeItem: (key: string) => window.sessionStorage.removeItem(key),
 }
-const reservationChangePaymentRoute = resolveCustomerRoute(window.location.pathname)?.kind === 'reservation-change-payment'
-const initialPreview = reservationChangePaymentRoute
+const initialCustomerRoute = resolveCustomerRoute(window.location.pathname)
+const reservationChangePaymentRoute = initialCustomerRoute?.kind === 'reservation-change-payment'
+const bookingCompleteRoute = initialCustomerRoute?.kind === 'booking-complete'
+const initialTossReturn = bookingCompleteRoute
+  ? captureTossReturn(window.location, path => window.history.replaceState({}, '', path))
+  : { kind: 'none' as const }
+const initialPreview = reservationChangePaymentRoute || bookingCompleteRoute
   ? null
   : captureWebsitePreview(window.location, previewStorage, url => window.history.replaceState({}, '', url))
     ?? storedWebsitePreviewForPath(window.location.pathname, previewStorage)
@@ -278,7 +286,7 @@ function BookingApp() {
   if (previewMode && previewUnavailable) return <>{renderHeader(true)}<main className="content-section website-preview-error"><h1>{locale === 'en' ? 'Preview is unavailable.' : '미리보기를 사용할 수 없습니다.'}</h1><p>{locale === 'en' ? 'The link expired, was revoked, or the draft changed.' : '링크가 만료·폐기됐거나 저장 초안이 변경되었습니다. 관리자에서 새 링크를 발급해 주세요.'}</p><button type="button" className="outline" onClick={exitPreview}>{locale === 'en' ? 'Exit preview' : '미리보기 종료'}</button></main></>
   if (previewMode && websiteLoading) return <>{renderHeader(true)}<main className="content-section" aria-live="polite">{locale === 'en' ? 'Loading draft…' : '저장 초안을 불러오는 중…'}</main></>
   const bookingRoute = resolveCustomerRoute(pathname)
-  if (previewMode && (bookingRoute?.kind === 'booking-results' || bookingRoute?.kind === 'booking-checkout')) {
+  if (previewMode && (bookingRoute?.kind === 'booking-results' || bookingRoute?.kind === 'booking-checkout' || bookingRoute?.kind === 'booking-complete')) {
     return <CustomerBookingShell step="search" locale={bookingRoute.locale ?? 'ko'}><section className="booking-route-state"><h1>미리보기에서는 예약을 진행할 수 없습니다</h1><p>발행된 페이지에서 예약 검색을 이용해 주세요.</p></section></CustomerBookingShell>
   }
   if (bookingRoute?.kind === 'booking-results') {
@@ -286,7 +294,8 @@ function BookingApp() {
     if (criteria) return <BookingSearchPage criteria={criteria} locale={bookingRoute.locale ?? 'ko'} />
     return <CustomerBookingShell step="search" locale={bookingRoute.locale ?? 'ko'}><section className="booking-route-state"><h1>검색 조건을 확인해 주세요</h1><p>유효한 지점, 날짜, 인원과 객실 수를 입력한 뒤 다시 검색해 주세요.</p><a className="primary" href={bookingRoute.locale === 'en' ? '/en' : '/#booking'}>예약 검색으로 돌아가기</a></section></CustomerBookingShell>
   }
-  if (bookingRoute?.kind === 'booking-checkout') return <CustomerBookingShell step="checkout" locale={bookingRoute.locale ?? 'ko'}><section className="booking-route-state"><h1>예약 정보를 준비하고 있습니다</h1><p>선택한 객실 정보를 확인한 뒤 예약자 정보를 입력할 수 있습니다.</p></section></CustomerBookingShell>
+  if (bookingRoute?.kind === 'booking-checkout') return <BookingCheckoutPage locale={bookingRoute.locale ?? 'ko'} />
+  if (bookingRoute?.kind === 'booking-complete') return <BookingResultPage locale={bookingRoute.locale ?? 'ko'} returned={initialTossReturn} />
   if (locale === 'en') {
     const route = resolveCustomerRoute(pathname)
     const englishFooter = <footer><div className="brand"><span>STAY</span> HANEUL</div><p>Fictional hotel chain · Portfolio demo</p><p>© 2026 HOTEL CHAIN PROJECT</p></footer>

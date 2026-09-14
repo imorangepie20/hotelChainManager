@@ -1,3 +1,5 @@
+import type { ConfirmationInput, TossCheckout, TossStatus } from './toss-payments.ts'
+
 export type Hotel = { id: string; name: string; region: string; timezone: string }
 export type NightlyPrice = { date: string; amount: number }
 export type Offer = {
@@ -91,6 +93,18 @@ export const api = {
     method: 'POST', headers: headers(token, key), body: JSON.stringify(body),
   }),
   getReservation: (id: string, token: string) => request<Reservation>(`/api/reservations/${id}`, { headers: headers(token) }),
+  tossCheckout: (id: string, token: string, key: string) => request<TossCheckout>(`/api/reservations/${id}/payment-checkout`, {
+    method: 'POST', headers: headers(token, key),
+  }),
+  tossConfirm: (id: string, token: string, input: ConfirmationInput) => request<TossStatus>(`/api/reservations/${id}/payment-confirm`, {
+    method: 'POST', headers: headers(token), body: JSON.stringify(input),
+  }),
+  tossStatus: (id: string, token: string) => request<TossStatus>(`/api/reservations/${id}/payment-status`, {
+    headers: headers(token), cache: 'no-store',
+  }),
+  tossReconcile: (id: string, token: string) => request<TossStatus>(`/api/reservations/${id}/payment-reconcile`, {
+    method: 'POST', headers: headers(token),
+  }),
   pay: (id: string, token: string, key: string, outcome: 'SUCCESS' | 'FAILURE') => request<{ status: string; paymentStatus: string }>(`/api/reservations/${id}/test-payment`, {
     method: 'POST', headers: headers(token, key), body: JSON.stringify({ outcome }),
   }),

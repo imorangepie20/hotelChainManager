@@ -20,6 +20,12 @@ const offer = {
   policyVersion: 'v1',
 }
 
+const pendingReservation = {
+  id: 'reservation-123', status: 'PENDING_PAYMENT', checkIn: '2026-09-22', checkOut: '2026-09-24', rooms: 1,
+  expiresAt: '2026-09-22T10:10:00.000Z', total: 360000, currency: 'KRW', nightlyPrices: offer.nightlyPrices,
+  cancellationPolicy: '{"version":"v1"}', guest: { name: '변경 테스트', email: 'change-test@example.com' },
+}
+
 async function mockCustomerApi(page: Page) {
   await page.route('**/api/**', async route => {
     const url = new URL(route.request().url())
@@ -28,6 +34,8 @@ async function mockCustomerApi(page: Page) {
     if (url.pathname === '/api/website/navigation') return route.fulfill({ json: [] })
     if (url.pathname === '/api/website/pages/resolve') return route.fulfill({ status: 404, json: { code: 'NOT_FOUND', message: '없음' } })
     if (url.pathname === '/api/availability') return route.fulfill({ json: { offers: [offer] } })
+    if (url.pathname === '/api/reservations' && route.request().method() === 'POST') return route.fulfill({ status: 201, json: pendingReservation })
+    if (url.pathname === '/api/reservations/reservation-123') return route.fulfill({ json: pendingReservation })
     return route.fulfill({ status: 404, json: { code: 'NOT_FOUND', message: '없음' } })
   })
 }
@@ -79,4 +87,17 @@ test('영문 예약 경로를 결과와 선택 뒤에도 유지한다', async ({
   await expect(page).toHaveURL(/\/en\/booking\/results\?/)
   await page.getByRole('button', { name: /스탠다드 시티 선택/ }).click()
   await expect(page).toHaveURL('/en/booking/checkout')
+})
+
+test('예약자 입력 뒤 서버 확보와 결제 재시도를 준비한다', async ({ page }) => {
+  await mockCustomerApi(page)
+  await page.goto('/booking/results?hotelId=sokcho&checkIn=2026-09-22&checkOut=2026-09-24&adults=2&children=0&rooms=1')
+  await page.getByRole('button', { name: /스탠다드 시티 선택/ }).click()
+  await page.getByLabel('예약자 이름').fill('변경 테스트')
+  await page.getByLabel('이메일').fill('change-test@example.com')
+  await page.getByRole('checkbox', { name: /예약 및 결제 서비스/ }).check()
+  await page.getByRole('button', { name: '예약 및 결제 진행' }).click()
+  await expect(page.getByText(/남은 확보 시간/)).toBeVisible()
+  await expect(page.getByRole('button', { name: '토스 테스트 결제' })).toBeEnabled()
+  await expect(page).not.toHaveURL(/change-test%40example\.com|managementToken|paymentKey/)
 })

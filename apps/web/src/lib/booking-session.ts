@@ -15,6 +15,7 @@ type SessionStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
 
 const selectionStorageKey = 'hotel-chain.booking.selection.v1'
 const reservationAccessStorageKey = 'hotel-chain.booking.reservation-access.v1'
+const checkoutProgressStorageKey = 'hotel-chain.booking.checkout-progress.v1'
 const storageVersion = 1
 
 export class BookingSessionStore {
@@ -40,6 +41,17 @@ export class BookingSessionStore {
 
   clearSelection(): void {
     this.remove(selectionStorageKey)
+  }
+
+  saveCheckoutProgress(selection: BookingSelection, access: ReservationAccess): void {
+    if (!isBookingSelection(selection) || !isReservationAccess(access)) return
+    this.set(checkoutProgressStorageKey, { version: storageVersion, selection, access })
+  }
+
+  loadCheckoutProgress(selection: BookingSelection): ReservationAccess | null {
+    const stored = parseStoredValue(this.get(checkoutProgressStorageKey))
+    if (!isRecord(stored) || stored.version !== storageVersion || !isBookingSelection(stored.selection) || !isReservationAccess(stored.access)) return null
+    return sameSelection(stored.selection, selection) ? stored.access : null
   }
 
   saveReservationAccess(access: ReservationAccess): void {
@@ -87,6 +99,13 @@ function isReservationAccess(value: unknown): value is ReservationAccess {
   if (!isRecord(value)) return false
   return typeof value.reservationId === 'string' && value.reservationId.trim().length > 0
     && typeof value.managementToken === 'string' && value.managementToken.trim().length > 0
+}
+
+function sameSelection(left: BookingSelection, right: BookingSelection): boolean {
+  return left.roomTypeId === right.roomTypeId && left.ratePlanId === right.ratePlanId
+    && left.criteria.hotelId === right.criteria.hotelId && left.criteria.checkIn === right.criteria.checkIn
+    && left.criteria.checkOut === right.criteria.checkOut && left.criteria.adults === right.criteria.adults
+    && left.criteria.children === right.criteria.children && left.criteria.rooms === right.criteria.rooms
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
