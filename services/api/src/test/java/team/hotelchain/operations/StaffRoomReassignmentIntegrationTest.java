@@ -165,6 +165,35 @@ class StaffRoomReassignmentIntegrationTest {
     }
 
     @Test
+    void excludesAndRejectsOperationallyUnavailableReassignmentTargets() {
+        StaffSessionView session = staffAccess.login("reassignment@example.com", "password");
+        jdbc.update("""
+                update physical_room
+                   set operational_status = 'INSPECTION_REQUIRED', operational_reason = '시설 점검'
+                 where id = ?
+                """, NEW_ROOM);
+        jdbc.update("""
+                update physical_room
+                   set operational_status = 'OUT_OF_SERVICE', operational_reason = '장기 수리'
+                 where id = ?
+                """, THIRD_ROOM);
+
+        assertThat(reassignment.options(session.token(), RESERVATION).candidates()).isEmpty();
+        assertThatThrownBy(() -> reassignment.reassign(
+                session.token(), RESERVATION, CURRENT_ROOM, "inspection-target",
+                new RoomReassignmentRequest(NEW_ROOM)))
+                .isInstanceOf(BusinessConflictException.class)
+                .extracting(error -> ((BusinessConflictException) error).code())
+                .isEqualTo("ROOM_NOT_OPERATIONALLY_AVAILABLE");
+        assertThatThrownBy(() -> reassignment.reassign(
+                session.token(), RESERVATION, CURRENT_ROOM, "out-of-service-target",
+                new RoomReassignmentRequest(THIRD_ROOM)))
+                .isInstanceOf(BusinessConflictException.class)
+                .extracting(error -> ((BusinessConflictException) error).code())
+                .isEqualTo("ROOM_NOT_OPERATIONALLY_AVAILABLE");
+    }
+
+    @Test
     void rejectsNewRequestsAfterCheckIn() {
         StaffSessionView session = staffAccess.login("reassignment@example.com", "password");
         jdbc.update("update reservation set status = 'CHECKED_IN' where id = ?", RESERVATION);

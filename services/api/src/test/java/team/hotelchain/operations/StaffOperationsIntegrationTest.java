@@ -118,6 +118,42 @@ class StaffOperationsIntegrationTest {
     }
 
     @Test
+    void excludesAndRejectsOperationallyUnavailableRooms() {
+        StaffSessionView session = staffAccess.login("operations@example.com", "password");
+        jdbc.update("""
+                update physical_room
+                   set operational_status = 'INSPECTION_REQUIRED', operational_reason = '소음 점검'
+                 where id = ?
+                """, ROOM);
+
+        assertThat(operations.assignableRooms(session.token(), RESERVATION)).isEmpty();
+        assertThatThrownBy(() -> operations.assign(session.token(), RESERVATION, ROOM))
+                .isInstanceOf(team.hotelchain.reservation.BusinessConflictException.class)
+                .extracting(error -> ((team.hotelchain.reservation.BusinessConflictException) error).code())
+                .isEqualTo("ROOM_NOT_OPERATIONALLY_AVAILABLE");
+        assertThat(jdbc.queryForObject("select count(*) from reservation_room_assignment where reservation_id = ?",
+                Integer.class, RESERVATION)).isZero();
+    }
+
+    @Test
+    void rejectsCheckInWhenAnAssignedRoomBecomesOperationallyUnavailable() {
+        StaffSessionView session = staffAccess.login("operations@example.com", "password");
+        operations.assign(session.token(), RESERVATION, ROOM);
+        jdbc.update("""
+                update physical_room
+                   set operational_status = 'INSPECTION_REQUIRED', operational_reason = '체크인 전 점검'
+                 where id = ?
+                """, ROOM);
+
+        assertThatThrownBy(() -> operations.checkIn(session.token(), RESERVATION))
+                .isInstanceOf(team.hotelchain.reservation.BusinessConflictException.class)
+                .extracting(error -> ((team.hotelchain.reservation.BusinessConflictException) error).code())
+                .isEqualTo("ROOM_NOT_READY");
+        assertThat(jdbc.queryForObject("select status from reservation where id = ?", String.class, RESERVATION))
+                .isEqualTo("CONFIRMED");
+    }
+
+    @Test
     void marksAConfirmedReservationAsNoShow() {
         StaffSessionView session = staffAccess.login("operations@example.com", "password");
         operations.assign(session.token(), RESERVATION, ROOM);

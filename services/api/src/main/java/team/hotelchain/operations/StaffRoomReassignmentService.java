@@ -53,6 +53,7 @@ public class StaffRoomReassignmentService {
                 select p.id, p.room_number
                 from physical_room p
                 where p.hotel_id = ? and p.room_type_id = ? and p.housekeeping_status = 'CLEAN'
+                  and p.operational_status = 'AVAILABLE'
                   and not exists (
                       select 1 from reservation_room_assignment own
                       where own.reservation_id = ? and own.physical_room_id = p.id
@@ -109,6 +110,10 @@ public class StaffRoomReassignmentService {
         requireMatchingRoom(reservation, newRoom);
         if (!"CLEAN".equals(newRoom.housekeepingStatus())) {
             throw new BusinessConflictException("ROOM_NOT_CLEAN", "청결 상태인 객실로만 변경할 수 있습니다.");
+        }
+        if (!"AVAILABLE".equals(newRoom.operationalStatus())) {
+            throw new BusinessConflictException(
+                    "ROOM_NOT_OPERATIONALLY_AVAILABLE", "점검 또는 판매 중지 중인 객실은 배정할 수 없습니다.");
         }
 
         Integer currentAssignment = jdbc.queryForObject("""
@@ -177,7 +182,7 @@ public class StaffRoomReassignmentService {
 
     private Map<UUID, Room> lockRooms(UUID firstRoomId, UUID secondRoomId) {
         List<Room> rows = jdbc.query("""
-                select id, hotel_id, room_type_id, room_number, housekeeping_status
+                select id, hotel_id, room_type_id, room_number, housekeeping_status, operational_status
                 from physical_room
                 where id in (?, ?)
                 order by id
@@ -187,7 +192,8 @@ public class StaffRoomReassignmentService {
                         rs.getObject("hotel_id", UUID.class),
                         rs.getObject("room_type_id", UUID.class),
                         rs.getString("room_number"),
-                        rs.getString("housekeeping_status")), firstRoomId, secondRoomId);
+                        rs.getString("housekeeping_status"),
+                        rs.getString("operational_status")), firstRoomId, secondRoomId);
         Map<UUID, Room> result = new HashMap<>();
         rows.forEach(room -> result.put(room.id(), room));
         return result;
@@ -253,7 +259,8 @@ public class StaffRoomReassignmentService {
     }
 
     private record Room(
-            UUID id, UUID hotelId, UUID roomTypeId, String roomNumber, String housekeepingStatus) {
+            UUID id, UUID hotelId, UUID roomTypeId, String roomNumber,
+            String housekeepingStatus, String operationalStatus) {
     }
 
     private record ExistingChange(
