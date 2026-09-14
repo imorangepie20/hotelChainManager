@@ -88,6 +88,44 @@ class TossPaymentsHttpClientTest {
         assertThat(result.errorCode()).isEqualTo("INCOMPLETE_DONE_RESPONSE");
     }
 
+    @ParameterizedTest
+    @MethodSource("malformedStatuses")
+    void mapsMalformedStatusToUnknown(String statusField) {
+        TossPaymentsHttpClient client = new TossPaymentsHttpClient(
+                properties("test_ck_x", "test_sk_x"), new CapturingHttpClient(
+                        "{\"paymentKey\":\"pay\",\"orderId\":\"order\",\"totalAmount\":120000,\"currency\":\"KRW\""
+                                + statusField + ",\"transactionKey\":\"txn\"}"));
+
+        TossPaymentsClient.ProviderPayment result = client.confirm(
+                new TossPaymentsClient.ConfirmCommand("pay", "order", 120000, "KRW", "idem-1"));
+
+        assertThat(result.status()).isEqualTo(TossPaymentsClient.ProviderStatus.UNKNOWN);
+        assertThat(result.errorCode()).isEqualTo("INCOMPLETE_DONE_RESPONSE");
+    }
+
+    @Test
+    void mapsExplicitTerminalRejectionToFailed() {
+        TossPaymentsHttpClient client = new TossPaymentsHttpClient(
+                properties("test_ck_x", "test_sk_x"), new CapturingHttpClient("""
+                {"status":"CANCELED","code":"PAYMENT_CANCELED"}
+                """));
+
+        TossPaymentsClient.ProviderPayment result = client.confirm(
+                new TossPaymentsClient.ConfirmCommand("pay", "order", 120000, "KRW", "idem-1"));
+
+        assertThat(result.status()).isEqualTo(TossPaymentsClient.ProviderStatus.FAILED);
+        assertThat(result.errorCode()).isEqualTo("PAYMENT_CANCELED");
+    }
+
+    private static Stream<Arguments> malformedStatuses() {
+        return Stream.of(
+                Arguments.of(""),
+                Arguments.of(",\"status\":null"),
+                Arguments.of(",\"status\":123"),
+                Arguments.of(",\"status\":true"),
+                Arguments.of(",\"status\":\" DONE \""));
+    }
+
     private static Stream<Arguments> incompleteDoneResponses() {
         return Stream.of(
                 Arguments.of(done("123", "\"order\"", "120000", "\"KRW\"")),

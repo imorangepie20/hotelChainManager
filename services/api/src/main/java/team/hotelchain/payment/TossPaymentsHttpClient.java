@@ -11,10 +11,13 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Base64;
+import java.util.Set;
 
 public final class TossPaymentsHttpClient implements TossPaymentsClient {
     private static final URI API_ORIGIN = URI.create("https://api.tosspayments.com");
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
+    private static final Set<String> TERMINAL_REJECTION_STATUSES = Set.of(
+            "CANCELED", "PARTIAL_CANCELED", "ABORTED", "EXPIRED");
 
     private final TossPaymentsProperties properties;
     private final HttpClient http;
@@ -93,14 +96,19 @@ public final class TossPaymentsHttpClient implements TossPaymentsClient {
             JsonNode amount = body.path("totalAmount");
             long amountKrw = integralAmount(amount);
             String currency = textValue(body.path("currency"));
-            boolean done = "DONE".equals(textValue(body.path("status")));
+            String providerStatus = textValue(body.path("status"));
+            boolean done = "DONE".equals(providerStatus);
             if (done && (!hasText(paymentKey) || !hasText(orderId) || amountKrw <= 0 || !"KRW".equals(currency))) {
+                return unknown("INCOMPLETE_DONE_RESPONSE");
+            }
+            if (!done && (providerStatus == null || !TERMINAL_REJECTION_STATUSES.contains(providerStatus)
+                    || !validCode(textValue(body.path("code"))))) {
                 return unknown("INCOMPLETE_DONE_RESPONSE");
             }
             ProviderStatus status = done ? ProviderStatus.DONE : ProviderStatus.FAILED;
             return new ProviderPayment(paymentKey, orderId, amountKrw, currency, status,
                     textValue(body.path("transactionKey")),
-                    status == ProviderStatus.DONE ? null : safeCode(textValue(body.path("code")), "STATUS_NOT_DONE"));
+                    status == ProviderStatus.DONE ? null : textValue(body.path("code")));
         } catch (JsonProcessingException exception) {
             return unknown("MALFORMED_RESPONSE");
         }
@@ -111,7 +119,11 @@ public final class TossPaymentsHttpClient implements TossPaymentsClient {
     }
 
     private String safeCode(String code, String fallback) {
-        return code == null || !code.matches("[A-Z0-9_]{1,80}") ? fallback : code;
+        return validCode(code) ? code : fallback;
+    }
+
+    private boolean validCode(String code) {
+        return code != null && code.matches("[A-Z0-9_]{1,80}");
     }
 
     private boolean hasText(String value) {
