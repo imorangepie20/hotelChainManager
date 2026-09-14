@@ -1,0 +1,105 @@
+<svg viewBox="0 0 1600 950" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="diagram-title diagram-desc">
+    <title id="diagram-title">호텔 예약 플랫폼 구현 현황과 다음 단계</title>
+    <desc id="diagram-desc">파랑 실선은 구현된 고객 예약 흐름과 서버 기능, 회색은 PostgreSQL과 Toss 외부 시스템, 주황 점선은 브라우저 종단 검증, 데이터베이스 통합 검증, 운영 전달 자동화 등 다음 작업을 나타낸다.</desc>
+    <defs>
+      <marker id="arrow-blue" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#2563a6"/></marker>
+      <marker id="arrow-gray" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#707980"/></marker>
+      <marker id="arrow-orange" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0,8 3,0 6" fill="#c66a12"/></marker>
+    </defs>
+    <rect width="1600" height="950" fill="#f6f7f4"/>
+
+    <!-- Zones -->
+    <rect x="48" y="56" width="480" height="604" rx="8" fill="rgba(37,99,166,.018)" stroke="rgba(22,51,58,.13)" stroke-width="1"/>
+    <rect x="640" y="56" width="460" height="604" rx="8" fill="rgba(37,99,166,.018)" stroke="rgba(22,51,58,.13)" stroke-width="1"/>
+    <rect x="1140" y="56" width="412" height="604" rx="8" fill="rgba(112,121,128,.025)" stroke="rgba(22,51,58,.13)" stroke-width="1"/>
+    <rect x="76" y="50" width="126" height="20" rx="2" fill="#f6f7f4"/>
+    <text x="139" y="64" text-anchor="middle" fill="#596b70" font-size="12" font-weight="500" font-family="'Geist','Noto Sans KR',sans-serif">고객 경험</text>
+    <rect x="670" y="50" width="130" height="20" rx="2" fill="#f6f7f4"/>
+    <text x="735" y="64" text-anchor="middle" fill="#596b70" font-size="12" font-weight="500" font-family="'Geist','Noto Sans KR',sans-serif">서버 권한</text>
+    <rect x="1170" y="50" width="142" height="20" rx="2" fill="#f6f7f4"/>
+    <text x="1241" y="64" text-anchor="middle" fill="#596b70" font-size="12" font-weight="500" font-family="'Geist','Noto Sans KR',sans-serif">외부 시스템</text>
+
+    <!-- Implemented arrows, behind nodes -->
+    <path d="M 480,180 H 572 Q 580,180 580,188 V 268 Q 580,276 588,276 H 680" fill="none" stroke="#2563a6" stroke-width="2" marker-end="url(#arrow-blue)"/>
+    <line x1="480" y1="360" x2="680" y2="360" stroke="#2563a6" stroke-width="2" marker-end="url(#arrow-blue)"/>
+    <path d="M 480,540 H 572 Q 580,540 580,532 V 452 Q 580,444 588,444 H 680" fill="none" stroke="#2563a6" stroke-width="2" marker-end="url(#arrow-blue)"/>
+    <path d="M 1060,292 H 1112 Q 1120,292 1120,284 V 248 Q 1120,240 1128,240 H 1188" fill="none" stroke="#707980" stroke-width="1.5" marker-end="url(#arrow-gray)"/>
+    <path d="M 1060,430 H 1112 Q 1120,430 1120,438 V 474 Q 1120,482 1128,482 H 1188" fill="none" stroke="#707980" stroke-width="1.5" marker-end="url(#arrow-gray)"/>
+    <path d="M 1188,270 H 1136 Q 1128,270 1128,278 V 518 Q 1128,526 1120,526 H 1060" fill="none" stroke="#707980" stroke-width="1" stroke-dasharray="5 4" marker-end="url(#arrow-gray)"/>
+
+    <!-- Planned arrows -->
+    <line x1="288" y1="660" x2="288" y2="758" stroke="#c66a12" stroke-width="1.5" stroke-dasharray="6 5" marker-end="url(#arrow-orange)"/>
+    <line x1="870" y1="660" x2="870" y2="758" stroke="#c66a12" stroke-width="1.5" stroke-dasharray="6 5" marker-end="url(#arrow-orange)"/>
+    <line x1="1346" y1="660" x2="1346" y2="758" stroke="#c66a12" stroke-width="1.5" stroke-dasharray="6 5" marker-end="url(#arrow-orange)"/>
+
+    <!-- Customer nodes -->
+    <g>
+      <rect x="88" y="120" width="392" height="120" rx="6" fill="#fff" stroke="#2563a6" stroke-width="2"/>
+      <rect x="108" y="140" width="82" height="22" rx="4" fill="rgba(37,99,166,.09)"/>
+      <text x="149" y="155" text-anchor="middle" fill="#2563a6" font-size="11" font-weight="600" font-family="'Geist Mono',monospace">DONE</text>
+      <text x="108" y="188" fill="#16333a" font-size="20" font-weight="600" font-family="'Geist','Noto Sans KR',sans-serif">객실 검색 · 결과</text>
+      <text x="108" y="214" fill="#596b70" font-size="13" font-family="'Geist','Noto Sans KR',sans-serif">조건 URL 제한 · 전용 결과 화면 · 세션 선택</text>
+    </g>
+    <g>
+      <rect x="88" y="300" width="392" height="120" rx="6" fill="#fff" stroke="#2563a6" stroke-width="2"/>
+      <rect x="108" y="320" width="82" height="22" rx="4" fill="rgba(37,99,166,.09)"/>
+      <text x="149" y="335" text-anchor="middle" fill="#2563a6" font-size="11" font-weight="600" font-family="'Geist Mono',monospace">DONE</text>
+      <text x="108" y="368" fill="#16333a" font-size="20" font-weight="600" font-family="'Geist','Noto Sans KR',sans-serif">예약 · 결제 · 결과</text>
+      <text x="108" y="394" fill="#596b70" font-size="13" font-family="'Geist','Noto Sans KR',sans-serif">hold 복원 · fake/Toss · 상태 재확인 · 영문 복귀</text>
+    </g>
+    <g>
+      <rect x="88" y="480" width="392" height="120" rx="6" fill="#fff" stroke="#2563a6" stroke-width="2"/>
+      <rect x="108" y="500" width="82" height="22" rx="4" fill="rgba(37,99,166,.09)"/>
+      <text x="149" y="515" text-anchor="middle" fill="#2563a6" font-size="11" font-weight="600" font-family="'Geist Mono',monospace">DONE</text>
+      <text x="108" y="548" fill="#16333a" font-size="20" font-weight="600" font-family="'Geist','Noto Sans KR',sans-serif">예약 관리 · 변경</text>
+      <text x="108" y="574" fill="#596b70" font-size="13" font-family="'Geist','Noto Sans KR',sans-serif">상세 · 취소 preview · 전후 비교 · 추가 결제 링크</text>
+    </g>
+
+    <!-- Server node -->
+    <g>
+      <rect x="680" y="184" width="380" height="356" rx="8" fill="rgba(37,99,166,.07)" stroke="#2563a6" stroke-width="2"/>
+      <rect x="706" y="210" width="150" height="22" rx="4" fill="#2563a6"/>
+      <text x="781" y="225" text-anchor="middle" fill="#fff" font-size="11" font-weight="600" font-family="'Geist Mono',monospace">IMPLEMENTED CORE</text>
+      <text x="706" y="270" fill="#16333a" font-size="24" font-weight="600" font-family="'Geist','Noto Sans KR',sans-serif">Spring Boot API</text>
+      <text x="706" y="302" fill="#596b70" font-size="13" font-family="'Geist','Noto Sans KR',sans-serif">가격 · 재고 · 예약 확정의 단일 권한</text>
+      <line x1="706" y1="326" x2="1034" y2="326" stroke="rgba(22,51,58,.14)"/>
+      <text x="706" y="360" fill="#16333a" font-size="15" font-weight="600" font-family="'Geist','Noto Sans KR',sans-serif">Availability &amp; inventory</text>
+      <text x="706" y="392" fill="#16333a" font-size="15" font-weight="600" font-family="'Geist','Noto Sans KR',sans-serif">Reservation hold &amp; idempotency</text>
+      <text x="706" y="424" fill="#16333a" font-size="15" font-weight="600" font-family="'Geist','Noto Sans KR',sans-serif">Payment confirm · reconcile · expiry</text>
+      <text x="706" y="456" fill="#16333a" font-size="15" font-weight="600" font-family="'Geist','Noto Sans KR',sans-serif">Cancellation · refund provider guard</text>
+      <text x="706" y="488" fill="#16333a" font-size="15" font-weight="600" font-family="'Geist','Noto Sans KR',sans-serif">Reservation change settlement</text>
+      <text x="706" y="520" fill="#596b70" font-size="12" font-family="'Geist Mono',monospace">management token · HttpOnly session · outbox</text>
+    </g>
+
+    <!-- External systems -->
+    <g>
+      <rect x="1188" y="176" width="316" height="128" rx="6" fill="rgba(112,121,128,.06)" stroke="#707980" stroke-width="1.2"/>
+      <text x="1212" y="210" fill="#707980" font-size="11" font-weight="600" font-family="'Geist Mono',monospace">EXTERNAL · CONNECTED</text>
+      <text x="1212" y="246" fill="#16333a" font-size="21" font-weight="600" font-family="'Geist','Noto Sans KR',sans-serif">PostgreSQL</text>
+      <text x="1212" y="274" fill="#596b70" font-size="13" font-family="'Geist','Noto Sans KR',sans-serif">재고 · 예약 · 결제 · 변경 · outbox</text>
+    </g>
+    <g>
+      <rect x="1188" y="418" width="316" height="128" rx="6" fill="rgba(112,121,128,.06)" stroke="#707980" stroke-width="1.2"/>
+      <text x="1212" y="452" fill="#707980" font-size="11" font-weight="600" font-family="'Geist Mono',monospace">EXTERNAL · ADAPTER READY</text>
+      <text x="1212" y="488" fill="#16333a" font-size="21" font-weight="600" font-family="'Geist','Noto Sans KR',sans-serif">Toss Payments</text>
+      <text x="1212" y="516" fill="#596b70" font-size="13" font-family="'Geist','Noto Sans KR',sans-serif">최초·추가 결제 · 전체/부분 환불</text>
+    </g>
+
+    <!-- Next work, one semantic group -->
+    <g>
+      <rect x="80" y="758" width="1440" height="148" rx="8" fill="rgba(198,106,18,.045)" stroke="#c66a12" stroke-width="2" stroke-dasharray="8 6"/>
+      <rect x="104" y="746" width="178" height="24" rx="3" fill="#f6f7f4"/>
+      <text x="193" y="763" text-anchor="middle" fill="#c66a12" font-size="12" font-weight="600" font-family="'Geist Mono',monospace">NEXT · NOT VERIFIED</text>
+      <line x1="548" y1="790" x2="548" y2="880" stroke="rgba(198,106,18,.24)"/>
+      <line x1="1052" y1="790" x2="1052" y2="880" stroke="rgba(198,106,18,.24)"/>
+      <text x="120" y="812" fill="#16333a" font-size="18" font-weight="600" font-family="'Geist','Noto Sans KR',sans-serif">사용자 브라우저 종단 검증</text>
+      <text x="120" y="842" fill="#596b70" font-size="13" font-family="'Geist','Noto Sans KR',sans-serif">검색 → 결제 → 관리 → 변경 → 취소</text>
+      <text x="120" y="868" fill="#596b70" font-size="13" font-family="'Geist','Noto Sans KR',sans-serif">키보드 · 모바일 · 결제창 취소/재시도</text>
+      <text x="588" y="812" fill="#16333a" font-size="18" font-weight="600" font-family="'Geist','Noto Sans KR',sans-serif">격리 DB 통합·부하 검증</text>
+      <text x="588" y="842" fill="#596b70" font-size="13" font-family="'Geist','Noto Sans KR',sans-serif">재고 원자성 · 중복 승인 · 만료 경합</text>
+      <text x="588" y="868" fill="#596b70" font-size="13" font-family="'Geist','Noto Sans KR',sans-serif">PostgreSQL integration suites 실행</text>
+      <text x="1092" y="812" fill="#16333a" font-size="18" font-weight="600" font-family="'Geist','Noto Sans KR',sans-serif">운영 연동·전달 자동화</text>
+      <text x="1092" y="842" fill="#596b70" font-size="13" font-family="'Geist','Noto Sans KR',sans-serif">실제 추가 결제 · 환불 · webhook</text>
+      <text x="1092" y="868" fill="#596b70" font-size="13" font-family="'Geist','Noto Sans KR',sans-serif">변경 링크 이메일/SMS 자동 전달</text>
+    </g>
+  </svg>
