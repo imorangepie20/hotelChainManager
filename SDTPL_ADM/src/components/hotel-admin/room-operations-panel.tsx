@@ -193,9 +193,9 @@ export function RoomOperationsPanel({ hotelId }: { hotelId: string }) {
             <p className="mt-1 text-xs text-muted-foreground">필터를 바꾸면 다른 객실을 확인할 수 있습니다.</p>
           </div>
         ) : (
-          <ul className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+          <ul className="divide-y">
             {filteredRooms.map((room) => (
-              <li key={room.physicalRoomId} className="flex min-w-0 flex-col rounded-xl border p-3">
+              <li key={room.physicalRoomId} className="flex min-w-0 flex-col py-4 first:pt-0 last:pb-0">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="truncate font-medium">{room.roomNumber}호 · {room.roomTypeName}</p>
