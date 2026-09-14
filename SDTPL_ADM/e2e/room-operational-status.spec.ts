@@ -73,6 +73,7 @@ test("shows impacted reservations and blocks an unsafe sales stop", async ({ pag
 test("keeps the idempotency key for a retry and refreshes after success", async ({ page }) => {
   await seedSession(page);
   let reads = 0;
+  let transitioned = false;
   const requestKeys: string[] = [];
   const requestBodies: unknown[] = [];
   await page.route("**/api/staff/hotels/*/room-operations", (route) => {
@@ -81,12 +82,12 @@ test("keeps the idempotency key for a retry and refreshes after success", async 
       contentType: "application/json",
       body: JSON.stringify({
         hotelId: SOKCHO,
-        summary: { inspectionRequired: reads > 1 ? 1 : 0, outOfService: 0, overdueRecovery: 0 },
+        summary: { inspectionRequired: transitioned ? 1 : 0, outOfService: 0, overdueRecovery: 0 },
         rooms: [{
           physicalRoomId: "room-701", roomNumber: "701", roomTypeName: "디럭스 오션",
-          housekeepingStatus: "CLEAN", operationalStatus: reads > 1 ? "INSPECTION_REQUIRED" : "AVAILABLE",
-          operationalReason: reads > 1 ? "배관 점검" : null, expectedRecoveryAt: null,
-          operationalVersion: reads > 1 ? 1 : 0, impactedAssignments: [], events: [],
+          housekeepingStatus: "CLEAN", operationalStatus: transitioned ? "INSPECTION_REQUIRED" : "AVAILABLE",
+          operationalReason: transitioned ? "배관 점검" : null, expectedRecoveryAt: null,
+          operationalVersion: transitioned ? 1 : 0, impactedAssignments: [], events: [],
         }],
       }),
     });
@@ -97,6 +98,7 @@ test("keeps the idempotency key for a retry and refreshes after success", async 
     if (requestKeys.length === 1) {
       return route.fulfill({ status: 502, contentType: "application/json", body: JSON.stringify({ message: "응답을 확인하지 못했습니다." }) });
     }
+    transitioned = true;
     return route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
@@ -131,6 +133,7 @@ test("keeps the idempotency key for a retry and refreshes after success", async 
 test("refreshes impacted reservations and version after a transition conflict", async ({ page }) => {
   await seedSession(page);
   let reads = 0;
+  let conflictSeen = false;
   let submittedBody: Record<string, unknown> | null = null;
   const assignment = {
     reservationId: "future-reservation", guestName: "박미래", status: "CONFIRMED",
@@ -146,13 +149,14 @@ test("refreshes impacted reservations and version after a transition conflict", 
         rooms: [{
           physicalRoomId: "room-801", roomNumber: "801", roomTypeName: "스위트",
           housekeepingStatus: "CLEAN", operationalStatus: "AVAILABLE", operationalReason: null,
-          expectedRecoveryAt: null, operationalVersion: reads > 1 ? 1 : 0,
-          impactedAssignments: reads > 1 ? [assignment] : [], events: [],
+          expectedRecoveryAt: null, operationalVersion: conflictSeen ? 1 : 0,
+          impactedAssignments: conflictSeen ? [assignment] : [], events: [],
         }],
       }),
     });
   });
   await page.route("**/api/staff/rooms/room-801/operational-transitions", (route) => {
+    conflictSeen = true;
     submittedBody = route.request().postDataJSON();
     return route.fulfill({
       status: 409,

@@ -89,7 +89,8 @@ test("moves a checked-in guest with confirmation and safe retry", async ({ page 
   await submit.click();
 
   await expect(page.getByText("702호로 이동했습니다.")).toBeVisible();
-  await expect(page.getByRole("button", { name: "김하늘 예약 상세" }).locator("xpath=ancestor::li")).toContainText("702");
+  await page.getByRole("button", { name: "김하늘 예약 상세" }).click();
+  await expect(page.getByRole("dialog").getByText("702호", { exact: true })).toBeVisible();
   expect(state.reservationReads()).toBeGreaterThan(1);
   expect(keys).toHaveLength(2);
   expect(keys[0]).not.toBe("");
