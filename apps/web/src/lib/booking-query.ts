@@ -8,11 +8,13 @@ export type BookingCriteria = {
 }
 
 const criteriaKeys = ['hotelId', 'checkIn', 'checkOut', 'adults', 'children', 'rooms'] as const
+const criteriaKeySet = new Set<string>(criteriaKeys)
 const wholeNumberPattern = /^(0|[1-9]\d*)$/
 const datePattern = /^(\d{4})-(\d{2})-(\d{2})$/
 
 export function parseBookingCriteria(search: string): BookingCriteria | null {
   const params = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search)
+  if (Array.from(params.keys()).some(key => !criteriaKeySet.has(key))) return null
   if (!criteriaKeys.every(key => params.getAll(key).length === 1)) return null
 
   const hotelId = params.get('hotelId')!

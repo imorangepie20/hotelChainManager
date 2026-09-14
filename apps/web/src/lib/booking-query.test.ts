@@ -22,6 +22,9 @@ function runBookingQueryTests() {
     '검색 조건만 URL로 직렬화한다',
   )
   expectEqual(serializeBookingCriteria(validCriteria).includes('secret'), false, '관리 토큰을 검색 URL에 넣지 않는다')
+  expectEqual(parseBookingCriteria('?hotelId=sokcho&checkIn=2026-09-22&checkOut=2026-09-24&adults=2&children=0&rooms=1&managementToken=secret'), null, '관리 토큰이 있는 URL을 거절한다')
+  expectEqual(parseBookingCriteria('?hotelId=sokcho&checkIn=2026-09-22&checkOut=2026-09-24&adults=2&children=0&rooms=1&guestEmail=guest%40example.com'), null, '예약자 정보가 있는 URL을 거절한다')
+  expectEqual(parseBookingCriteria('?hotelId=sokcho&checkIn=2026-09-22&checkOut=2026-09-24&adults=2&children=0&rooms=1&paymentKey=payment-secret'), null, '결제 정보가 있는 URL을 거절한다')
   expectEqual(parseBookingCriteria('?hotelId=sokcho&checkIn=2026-02-29&checkOut=2026-03-02&adults=1&children=0&rooms=1'), null, '존재하지 않는 날짜를 거절한다')
   expectEqual(parseBookingCriteria('?hotelId=sokcho&checkIn=2026-09-24&checkOut=2026-09-22&adults=1&children=0&rooms=1'), null, '체크아웃이 체크인 이후가 아닌 조건을 거절한다')
   expectEqual(parseBookingCriteria('?hotelId=sokcho&checkIn=2026-09-22&checkOut=2026-09-24&adults=0&children=0&rooms=1'), null, '성인 없는 조건을 거절한다')
