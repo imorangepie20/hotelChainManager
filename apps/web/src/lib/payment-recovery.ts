@@ -14,7 +14,7 @@ export async function recoverTossPayment(
 ): Promise<TossStatus> {
   const state = await reconcile()
   // Only a request that never reached the server may use the in-memory callback again.
-  if (state.paymentStatus === 'NEW' && returned.kind === 'success' && state.orderId === returned.input.orderId) {
+  if (state.status === 'PENDING_PAYMENT' && state.paymentStatus === 'NEW' && returned.kind === 'success' && state.orderId === returned.input.orderId) {
     return confirm(returned.input)
   }
   return state

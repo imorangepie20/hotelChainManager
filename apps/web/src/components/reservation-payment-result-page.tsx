@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
-import { paymentMessage, type TossReturn, type TossStatus } from '../lib/toss-payments'
+import { checkoutFailureMessage, paymentMessage, type TossReturn, type TossStatus } from '../lib/toss-payments'
 import { recoverTossPayment } from '../lib/payment-recovery'
 
 export function ReservationPaymentResultPage({ reservationId, returned }: { reservationId: string; returned: TossReturn }) {
@@ -20,9 +20,9 @@ export function ReservationPaymentResultPage({ reservationId, returned }: { rese
     let active = true
     if (!initialRequest.current) initialRequest.current = Promise.resolve().then(() => returned.kind === 'success'
       ? api.tossConfirm(reservationId, token(), returned.input) : api.tossStatus(reservationId, token()))
-    initialRequest.current.then(value => { if (active) setState(value) }, () => {
+    initialRequest.current.then(value => { if (active) setState(value) }, reason => {
       if (active) setError(sessionStorage.getItem(`reservation:${reservationId}`)
-        ? '결제 결과를 확인하지 못했습니다. 중복 결제하지 말고 서버 상태를 다시 확인해 주세요.'
+        ? checkoutFailureMessage(returned.kind === 'success' ? 'CONFIRM' : 'STATUS', reason)
         : '예약 관리 정보가 없습니다. 예약한 브라우저에서 다시 열어 주세요.')
     }).finally(() => { if (active) setBusy(false) })
     return () => { active = false }
@@ -33,7 +33,7 @@ export function ReservationPaymentResultPage({ reservationId, returned }: { rese
     if (busyRef.current) return
     busyRef.current = true; setBusy(true); setError('')
     try { setState(await recoverTossPayment(() => api.tossReconcile(reservationId, token()), input => api.tossConfirm(reservationId, token(), input), returned)) }
-    catch { setError('서버 상태를 확인하지 못했습니다. 예약한 브라우저에서 잠시 후 다시 확인해 주세요.') }
+    catch (reason) { setError(checkoutFailureMessage('STATUS', reason)) }
     finally { busyRef.current = false; setBusy(false) }
   }
   return <main className="change-payment-shell"><section className="change-payment-card" aria-labelledby="payment-result-title">

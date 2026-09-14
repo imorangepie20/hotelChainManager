@@ -3,7 +3,7 @@ import { CalendarDays, Clock3, CreditCard, ShieldCheck } from 'lucide-react'
 
 import { ApiFailure, api, type ReservationChangePayment } from '../lib/api'
 import { captureReservationChangePaymentToken } from '../lib/reservation-change-payment-session'
-import { requestTossCheckout, type TossReturn, type TossStatus } from '../lib/toss-payments'
+import { requestTossCheckout, TossCheckoutFailure, checkoutFailureMessage, type TossReturn, type TossStatus } from '../lib/toss-payments'
 import { paymentActions, type PaymentProvider } from '../lib/payment-recovery'
 
 const money = new Intl.NumberFormat('ko-KR')
@@ -81,7 +81,7 @@ export function ReservationChangePaymentPage({ returned }: { returned: TossRetur
       const checkout = await api.tossChangeCheckout()
       sessionStorage.setItem('tossChangeStarted', '1')
       await requestTossCheckout(checkout)
-    } catch { setError('토스 테스트 결제창을 열지 못했습니다. 결제 설정과 링크 상태를 확인해 주세요.') }
+    } catch (cause) { setError(cause instanceof TossCheckoutFailure ? cause.message : checkoutFailureMessage('API', cause)) }
     finally { busyRef.current = false; setBusy(false) }
   }
 

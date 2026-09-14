@@ -19,4 +19,9 @@ equal(paymentActions('toss-test'), { toss: true, fake: false })
 equal(paymentActions('fake'), { toss: false, fake: true })
 equal(paymentActions('disabled'), { toss: false, fake: false })
 equal(paymentActions(null), { toss: false, fake: false })
+for (const status of ['EXPIRED', 'CANCELLED', 'CONFIRMED']) {
+  const terminal = { ...state, status, paymentStatus: 'NEW' }
+  equal(await recoverTossPayment(async () => terminal, confirm, returned), terminal)
+}
+equal(confirmations, 1)
 console.log('Payment recovery and provider actions passed')

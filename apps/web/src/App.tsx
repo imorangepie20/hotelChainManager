@@ -17,7 +17,7 @@ import { GuestSelector } from './components/guest-selector'
 import { HotelSelector } from './components/hotel-selector'
 import { ReservationChangePaymentPage } from './components/reservation-change-payment-page'
 import { ReservationPaymentResultPage } from './components/reservation-payment-result-page'
-import { captureTossReturn, requestTossCheckout } from './lib/toss-payments'
+import { captureTossReturn, requestTossCheckout, TossCheckoutFailure, checkoutFailureMessage } from './lib/toss-payments'
 import { paymentActions, type PaymentProvider } from './lib/payment-recovery'
 
 import { ConciergePanel, type ConciergeCriteria } from './components/concierge-panel'
@@ -294,7 +294,7 @@ function BookingApp() {
       const token = sessionStorage.getItem(`reservation:${reservation.id}`)
       if (!token) throw new Error('예약 관리 정보가 없습니다. 예약한 브라우저에서 다시 열어 주세요.')
       await requestTossCheckout(await api.tossCheckout(reservation.id, token, crypto.randomUUID()))
-    } catch { setError('토스 테스트 결제창을 열지 못했습니다. 테스트 결제 설정과 예약 상태를 확인해 주세요.') }
+    } catch (reason) { setError(reason instanceof TossCheckoutFailure ? reason.message : checkoutFailureMessage('API', reason)) }
     finally { tossBusy.current = false; setBusy(false) }
   }
 

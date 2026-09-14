@@ -6,6 +6,36 @@ export type ConfirmationInput = { paymentKey: string; orderId: string; amountKrw
 export type TossStatus = { reservationId: string; orderId: string | null; status: string; paymentStatus: string }
 export type TossReturn = { kind: 'success'; input: ConfirmationInput } | { kind: 'fail' | 'invalid' | 'none' }
 
+type CheckoutStage = 'API' | 'CONFIG' | 'SDK' | 'PAYMENT_WINDOW' | 'CONFIRM' | 'STATUS'
+export class TossCheckoutFailure extends Error {}
+export function checkoutFailureMessage(stage: CheckoutStage, reason: unknown): string {
+  const code = reason && typeof reason === 'object' && 'code' in reason ? reason.code : undefined
+  const known: Record<string, string> = {
+    HOLD_EXPIRED: '객실 확보 시간이 만료되었습니다. 객실을 다시 검색해 주세요.',
+    INVALID_CLIENT_KEY: '결제창 방식에 맞는 테스트 클라이언트 키인지 확인해 주세요.',
+    INVALID_API_KEY: '결제 연동 키 설정을 확인해 주세요.',
+    NOT_SUPPORTED_WIDGET_KEY: '결제창과 키 종류가 일치하지 않습니다. 페이지를 새로고침해 주세요.',
+    NOT_REGISTERED_PAYMENT_WIDGET: '토스 상점에 결제 UI가 등록되지 않았습니다. 결제 어드민 설정을 확인해 주세요.',
+    INVALID_CUSTOMER_KEY: '결제 고객 식별자 설정을 확인해 주세요.',
+    USER_CANCEL: '결제창을 닫았습니다. 결제가 완료되지 않았습니다.',
+    RESERVATION_STATE_CONFLICT: '현재 예약 상태에서는 결제할 수 없습니다. 예약 상태를 다시 확인해 주세요.',
+  }
+  if (typeof code === 'string' && Object.hasOwn(known, code)) return `[${stage} / ${code}] ${known[code]}`
+  const fallback = {
+    API: '결제 주문을 생성하지 못했습니다. 잠시 후 다시 시도해 주세요.',
+    CONFIG: '결제 금액·테스트 키·복귀 주소 설정을 확인해 주세요.',
+    SDK: '결제창 프로그램을 불러오지 못했습니다. 네트워크 연결과 브라우저 차단 여부를 확인해 주세요.',
+    PAYMENT_WINDOW: '결제창 호출이 거절되었습니다. 결제창 방식과 테스트 키 설정을 확인해 주세요.',
+    CONFIRM: '결제 승인 결과를 확인하지 못했습니다. 중복 결제하지 말고 서버 상태를 다시 확인해 주세요.',
+    STATUS: '결제 상태를 조회하지 못했습니다. 중복 결제하지 말고 서버 상태를 다시 확인해 주세요.',
+  }
+  const status = reason && typeof reason === 'object' && 'status' in reason ? reason.status : undefined
+  if ((stage === 'CONFIRM' || stage === 'STATUS') && typeof status === 'number' && Number.isInteger(status) && status >= 400 && status <= 599) {
+    return `[${stage} / HTTP ${status}] ${fallback[stage]}`
+  }
+  return `[${stage}] ${fallback[stage]}`
+}
+
 export function toConfirmationInput(params: URLSearchParams): ConfirmationInput {
   const paymentKey = params.get('paymentKey') ?? ''
   const orderId = params.get('orderId') ?? ''
@@ -44,7 +74,19 @@ type PaymentRequest = {
   method: 'CARD'; amount: { currency: 'KRW'; value: number }; orderId: string; orderName: string
   successUrl: string; failUrl: string
 }
-type TossFactory = ((clientKey: string) => { payment: (options: { customerKey: string }) => { requestPayment: (request: PaymentRequest) => Promise<void> } }) & { ANONYMOUS: string }
+type WidgetRequest = Pick<PaymentRequest, 'orderId' | 'orderName' | 'successUrl' | 'failUrl'>
+type PaymentWindow = {
+  on: (event: 'paymentRequest' | 'cancel', callback: () => void) => void
+  destroy: () => Promise<void>
+}
+type TossFactory = ((clientKey: string) => {
+  payment: (options: { customerKey: string }) => { requestPayment: (request: PaymentRequest) => Promise<void> }
+  widgets: (options: { customerKey: string }) => {
+    setAmount: (amount: PaymentRequest['amount']) => Promise<void>
+    renderPaymentWindow: () => Promise<PaymentWindow>
+    requestPayment: (request: WidgetRequest) => Promise<void>
+  }
+}) & { ANONYMOUS: string }
 declare global { interface Window { TossPayments?: TossFactory } }
 let sdkPromise: Promise<TossFactory> | null = null
 
@@ -65,16 +107,46 @@ function loadTossSdk(): Promise<TossFactory> {
 }
 
 export async function requestTossCheckout(checkout: TossCheckout) {
-  validateTossCheckout(checkout, window.location.origin)
-  const sdk = await loadTossSdk()
-  await sdk(checkout.clientKey).payment({ customerKey: sdk.ANONYMOUS }).requestPayment({
-    method: 'CARD', amount: { currency: 'KRW', value: checkout.amountKrw }, orderId: checkout.orderId,
-    orderName: '호텔 예약 테스트 결제', successUrl: checkout.successUrl, failUrl: checkout.failUrl,
-  })
+  let stage: CheckoutStage = 'CONFIG'
+  try {
+    validateTossCheckout(checkout, window.location.origin)
+    stage = 'SDK'
+    const sdk = await loadTossSdk()
+    stage = 'PAYMENT_WINDOW'
+    if (checkout.clientKey.startsWith('test_gck_')) {
+      const widgets = sdk(checkout.clientKey).widgets({ customerKey: sdk.ANONYMOUS })
+      await widgets.setAmount({ currency: 'KRW', value: checkout.amountKrw })
+      const paymentWindow = await widgets.renderPaymentWindow()
+      try {
+        await new Promise<void>((resolve, reject) => {
+          let requested = false
+          let closed = false
+          paymentWindow.on('paymentRequest', () => {
+            if (requested || closed) return
+            requested = true
+            Promise.resolve().then(() => widgets.requestPayment({
+              orderId: checkout.orderId, orderName: '호텔 예약 테스트 결제',
+              successUrl: checkout.successUrl, failUrl: checkout.failUrl,
+            })).then(resolve, reject)
+          })
+          paymentWindow.on('cancel', () => {
+            closed = true
+            reject({ code: 'USER_CANCEL' })
+          })
+        })
+      } finally { await paymentWindow.destroy() }
+      return
+    }
+    await sdk(checkout.clientKey).payment({ customerKey: sdk.ANONYMOUS }).requestPayment({
+      method: 'CARD', amount: { currency: 'KRW', value: checkout.amountKrw }, orderId: checkout.orderId,
+      orderName: '호텔 예약 테스트 결제', successUrl: checkout.successUrl, failUrl: checkout.failUrl,
+    })
+  } catch (reason) { throw new TossCheckoutFailure(checkoutFailureMessage(stage, reason)) }
 }
 
 export function paymentMessage(state: Pick<TossStatus, 'status' | 'paymentStatus'>) {
   if (state.status === 'CONFIRMED' && state.paymentStatus === 'SUCCEEDED') return { completed: true, text: '결제가 확인되어 예약이 확정되었습니다.' }
+  if (state.status === 'EXPIRED' && ['NEW', 'NOT_STARTED', 'FAILED'].includes(state.paymentStatus)) return { completed: false, text: '객실 확보 시간이 만료되어 예약이 확정되지 않았습니다. 객실을 다시 검색해 주세요.' }
   if (state.paymentStatus === 'FAILED') return { completed: false, text: '결제가 승인되지 않았습니다. 예약 확보 상태를 확인해 주세요.' }
   return { completed: false, text: '결제 결과를 확인 중입니다. 중복 결제하지 말고 서버 상태를 다시 확인해 주세요.' }
 }
