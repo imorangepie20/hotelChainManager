@@ -11,6 +11,8 @@ export type ReservationAccess = {
   managementToken: string
 }
 
+export type CheckoutSummary = { roomTypeName: string; ratePlanName: string }
+
 type SessionStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
 
 const selectionStorageKey = 'hotel-chain.booking.selection.v1'
@@ -43,15 +45,21 @@ export class BookingSessionStore {
     this.remove(selectionStorageKey)
   }
 
-  saveCheckoutProgress(selection: BookingSelection, access: ReservationAccess): void {
-    if (!isBookingSelection(selection) || !isReservationAccess(access)) return
-    this.set(checkoutProgressStorageKey, { version: storageVersion, selection, access })
+  saveCheckoutProgress(selection: BookingSelection, access: ReservationAccess, summary?: CheckoutSummary): void {
+    if (!isBookingSelection(selection) || !isReservationAccess(access) || (summary !== undefined && !isCheckoutSummary(summary))) return
+    this.set(checkoutProgressStorageKey, { version: storageVersion, selection, access, summary })
   }
 
   loadCheckoutProgress(selection: BookingSelection): ReservationAccess | null {
     const stored = parseStoredValue(this.get(checkoutProgressStorageKey))
     if (!isRecord(stored) || stored.version !== storageVersion || !isBookingSelection(stored.selection) || !isReservationAccess(stored.access)) return null
     return sameSelection(stored.selection, selection) ? stored.access : null
+  }
+
+  loadCheckoutSummary(selection: BookingSelection): CheckoutSummary | null {
+    const stored = parseStoredValue(this.get(checkoutProgressStorageKey))
+    if (!isRecord(stored) || stored.version !== storageVersion || !isBookingSelection(stored.selection) || !isCheckoutSummary(stored.summary)) return null
+    return sameSelection(stored.selection, selection) ? stored.summary : null
   }
 
   saveReservationAccess(access: ReservationAccess): void {
@@ -99,6 +107,11 @@ function isReservationAccess(value: unknown): value is ReservationAccess {
   if (!isRecord(value)) return false
   return typeof value.reservationId === 'string' && value.reservationId.trim().length > 0
     && typeof value.managementToken === 'string' && value.managementToken.trim().length > 0
+}
+
+function isCheckoutSummary(value: unknown): value is CheckoutSummary {
+  return isRecord(value) && typeof value.roomTypeName === 'string' && value.roomTypeName.trim().length > 0
+    && typeof value.ratePlanName === 'string' && value.ratePlanName.trim().length > 0
 }
 
 function sameSelection(left: BookingSelection, right: BookingSelection): boolean {

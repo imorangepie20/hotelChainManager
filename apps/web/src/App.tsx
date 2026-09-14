@@ -39,10 +39,12 @@ const previewStorage = {
 const initialCustomerRoute = resolveCustomerRoute(window.location.pathname)
 const reservationChangePaymentRoute = initialCustomerRoute?.kind === 'reservation-change-payment'
 const bookingCompleteRoute = initialCustomerRoute?.kind === 'booking-complete'
-const initialTossReturn = bookingCompleteRoute
+const reservationPaymentResultRoute = initialCustomerRoute?.kind === 'reservation-payment-result'
+const paymentReturnRoute = bookingCompleteRoute || reservationPaymentResultRoute
+const initialTossReturn = paymentReturnRoute
   ? captureTossReturn(window.location, path => window.history.replaceState({}, '', path))
   : { kind: 'none' as const }
-const initialPreview = reservationChangePaymentRoute || bookingCompleteRoute
+const initialPreview = reservationChangePaymentRoute || paymentReturnRoute
   ? null
   : captureWebsitePreview(window.location, previewStorage, url => window.history.replaceState({}, '', url))
     ?? storedWebsitePreviewForPath(window.location.pathname, previewStorage)
@@ -286,7 +288,7 @@ function BookingApp() {
   if (previewMode && previewUnavailable) return <>{renderHeader(true)}<main className="content-section website-preview-error"><h1>{locale === 'en' ? 'Preview is unavailable.' : '미리보기를 사용할 수 없습니다.'}</h1><p>{locale === 'en' ? 'The link expired, was revoked, or the draft changed.' : '링크가 만료·폐기됐거나 저장 초안이 변경되었습니다. 관리자에서 새 링크를 발급해 주세요.'}</p><button type="button" className="outline" onClick={exitPreview}>{locale === 'en' ? 'Exit preview' : '미리보기 종료'}</button></main></>
   if (previewMode && websiteLoading) return <>{renderHeader(true)}<main className="content-section" aria-live="polite">{locale === 'en' ? 'Loading draft…' : '저장 초안을 불러오는 중…'}</main></>
   const bookingRoute = resolveCustomerRoute(pathname)
-  if (previewMode && (bookingRoute?.kind === 'booking-results' || bookingRoute?.kind === 'booking-checkout' || bookingRoute?.kind === 'booking-complete')) {
+  if (previewMode && (bookingRoute?.kind === 'booking-results' || bookingRoute?.kind === 'booking-checkout' || bookingRoute?.kind === 'booking-complete' || bookingRoute?.kind === 'reservation-payment-result')) {
     return <CustomerBookingShell step="search" locale={bookingRoute.locale ?? 'ko'}><section className="booking-route-state"><h1>미리보기에서는 예약을 진행할 수 없습니다</h1><p>발행된 페이지에서 예약 검색을 이용해 주세요.</p></section></CustomerBookingShell>
   }
   if (bookingRoute?.kind === 'booking-results') {
@@ -296,6 +298,7 @@ function BookingApp() {
   }
   if (bookingRoute?.kind === 'booking-checkout') return <BookingCheckoutPage locale={bookingRoute.locale ?? 'ko'} />
   if (bookingRoute?.kind === 'booking-complete') return <BookingResultPage locale={bookingRoute.locale ?? 'ko'} returned={initialTossReturn} />
+  if (bookingRoute?.kind === 'reservation-payment-result') return <BookingResultPage locale={bookingRoute.locale ?? 'ko'} reservationId={bookingRoute.reservationId} returned={initialTossReturn} />
   if (locale === 'en') {
     const route = resolveCustomerRoute(pathname)
     const englishFooter = <footer><div className="brand"><span>STAY</span> HANEUL</div><p>Fictional hotel chain · Portfolio demo</p><p>© 2026 HOTEL CHAIN PROJECT</p></footer>

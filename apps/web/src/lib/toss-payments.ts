@@ -18,6 +18,7 @@ export function captureTossReturn(location: Pick<Location, 'pathname' | 'search'
   const params = new URLSearchParams(location.search)
   replace(location.pathname + location.hash)
   if (!params.size) return { kind: 'none' }
+  if (params.get('result') === 'fail') return { kind: 'fail' }
   if (params.has('code') || params.has('errorCode')) return { kind: 'fail' }
   try {
     return { kind: 'success', input: toConfirmationInput(params) }
@@ -66,8 +67,10 @@ function validateTossCheckout(checkout: TossCheckout, origin: string) {
   }
   for (const value of [checkout.successUrl, checkout.failUrl]) {
     const url = new URL(value)
-    if (url.origin !== origin || url.username || url.password || url.hash || url.search
-      || !/^\/(?:en\/)?booking\/complete$/.test(url.pathname)) {
+    const bookingComplete = /^\/(?:en\/)?booking\/complete$/.test(url.pathname) && url.search === ''
+    const reservationResult = /^\/reservations\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/payment-result$/.test(url.pathname)
+      && /^\?result=(success|fail)$/.test(url.search)
+    if (url.origin !== origin || url.username || url.password || url.hash || (!bookingComplete && !reservationResult)) {
       throw new TossCheckoutFailure('안전한 결제 복귀 주소를 확인할 수 없습니다. 서버 상태를 다시 확인해 주세요.')
     }
   }

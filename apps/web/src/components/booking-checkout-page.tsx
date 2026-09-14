@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowRight, Clock3, ShieldCheck } from 'lucide-react'
 
-import { ApiFailure, type Offer, type Reservation, api, createManagementToken } from '../lib/api'
+import { ApiFailure, type Offer, type PaymentMode, type Reservation, api, createManagementToken } from '../lib/api'
 import { type BookingCriteria, serializeBookingCriteria } from '../lib/booking-query'
 import { BookingSessionStore, type BookingSelection } from '../lib/booking-session'
 import { checkoutStateFromReservation, formatHoldRemaining, type CheckoutState } from '../lib/booking-checkout-state'
@@ -35,6 +35,7 @@ export function BookingCheckoutPage({ locale = 'ko' }: Props) {
   const [agreed, setAgreed] = useState(false)
   const [loadingOffer, setLoadingOffer] = useState(Boolean(selection))
   const [error, setError] = useState('')
+  const [paymentMode, setPaymentMode] = useState<PaymentMode['provider']>('disabled')
   const [now, setNow] = useState(() => new Date())
 
   useEffect(() => {
@@ -42,26 +43,46 @@ export function BookingCheckoutPage({ locale = 'ko' }: Props) {
     return () => window.clearInterval(interval)
   }, [])
 
+  useEffect(() => { api.paymentModes().then(mode => setPaymentMode(mode.provider)).catch(() => setPaymentMode('disabled')) }, [])
+
   useEffect(() => {
     if (!selection) return
     let active = true
-    const fields = availabilityRequestFields({ ...selection.criteria, breakfastOnly: false })
-    api.availability(new URLSearchParams(Object.entries(fields).map(([key, value]) => [key, String(value)])))
-      .then(result => {
+    const access = session.current.loadCheckoutProgress(selection)
+    const summary = session.current.loadCheckoutSummary(selection)
+    const load = async () => {
+      if (access) {
+        try {
+          const saved = await api.getReservation(access.reservationId, access.managementToken)
+          if (!active) return
+          setReservation(saved)
+          setOffer({
+            roomTypeId: selection.roomTypeId, ratePlanId: selection.ratePlanId,
+            roomTypeName: summary?.roomTypeName ?? '선택한 객실', ratePlanName: summary?.ratePlanName ?? '선택한 요금제',
+            breakfastIncluded: false, remaining: 0, nightlyPrices: saved.nightlyPrices, total: saved.total,
+            currency: saved.currency, policyVersion: '',
+          })
+          setState(checkoutStateFromReservation(saved.status, saved.expiresAt))
+          setLoadingOffer(false)
+          return
+        } catch {
+          if (!active) return
+        }
+      }
+      const fields = availabilityRequestFields({ ...selection.criteria, breakfastOnly: false })
+      try {
+        const result = await api.availability(new URLSearchParams(Object.entries(fields).map(([key, value]) => [key, String(value)])))
         if (!active) return
         const matched = result.offers.find(item => item.roomTypeId === selection.roomTypeId && item.ratePlanId === selection.ratePlanId) ?? null
         if (!matched) setError('선택한 객실을 현재 판매하지 않습니다. 객실 검색으로 돌아가 다른 객실을 선택해 주세요.')
         setOffer(matched)
-      })
-      .catch(() => { if (active) setError('선택한 객실 정보를 불러오지 못했습니다. 객실 검색으로 돌아가 다시 확인해 주세요.') })
-      .finally(() => { if (active) setLoadingOffer(false) })
-
-    const access = session.current.loadCheckoutProgress(selection)
-    if (access) api.getReservation(access.reservationId, access.managementToken).then(saved => {
-      if (!active) return
-      setReservation(saved)
-      setState(checkoutStateFromReservation(saved.status, saved.expiresAt))
-    }).catch(() => { if (active) setError('이전 예약 확보 상태를 확인하지 못했습니다. 객실을 다시 검색해 주세요.') })
+      } catch {
+        if (active) setError('선택한 객실 정보를 불러오지 못했습니다. 객실 검색으로 돌아가 다시 확인해 주세요.')
+      } finally {
+        if (active) setLoadingOffer(false)
+      }
+    }
+    void load()
     return () => { active = false }
   }, [selection])
 
@@ -90,7 +111,7 @@ export function BookingCheckoutPage({ locale = 'ko' }: Props) {
       }, access.managementToken, crypto.randomUUID())
       const savedAccess = { ...access, reservationId: created.id }
       session.current.saveReservationAccess(savedAccess)
-      session.current.saveCheckoutProgress(selection, savedAccess)
+      session.current.saveCheckoutProgress(selection, savedAccess, { roomTypeName: offer.roomTypeName, ratePlanName: offer.ratePlanName })
       setReservation(created)
       setState(checkoutStateFromReservation(created.status, created.expiresAt))
     } catch (reason) {
@@ -137,7 +158,7 @@ export function BookingCheckoutPage({ locale = 'ko' }: Props) {
         </form>
         <aside className="booking-order-summary" aria-label="선택한 객실 요약"><p className="section-kicker">YOUR STAY</p><h2>{offer.roomTypeName}</h2><p>{offer.ratePlanName}</p><dl><div><dt>숙박 일정</dt><dd>{selection.criteria.checkIn} — {selection.criteria.checkOut}</dd></div><div><dt>투숙 인원</dt><dd>성인 {selection.criteria.adults}명 · 객실 {selection.criteria.rooms}개</dd></div></dl><div className="booking-total"><span>총 결제 예정 금액</span><strong>₩{money.format(offer.total)}</strong><small>객실 {selection.criteria.rooms}개 · {offer.nightlyPrices.length}박 · 세금 포함</small></div></aside>
       </div>}
-      {reservation && state !== 'EXPIRED' && state !== 'CONFIRMED' && <section className="booking-payment-ready" aria-labelledby="payment-ready-title"><div><p className="section-kicker">PAYMENT</p><h2 id="payment-ready-title">객실을 확보했습니다</h2><p><Clock3 size={18} aria-hidden="true" /> 남은 확보 시간 <strong>{holdRemaining}</strong></p><span>예약자 정보는 잠겨 있습니다. 확보 시간 안에 결제를 완료해 주세요.</span></div><button type="button" className="primary" onClick={openPayment} disabled={state === 'PAYMENT_OPEN'}>{state === 'PAYMENT_OPEN' ? '토스 결제창을 여는 중…' : '토스 테스트 결제'}</button></section>}
+      {reservation && state !== 'EXPIRED' && state !== 'CONFIRMED' && <section className="booking-payment-ready" aria-labelledby="payment-ready-title"><div><p className="section-kicker">PAYMENT</p><h2 id="payment-ready-title">객실을 확보했습니다</h2><p><Clock3 size={18} aria-hidden="true" /> 남은 확보 시간 <strong>{holdRemaining}</strong></p><span>예약자 정보는 잠겨 있습니다. 확보 시간 안에 결제를 완료해 주세요.</span></div>{paymentMode === 'toss-test' ? <button type="button" className="primary" onClick={openPayment} disabled={state === 'PAYMENT_OPEN'}>{state === 'PAYMENT_OPEN' ? '토스 결제창을 여는 중…' : '토스 테스트 결제'}</button> : <p className="booking-payment-unavailable" role="status">토스 테스트 키가 설정되지 않아 결제창을 열 수 없습니다. 확보 시간 안에 운영자에게 설정을 요청해 주세요.</p>}</section>}
     </section>
   </CustomerBookingShell>
 }

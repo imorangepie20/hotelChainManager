@@ -32,8 +32,9 @@ function runBookingSessionTests() {
   store.saveReservationAccess({ reservationId: 'r1', managementToken: 'secret' })
   expectEqual(store.listReservationAccess(), [{ reservationId: 'r1', managementToken: 'secret' }], '관리 토큰은 같은 브라우저 세션에서만 복원한다')
 
-  store.saveCheckoutProgress(selection, { reservationId: 'r1', managementToken: 'secret' })
+  store.saveCheckoutProgress(selection, { reservationId: 'r1', managementToken: 'secret' }, { roomTypeName: '스탠다드 시티', ratePlanName: '유연 취소' })
   expectEqual(store.loadCheckoutProgress(selection), { reservationId: 'r1', managementToken: 'secret' }, '같은 객실 선택의 확보만 새로고침 뒤에 복원한다')
+  expectEqual(store.loadCheckoutSummary(selection), { roomTypeName: '스탠다드 시티', ratePlanName: '유연 취소' }, '확보된 객실 이름은 새로고침 뒤에도 표시한다')
   expectEqual(store.loadCheckoutProgress({ ...selection, ratePlanId: 'breakfast' }), null, '다른 요금제 선택에는 이전 확보를 재사용하지 않는다')
 
   storage.setItem('hotel-chain.booking.selection.v1', '{"version":0,"selection":{}}')

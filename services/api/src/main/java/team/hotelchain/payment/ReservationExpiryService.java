@@ -27,8 +27,10 @@ public class ReservationExpiryService {
             throw new IllegalArgumentException("만료 처리 건수는 1~100이어야 합니다.");
         }
         List<UUID> ids = jdbc.queryForList("""
-                SELECT id FROM reservation
+                SELECT id FROM reservation r
                  WHERE status = 'PENDING_PAYMENT' AND expires_at <= ?
+                   AND NOT EXISTS (SELECT 1 FROM payment_provider_attempt p
+                    WHERE p.reservation_id = r.id AND p.status IN ('APPROVING', 'UNKNOWN'))
                  ORDER BY expires_at, id LIMIT ?
                 """, UUID.class, Timestamp.from(clock.instant()), limit);
         int expired = 0;
@@ -54,6 +56,11 @@ public class ReservationExpiryService {
         if (reservation == null || clock.instant().isBefore(reservation.expiresAt())) {
             return false;
         }
+        Boolean protectedPayment = jdbc.queryForObject("""
+                SELECT EXISTS (SELECT 1 FROM payment_provider_attempt
+                 WHERE reservation_id = ? AND status IN ('APPROVING', 'UNKNOWN'))
+                """, Boolean.class, id);
+        if (Boolean.TRUE.equals(protectedPayment)) return false;
         jdbc.query("""
                 SELECT stay_date FROM inventory_day
                  WHERE room_type_id = ? AND stay_date >= ? AND stay_date < ?

@@ -14,6 +14,14 @@ const returned = captureTossReturn({
 equal(returned, { kind: 'success', input: { paymentKey: 'payment_123', orderId: 'order_123', amountKrw: 240000 } }, '정상 결제 복귀 값은 메모리에서만 확인해야 한다')
 equal(replaced, '/booking/complete', '결제 복귀 query는 서버 상태 조회 전에 URL에서 제거해야 한다')
 
+let resultPath = ''
+const existingRoute = captureTossReturn({
+  pathname: '/reservations/123e4567-e89b-12d3-a456-426614174000/payment-result',
+  search: '?result=fail', hash: '',
+}, path => { resultPath = path })
+equal(existingRoute, { kind: 'fail' }, '기존 예약별 결제 복귀 경로도 실패 결과를 처리해야 한다')
+equal(resultPath, '/reservations/123e4567-e89b-12d3-a456-426614174000/payment-result', '기존 결제 복귀 query도 URL에서 제거해야 한다')
+
 const invalid = captureTossReturn({
   pathname: '/booking/complete',
   search: '?paymentKey=payment_123&paymentKey=payment_456&orderId=order_123&amount=240000',

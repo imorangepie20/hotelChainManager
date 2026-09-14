@@ -30,6 +30,7 @@ async function mockCustomerApi(page: Page) {
   await page.route('**/api/**', async route => {
     const url = new URL(route.request().url())
     if (url.pathname === '/api/hotels') return route.fulfill({ json: [hotel] })
+    if (url.pathname === '/api/payments/mode') return route.fulfill({ json: { provider: 'toss-test' } })
     if (url.pathname === '/api/hotels/sokcho/content') return route.fulfill({ json: {} })
     if (url.pathname === '/api/website/navigation') return route.fulfill({ json: [] })
     if (url.pathname === '/api/website/pages/resolve') return route.fulfill({ status: 404, json: { code: 'NOT_FOUND', message: '없음' } })

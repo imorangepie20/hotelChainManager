@@ -25,6 +25,7 @@ export type ReservationChangePayment = {
   environmentLabel: string
   status: string
 }
+export type PaymentMode = { provider: 'fake' | 'toss-test' | 'disabled' }
 
 export type WebsiteNavigationItem = {
   id: string
@@ -46,7 +47,9 @@ export type PublishedWebsitePage = {
 }
 
 export class ApiFailure extends Error {
-  constructor(public code: string, message: string, public status: number) { super(message) }
+  readonly code: string
+  readonly status: number
+  constructor(code: string, message: string, status: number) { super(message); this.code = code; this.status = status }
 }
 
 export type WebsitePreviewPageResponse = { page: PublishedWebsitePage; expiresAt: string }
@@ -70,8 +73,13 @@ const headers = (token: string, key?: string) => ({
   ...(key ? { 'Idempotency-Key': key } : {}),
 })
 
+export function reservationPaymentPath(id: string, action: 'checkout' | 'confirm' | 'status' | 'reconcile') {
+  return `/api/reservations/${encodeURIComponent(id)}/payment-${action}`
+}
+
 export const api = {
   hotels: () => request<Hotel[]>('/api/hotels'),
+  paymentModes: () => request<PaymentMode>('/api/payments/mode', { cache: 'no-store' }),
   hotelContent: (hotelId: string) => request<Record<string, unknown>>(`/api/hotels/${hotelId}/content`),
   websiteNavigation: (locale: 'ko' | 'en' = 'ko') => request<WebsiteNavigationItem[]>(`/api/website/navigation?${new URLSearchParams({ locale })}`),
   websitePage: (path: string, locale: 'ko' | 'en' = 'ko') => request<PublishedWebsitePage>(`/api/website/pages/resolve?${new URLSearchParams({ path, locale })}`),
@@ -93,16 +101,16 @@ export const api = {
     method: 'POST', headers: headers(token, key), body: JSON.stringify(body),
   }),
   getReservation: (id: string, token: string) => request<Reservation>(`/api/reservations/${id}`, { headers: headers(token) }),
-  tossCheckout: (id: string, token: string, key: string) => request<TossCheckout>(`/api/reservations/${id}/payment-checkout`, {
+  tossCheckout: (id: string, token: string, key: string) => request<TossCheckout>(reservationPaymentPath(id, 'checkout'), {
     method: 'POST', headers: headers(token, key),
   }),
-  tossConfirm: (id: string, token: string, input: ConfirmationInput) => request<TossStatus>(`/api/reservations/${id}/payment-confirm`, {
+  tossConfirm: (id: string, token: string, input: ConfirmationInput) => request<TossStatus>(reservationPaymentPath(id, 'confirm'), {
     method: 'POST', headers: headers(token), body: JSON.stringify(input),
   }),
-  tossStatus: (id: string, token: string) => request<TossStatus>(`/api/reservations/${id}/payment-status`, {
+  tossStatus: (id: string, token: string) => request<TossStatus>(reservationPaymentPath(id, 'status'), {
     headers: headers(token), cache: 'no-store',
   }),
-  tossReconcile: (id: string, token: string) => request<TossStatus>(`/api/reservations/${id}/payment-reconcile`, {
+  tossReconcile: (id: string, token: string) => request<TossStatus>(reservationPaymentPath(id, 'reconcile'), {
     method: 'POST', headers: headers(token),
   }),
   pay: (id: string, token: string, key: string, outcome: 'SUCCESS' | 'FAILURE') => request<{ status: string; paymentStatus: string }>(`/api/reservations/${id}/test-payment`, {

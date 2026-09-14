@@ -17,3 +17,7 @@ export function formatHoldRemaining(expiresAt: string, now = new Date()): string
 export function isRetryablePaymentState(state: CheckoutState): boolean {
   return state === 'PAYMENT_READY'
 }
+
+export function shouldPollPaymentStatus(state: { status: string; paymentStatus: string }): boolean {
+  return state.status === 'PENDING_PAYMENT' && ['APPROVING', 'UNKNOWN'].includes(state.paymentStatus)
+}

@@ -4,10 +4,11 @@ import { CheckCircle2, Clock3 } from 'lucide-react'
 import { api, type Reservation } from '../lib/api'
 import { BookingSessionStore, type ReservationAccess } from '../lib/booking-session'
 import { paymentMessage, type TossReturn, type TossStatus } from '../lib/toss-payments'
+import { shouldPollPaymentStatus } from '../lib/booking-checkout-state'
 import { CustomerBookingShell } from './customer-shell'
 
 const money = new Intl.NumberFormat('ko-KR')
-type Props = { locale?: 'ko' | 'en'; returned: TossReturn }
+type Props = { locale?: 'ko' | 'en'; reservationId?: string; returned: TossReturn }
 
 function messageForResult(returned: TossReturn) {
   if (returned.kind === 'fail') return '결제창에서 결제를 완료하지 않았습니다. 같은 객실 확보 건에서 다시 시도할 수 있습니다.'
@@ -15,25 +16,30 @@ function messageForResult(returned: TossReturn) {
   return ''
 }
 
-export function BookingResultPage({ locale = 'ko', returned }: Props) {
+export function BookingResultPage({ locale = 'ko', reservationId, returned }: Props) {
   const session = useRef(new BookingSessionStore())
   const [access] = useState<ReservationAccess | null>(() => {
+    if (reservationId) return session.current.listReservationAccess().find(item => item.reservationId === reservationId) ?? null
     const selection = session.current.loadSelection()
-    return selection ? session.current.loadCheckoutProgress(selection) : null
+    const progress = selection ? session.current.loadCheckoutProgress(selection) : null
+    return progress ?? null
   })
   const [reservation, setReservation] = useState<Reservation | null>(null)
   const [payment, setPayment] = useState<TossStatus | null>(null)
   const [busy, setBusy] = useState(true)
   const [error, setError] = useState(() => messageForResult(returned))
+  const confirmationHandled = useRef(false)
+  const pollAttempts = useRef(0)
 
   async function checkServerState(reconcile = false) {
     if (!access) return
     setBusy(true)
     try {
-      const next = returned.kind === 'success'
+      const next = returned.kind === 'success' && !confirmationHandled.current
         ? await api.tossConfirm(access.reservationId, access.managementToken, returned.input)
         : reconcile ? await api.tossReconcile(access.reservationId, access.managementToken)
           : await api.tossStatus(access.reservationId, access.managementToken)
+      confirmationHandled.current = true
       setPayment(next)
       setReservation(await api.getReservation(access.reservationId, access.managementToken))
       if (next.status === 'CONFIRMED') setError('')
@@ -45,6 +51,15 @@ export function BookingResultPage({ locale = 'ko', returned }: Props) {
   }
 
   useEffect(() => { void checkServerState(); }, [])
+
+  useEffect(() => {
+    if (!payment || !shouldPollPaymentStatus(payment) || pollAttempts.current >= 5) return
+    const timeout = window.setTimeout(() => {
+      pollAttempts.current += 1
+      void checkServerState(true)
+    }, 3_000)
+    return () => window.clearTimeout(timeout)
+  }, [payment])
 
   const confirmed = payment?.status === 'CONFIRMED' && payment.paymentStatus === 'SUCCEEDED'
   const statusText = payment ? paymentMessage(payment).text : '서버에서 결제 결과를 확인하고 있습니다.'

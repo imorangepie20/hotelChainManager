@@ -1,4 +1,4 @@
-import { checkoutStateFromReservation, formatHoldRemaining, isRetryablePaymentState } from './booking-checkout-state.ts'
+import { checkoutStateFromReservation, formatHoldRemaining, isRetryablePaymentState, shouldPollPaymentStatus } from './booking-checkout-state.ts'
 
 function equal(actual: unknown, expected: unknown, message: string) {
   if (actual !== expected) throw new Error(`${message}: expected ${String(expected)}, received ${String(actual)}`)
@@ -17,5 +17,9 @@ equal(formatHoldRemaining(future, now), '05:00', '확보 남은 시간은 서버
 equal(formatHoldRemaining(past, now), '00:00', '만료된 확보 시간은 음수로 표시하지 않아야 한다')
 equal(isRetryablePaymentState('PAYMENT_READY'), true, '결제창을 닫은 확보는 다시 시도할 수 있어야 한다')
 equal(isRetryablePaymentState('EXPIRED'), false, '만료된 확보는 다시 시도할 수 없어야 한다')
+equal(shouldPollPaymentStatus({ status: 'PENDING_PAYMENT', paymentStatus: 'UNKNOWN' }), true, '알 수 없는 승인 결과는 서버 상태를 다시 확인해야 한다')
+equal(shouldPollPaymentStatus({ status: 'PENDING_PAYMENT', paymentStatus: 'APPROVING' }), true, '승인 처리 중인 결제는 서버 상태를 다시 확인해야 한다')
+equal(shouldPollPaymentStatus({ status: 'PENDING_PAYMENT', paymentStatus: 'FAILED' }), false, '실패한 결제는 자동 조회를 계속하지 않아야 한다')
+equal(shouldPollPaymentStatus({ status: 'CONFIRMED', paymentStatus: 'SUCCEEDED' }), false, '확정된 결제는 자동 조회를 멈춰야 한다')
 
 console.log('booking checkout state contracts passed')
