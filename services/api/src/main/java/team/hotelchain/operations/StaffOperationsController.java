@@ -26,16 +26,19 @@ public class StaffOperationsController {
     private final StaffReservationQueryService reservationQuery;
     private final StaffRoomReassignmentService roomReassignment;
     private final RoomOperationsService roomOperations;
+    private final CheckedInRoomMoveService checkedInRoomMove;
 
     public StaffOperationsController(StaffOperationsService operations, DailyOperationsService dailyOperations,
             StaffReservationQueryService reservationQuery,
             StaffRoomReassignmentService roomReassignment,
-            RoomOperationsService roomOperations) {
+            RoomOperationsService roomOperations,
+            CheckedInRoomMoveService checkedInRoomMove) {
         this.operations = operations;
         this.dailyOperations = dailyOperations;
         this.reservationQuery = reservationQuery;
         this.roomReassignment = roomReassignment;
         this.roomOperations = roomOperations;
+        this.checkedInRoomMove = checkedInRoomMove;
     }
 
     @GetMapping("/hotels/{hotelId}/operations")
@@ -60,6 +63,22 @@ public class StaffOperationsController {
             @RequestHeader("Idempotency-Key") String idempotencyKey,
             @RequestBody RoomOperationalTransitionRequest request) {
         return roomOperations.transition(token, roomId, idempotencyKey, request);
+    }
+
+    @GetMapping("/reservations/{reservationId}/checked-in-room-move-options")
+    public CheckedInRoomMoveOptions checkedInRoomMoveOptions(
+            @PathVariable UUID reservationId,
+            @RequestHeader("X-Staff-Session") String token) {
+        return checkedInRoomMove.options(token, reservationId);
+    }
+
+    @PostMapping("/reservations/{reservationId}/checked-in-room-moves")
+    public CheckedInRoomMoveResult moveCheckedInRoom(
+            @PathVariable UUID reservationId,
+            @RequestHeader("X-Staff-Session") String token,
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @RequestBody CheckedInRoomMoveRequest request) {
+        return checkedInRoomMove.move(token, reservationId, idempotencyKey, request);
     }
 
     @GetMapping("/hotels/{hotelId}/reservations")
