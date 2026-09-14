@@ -231,7 +231,7 @@ public class ReservationChangeSettlementService {
     public CustomerReservationChangePaymentView current(String sessionToken) {
         CustomerContext context = customerContext(sessionToken, true);
         return new CustomerReservationChangePaymentView(
-                suffix(context.reservationId()), context.checkIn(), context.checkOut(),
+                context.reservationId(), suffix(context.reservationId()), context.checkIn(), context.checkOut(),
                 context.roomTypeName(), context.ratePlanName(), context.amountKrw(), context.currency(),
                 context.expiresAt(), "테스트 결제", context.status());
     }

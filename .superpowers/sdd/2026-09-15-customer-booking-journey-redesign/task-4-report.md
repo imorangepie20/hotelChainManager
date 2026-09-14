@@ -57,3 +57,26 @@ git diff --check
 - 실제 고객 예약 조회 응답은 객실 유형명과 결제 상태를 아직 포함하지 않는다. 화면은 서버가 이 선택 필드를 제공할 때 표시하고, 없는 경우 각각 안전한 예약 식별자와 `서버 확인 필요`를 표시한다.
 - 고객 변경 세션 응답은 전체 예약 ID 대신 마지막 8자리만 제공한다. 상세 화면은 이 suffix가 현재 예약 ID와 일치할 때만 카드를 표시하며, Task 5의 변경 결제 응답 확장 시 전체 예약 ID를 제공하면 더 직접적으로 검증할 수 있다.
 - 브라우저, Playwright, 라이브 API/DB, 토스 결제와 실제 환불은 사용자 소유 검증 범위로 남아 있다.
+
+## 수정 라운드 1
+
+- 고객 변경 결제 세션 응답에 전체 `reservationId`를 추가하고, 고객 상세는 suffix가 아닌 UUID 완전 일치일 때만 변경 진행 카드와 추가 결제 행동을 표시한다. 같은 마지막 8자리를 가진 다른 예약을 거부하는 순수·브라우저 계약을 추가했다.
+- 고객 취소 미리보기 응답에 저장 정책의 `timezone`을 포함했다. 취소 마감은 브라우저 지역 설정 대신 이 timezone을 명시한 `Intl.DateTimeFormat`으로 표시한다.
+- 예약 관리 화면은 `/en/reservations`에서 영문 상태·버튼·빈 상태·대화상자·통화·날짜 형식과 `/en` 경로를 사용한다.
+- 취소 대화상자는 Tab/Shift+Tab 순환, Escape 닫기와 실행 실패 `role="alert"` 포커스를 제공한다. 오류가 대화상자 뒤에 숨지 않는다.
+- 기존 격리 PostgreSQL 통합 테스트에 고객 취소 미리보기의 정상 토큰·잘못된 토큰·마감 경계·상태/재고/취소 이력 비변경 계약을 추가했다. 사용자 지시에 따라 이 통합 테스트는 실행하지 않았다.
+
+### 수정 라운드 1 검증
+
+```powershell
+cd apps/web
+node --experimental-strip-types src/lib/reservation-management-state.test.ts
+pnpm exec tsc -b
+pnpm run build
+
+cd ../../services/api
+.\mvnw.cmd -q -DskipTests compile
+.\mvnw.cmd -q -DskipTests test-compile
+```
+
+모두 exit code 0으로 통과했다. Playwright, 브라우저, 라이브 서버·DB와 PG/환불은 실행하지 않았다.

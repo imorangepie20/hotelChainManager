@@ -138,6 +138,43 @@ class CancellationIntegrationTest {
     }
 
     @Test
+    void customerCancellationPreviewEndpointRequiresTheReservationTokenAndDoesNotMutate() throws Exception {
+        ReservationView reservation = confirmedReservation("customer-preview-http");
+        var mvc = MockMvcBuilders.webAppContextSetup(context).build();
+
+        mvc.perform(get("/api/reservations/{id}/cancellation-preview", reservation.id())
+                        .header("X-Reservation-Token", TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.reservationId").value(reservation.id().toString()))
+                .andExpect(jsonPath("$.cancellable").value(true))
+                .andExpect(jsonPath("$.refundAmount").value(200_000))
+                .andExpect(jsonPath("$.timezone").value("Asia/Seoul"));
+        mvc.perform(get("/api/reservations/{id}/cancellation-preview", reservation.id())
+                        .header("X-Reservation-Token", token(9)))
+                .andExpect(status().isNotFound());
+
+        assertThat(reservationService.get(reservation.id(), TOKEN).status()).isEqualTo("CONFIRMED");
+        assertThat(jdbc.queryForObject("select count(*) from cancellation_attempt where reservation_id = ?", Integer.class, reservation.id()))
+                .isZero();
+        assertInventory(2);
+    }
+
+    @Test
+    void customerCancellationPreviewDisablesTheActionAtTheSavedPolicyCutoff() {
+        ReservationView reservation = confirmedReservation("customer-preview-cutoff");
+        clock.set(LocalDateTime.of(CHECK_IN.minusDays(1), LocalTime.of(18, 0)).atZone(ZoneId.of("Asia/Seoul")).toInstant());
+
+        CancellationPreview preview = cancellationService.preview(reservation.id(), TOKEN);
+
+        assertThat(preview.cancellable()).isFalse();
+        assertThat(preview.refundAmount()).isZero();
+        assertThat(preview.timezone()).isEqualTo("Asia/Seoul");
+        assertThat(preview.unavailableReason()).isEqualTo("취소 가능 시간이 지났습니다.");
+        assertThat(reservationService.get(reservation.id(), TOKEN).status()).isEqualTo("CONFIRMED");
+        assertInventory(2);
+    }
+
+    @Test
     void staffCancellationUsesTheSavedPolicyAndRecordsTheActor() {
         ReservationView reservation = confirmedReservation("staff-cancel");
         StaffSessionView session = staffAccess.login("cancel-staff@example.com", "password");

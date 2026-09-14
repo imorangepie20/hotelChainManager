@@ -14,7 +14,7 @@ async function mockApi(page: Page, reservation = confirmed, options: { preview?:
     if (url.pathname === '/api/hotels' || url.pathname === '/api/website/navigation') return route.fulfill({ json: [] })
     if (url.pathname === `/api/reservations/${id}`) return route.request().headers()['x-reservation-token'] === access.managementToken
       ? route.fulfill({ json: reservation }) : route.fulfill({ status: 404, json: { code: 'NOT_FOUND', message: '없음' } })
-    if (url.pathname === `/api/reservations/${id}/cancellation-preview`) return route.fulfill({ json: options.preview ?? { reservationId: id, status: 'CONFIRMED', cancellable: true, refundAmount: 360000, currency: 'KRW', cutoffAt: '2026-09-21T09:00:00.000Z', unavailableReason: null } })
+    if (url.pathname === `/api/reservations/${id}/cancellation-preview`) return route.fulfill({ json: options.preview ?? { reservationId: id, status: 'CONFIRMED', cancellable: true, refundAmount: 360000, currency: 'KRW', cutoffAt: '2026-09-21T09:00:00.000Z', timezone: 'Asia/Seoul', unavailableReason: null } })
     if (url.pathname === `/api/reservations/${id}/cancel`) return route.fulfill({ json: { status: 'CANCELLED', refundAmount: 360000 } })
     if (url.pathname === '/api/reservation-change-payments/current') return options.change ? route.fulfill({ json: options.change }) : route.fulfill({ status: 404, json: { code: 'NOT_FOUND', message: '없음' } })
     return route.fulfill({ status: 404, json: { code: 'NOT_FOUND', message: '없음' } })
@@ -25,7 +25,7 @@ test('같은 브라우저의 예약 목록과 상세를 표시한다', async ({ 
   await storeAccess(page); await mockApi(page)
   await page.goto('/reservations')
   await expect(page.getByRole('heading', { name: '내 예약' })).toBeVisible()
-  await page.getByRole('link', { name: /스탠다드 시티 예약 상세/ }).click()
+  await page.getByRole('link', { name: /스탠다드 시티 내 예약/ }).click()
   await expect(page.getByText('예약 확정')).toBeVisible()
   await expect(page.getByRole('button', { name: '예약 취소' })).toBeVisible()
 })
@@ -57,8 +57,14 @@ test('취소 처리 중, 취소 완료, 만료 상태에는 서버가 허용한 
 })
 
 test('현재 고객 변경 세션의 추가 결제만 상세에서 계속한다', async ({ page }) => {
-  await storeAccess(page); await mockApi(page, confirmed, { change: { reservationNumberSuffix: id.slice(-8), checkIn: '2026-09-24', checkOut: '2026-09-26', roomTypeName: '디럭스 오션', ratePlanName: '유연 취소', additionalAmountKrw: 100000, currency: 'KRW', expiresAt: '2026-09-20T10:00:00.000Z', environmentLabel: '테스트 결제', status: 'AWAITING_PAYMENT' } })
+  await storeAccess(page); await mockApi(page, confirmed, { change: { reservationId: id, reservationNumberSuffix: id.slice(-8), checkIn: '2026-09-24', checkOut: '2026-09-26', roomTypeName: '디럭스 오션', ratePlanName: '유연 취소', additionalAmountKrw: 100000, currency: 'KRW', expiresAt: '2026-09-20T10:00:00.000Z', environmentLabel: '테스트 결제', status: 'AWAITING_PAYMENT' } })
   await page.goto(`/reservations/${id}`)
   await expect(page.getByText('추가 결제 대기')).toBeVisible()
   await expect(page.getByRole('link', { name: '추가 결제 계속하기' })).toHaveAttribute('href', '/reservation-change-payment')
+})
+
+test('같은 suffix의 다른 예약 변경 세션은 연결하지 않는다', async ({ page }) => {
+  await storeAccess(page); await mockApi(page, confirmed, { change: { reservationId: `aaaaaaaa-aaaa-aaaa-aaaa-${id.slice(-12)}`, reservationNumberSuffix: id.slice(-8), checkIn: '2026-09-24', checkOut: '2026-09-26', roomTypeName: '디럭스 오션', ratePlanName: '유연 취소', additionalAmountKrw: 100000, currency: 'KRW', expiresAt: '2026-09-20T10:00:00.000Z', environmentLabel: '테스트 결제', status: 'AWAITING_PAYMENT' } })
+  await page.goto(`/reservations/${id}`)
+  await expect(page.getByRole('link', { name: '추가 결제 계속하기' })).toHaveCount(0)
 })

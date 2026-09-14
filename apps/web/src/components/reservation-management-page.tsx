@@ -1,135 +1,48 @@
 import { useEffect, useRef, useState } from 'react'
 import { CalendarDays, CreditCard, ReceiptText, X } from 'lucide-react'
-
 import { ApiFailure, api, type CancellationPreview, type Reservation, type ReservationChangePayment } from '../lib/api'
 import { BookingSessionStore, type ReservationAccess } from '../lib/booking-session'
-import { canContinueChangePayment, changeStatusLabel, reservationStatusLabel } from '../lib/reservation-management-state'
+import { canContinueChangePayment, changeStatusLabel, formatReservationDateTime, reservationStatusLabel } from '../lib/reservation-management-state'
 
 type Props = { reservationId?: string; locale?: 'ko' | 'en' }
 type LoadedReservation = { access: ReservationAccess; reservation: Reservation }
 
-const money = new Intl.NumberFormat('ko-KR')
-const date = new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' })
-const dateTime = new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+const words = {
+  ko: { home: '홈으로', title: '내 예약', loading: '예약 정보를 안전하게 불러오는 중입니다.', empty: '이 브라우저에서 확인할 예약이 없습니다', emptyHelp: '예약을 진행한 같은 브라우저에서 다시 확인해 주세요. 다른 기기에서는 예약 완료 이메일의 보안 링크를 사용해 주세요.', search: '예약 검색하기', missing: '확인할 예약 정보가 없습니다', missingHelp: '개인정보 보호를 위해 이 브라우저에서 만든 예약만 표시합니다.', unavailable: '예약 정보를 불러올 수 없습니다', unavailableHelp: '예약 정보가 만료되었거나 더 이상 이 브라우저에서 확인할 수 없습니다.', mine: '내 예약', back: '← 내 예약', schedule: '숙박 일정', rooms: '객실 수', payment: '결제 상태', paymentUnknown: '서버 확인 필요', total: '결제 금액', policy: '취소 정책', policyUnknown: '서버에서 저장한 취소 정책을 확인합니다.', cutoff: '취소 가능 시각', refund: '예상 환불액', change: '예약 변경', difference: '차액', until: '까지', continue: '추가 결제 계속하기', cancel: '예약 취소', cancelTitle: '예약을 취소할까요?', cancelHelp: '취소 정책에 따라 예상 환불액은 {amount}입니다. 취소를 실행하면 서버에서 최신 상태와 환불 가능 금액을 다시 확인합니다.', confirm: '예약 취소 확정', cancelling: '예약 취소를 처리하는 중…', backAction: '돌아가기', close: '닫기', failure: '예약 취소를 완료하지 못했습니다. 현재 예약 상태를 다시 확인해 주세요.', fallback: '예약' },
+  en: { home: 'Home', title: 'My reservations', loading: 'Loading your reservation securely.', empty: 'No reservations are available in this browser', emptyHelp: 'Use the same browser that made the reservation. On another device, use the secure link in your reservation email.', search: 'Search rooms', missing: 'No reservation information is available', missingHelp: 'For privacy, only reservations made in this browser are shown.', unavailable: 'We could not load this reservation', unavailableHelp: 'The reservation may have expired or is no longer available in this browser.', mine: 'My reservations', back: '← My reservations', schedule: 'Stay dates', rooms: 'Rooms', payment: 'Payment status', paymentUnknown: 'Check with the server', total: 'Payment total', policy: 'Cancellation policy', policyUnknown: 'The saved cancellation policy is being verified by the server.', cutoff: 'Cancellation deadline', refund: 'Expected refund', change: 'Reservation change', difference: 'Difference', until: 'until', continue: 'Continue additional payment', cancel: 'Cancel reservation', cancelTitle: 'Cancel this reservation?', cancelHelp: 'The expected refund under the cancellation policy is {amount}. The server will check the latest status and refundable amount again before cancellation.', confirm: 'Confirm cancellation', cancelling: 'Cancelling reservation…', backAction: 'Go back', close: 'Close', failure: 'We could not cancel the reservation. Please check the current reservation status again.', fallback: 'Reservation' },
+} as const
 
-function failureMessage(error: unknown, fallback: string) {
-  return error instanceof ApiFailure ? error.message : fallback
-}
-
-function detailPath(reservationId: string, locale: 'ko' | 'en') {
-  return `${locale === 'en' ? '/en' : ''}/reservations/${reservationId}`
-}
-
-function reservationName(reservation: Reservation) {
-  return reservation.roomTypeName ?? `예약 ${reservation.id.slice(-8)}`
-}
+function route(locale: 'ko' | 'en', suffix = '') { return `${locale === 'en' ? '/en' : ''}${suffix}` || '/' }
+function money(amount: number, currency: string, locale: 'ko' | 'en') { return new Intl.NumberFormat(locale === 'en' ? 'en-US' : 'ko-KR', { style: 'currency', currency, maximumFractionDigits: 0 }).format(amount) }
+function date(value: string, locale: 'ko' | 'en') { return new Intl.DateTimeFormat(locale === 'en' ? 'en-US' : 'ko-KR', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' }).format(new Date(`${value}T12:00:00Z`)) }
+function name(reservation: Reservation, locale: 'ko' | 'en') { return reservation.roomTypeName ?? `${words[locale].fallback} ${reservation.id.slice(-8)}` }
 
 export function ReservationManagementPage({ reservationId, locale = 'ko' }: Props) {
+  const text = words[locale]
   const session = useRef(new BookingSessionStore())
   const cancelButton = useRef<HTMLButtonElement>(null)
+  const closeButton = useRef<HTMLButtonElement>(null)
   const dialog = useRef<HTMLDivElement>(null)
-  const [loading, setLoading] = useState(true)
-  const [entries, setEntries] = useState<LoadedReservation[]>([])
-  const [preview, setPreview] = useState<CancellationPreview | null>(null)
-  const [change, setChange] = useState<ReservationChangePayment | null>(null)
-  const [error, setError] = useState('')
-  const [dialogOpen, setDialogOpen] = useState(false)
-  const [cancelling, setCancelling] = useState(false)
-
-  const access = reservationId
-    ? session.current.listReservationAccess().find(item => item.reservationId === reservationId) ?? null
-    : null
+  const errorRef = useRef<HTMLParagraphElement>(null)
+  const [loading, setLoading] = useState(true); const [entries, setEntries] = useState<LoadedReservation[]>([])
+  const [preview, setPreview] = useState<CancellationPreview | null>(null); const [change, setChange] = useState<ReservationChangePayment | null>(null)
+  const [dialogOpen, setDialogOpen] = useState(false); const [cancelling, setCancelling] = useState(false); const [error, setError] = useState('')
+  const access = reservationId ? session.current.listReservationAccess().find(item => item.reservationId === reservationId) ?? null : null
   const reservation = reservationId ? entries.find(item => item.access.reservationId === reservationId)?.reservation ?? null : null
 
-  useEffect(() => {
-    let active = true
-    const accesses = reservationId ? (access ? [access] : []) : session.current.listReservationAccess()
-    Promise.all(accesses.map(async item => {
-      try { return { access: item, reservation: await api.getReservation(item.reservationId, item.managementToken) } }
-      catch { return null }
-    })).then(results => {
-      if (!active) return
-      setEntries(results.filter((item): item is LoadedReservation => item !== null))
-      setLoading(false)
-    })
-    return () => { active = false }
-  }, [reservationId])
+  useEffect(() => { let active = true; const accesses = reservationId ? (access ? [access] : []) : session.current.listReservationAccess(); Promise.all(accesses.map(async item => { try { return { access: item, reservation: await api.getReservation(item.reservationId, item.managementToken) } } catch { return null } })).then(results => { if (active) { setEntries(results.filter((item): item is LoadedReservation => item !== null)); setLoading(false) } }); return () => { active = false } }, [reservationId])
+  useEffect(() => { if (!reservation || !access || reservation.status !== 'CONFIRMED') { setPreview(null); return }; let active = true; api.cancellationPreview(reservation.id, access.managementToken).then(result => { if (active) setPreview(result) }).catch(() => { if (active) setPreview(null) }); return () => { active = false } }, [reservation?.id, reservation?.status, access?.managementToken])
+  useEffect(() => { if (!reservation) { setChange(null); return }; let active = true; api.reservationChangePayment().then(result => { if (active && reservation.id === result.reservationId) setChange(result) }).catch(() => { if (active) setChange(null) }); return () => { active = false } }, [reservation?.id])
 
-  useEffect(() => {
-    if (!reservation || !access || reservation.status !== 'CONFIRMED') { setPreview(null); return }
-    let active = true
-    api.cancellationPreview(reservation.id, access.managementToken)
-      .then(result => { if (active) setPreview(result) })
-      .catch(() => { if (active) setPreview(null) })
-    return () => { active = false }
-  }, [reservation?.id, reservation?.status, access?.managementToken])
+  function closeDialog() { setDialogOpen(false); setError(''); window.setTimeout(() => cancelButton.current?.focus(), 0) }
+  useEffect(() => { if (!dialogOpen) return; closeButton.current?.focus(); const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') { closeDialog(); return }; if (event.key !== 'Tab') return; const controls = dialog.current?.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'); if (!controls?.length) return; const first = controls[0]!; const last = controls[controls.length - 1]!; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() } }; window.addEventListener('keydown', onKeyDown); return () => window.removeEventListener('keydown', onKeyDown) }, [dialogOpen])
 
-  useEffect(() => {
-    if (!reservation) { setChange(null); return }
-    let active = true
-    api.reservationChangePayment().then(result => {
-      if (active && reservation.id.endsWith(result.reservationNumberSuffix)) setChange(result)
-    }).catch(() => { if (active) setChange(null) })
-    return () => { active = false }
-  }, [reservation?.id])
+  async function cancelReservation() { if (!reservation || !access || !preview?.cancellable) return; setCancelling(true); setError(''); try { await api.cancel(reservation.id, access.managementToken, crypto.randomUUID()); const next = await api.getReservation(reservation.id, access.managementToken); setEntries(current => current.map(item => item.reservation.id === next.id ? { ...item, reservation: next } : item)); setPreview(null); closeDialog() } catch (cause) { setError(cause instanceof ApiFailure ? cause.message : text.failure); window.requestAnimationFrame(() => errorRef.current?.focus()) } finally { setCancelling(false) } }
 
-  useEffect(() => {
-    if (!dialogOpen) return
-    dialog.current?.focus()
-    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') closeDialog() }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [dialogOpen])
-
-  function closeDialog() {
-    setDialogOpen(false)
-    window.setTimeout(() => cancelButton.current?.focus(), 0)
-  }
-
-  async function cancelReservation() {
-    if (!reservation || !access || !preview?.cancellable) return
-    setCancelling(true); setError('')
-    try {
-      await api.cancel(reservation.id, access.managementToken, crypto.randomUUID())
-      const next = await api.getReservation(reservation.id, access.managementToken)
-      setEntries(current => current.map(item => item.reservation.id === next.id ? { ...item, reservation: next } : item))
-      setPreview(null)
-      closeDialog()
-    } catch (cause) {
-      setError(failureMessage(cause, '예약 취소를 완료하지 못했습니다. 현재 예약 상태를 다시 확인해 주세요.'))
-    } finally {
-      setCancelling(false)
-    }
-  }
-
-  if (loading) return <main className="reservation-management-shell"><p className="reservation-management-state" role="status">예약 정보를 안전하게 불러오는 중입니다.</p></main>
-
-  if (!reservationId) return <main className="reservation-management-shell" aria-labelledby="reservation-management-title">
-    <header className="reservation-management-header"><a className="brand" href={locale === 'en' ? '/en' : '/'}><span>STAY</span> HANEUL</a><a className="manage-link" href={locale === 'en' ? '/en' : '/'}>홈으로</a></header>
-    <section className="reservation-management-list">
-      <p className="section-kicker">MY RESERVATIONS</p><h1 id="reservation-management-title">내 예약</h1>
-      {entries.length === 0 ? <div className="reservation-management-empty"><h2>이 브라우저에서 확인할 예약이 없습니다</h2><p>예약을 진행한 같은 브라우저에서 다시 확인해 주세요. 다른 기기에서는 예약 완료 이메일의 보안 링크를 사용해 주세요.</p><a className="primary" href={locale === 'en' ? '/en' : '/'}>예약 검색하기</a></div> : <div className="reservation-card-list">{entries.map(({ reservation: item }) => <article className="reservation-card" key={item.id}>
-        <div><p className="reservation-status">{reservationStatusLabel(item.status)}</p><h2>{reservationName(item)}</h2><p>{item.checkIn} – {item.checkOut} · 객실 {item.rooms}개</p></div>
-        <a className="outline" href={detailPath(item.id, locale)} aria-label={`${reservationName(item)} 예약 상세`}>예약 상세 보기</a>
-      </article>)}</div>}
-    </section>
-  </main>
-
-  if (!access) return <main className="reservation-management-shell"><section className="reservation-management-empty"><h1>확인할 예약 정보가 없습니다</h1><p>개인정보 보호를 위해 이 브라우저에서 만든 예약만 표시합니다.</p><a className="primary" href={locale === 'en' ? '/en/reservations' : '/reservations'}>내 예약으로</a></section></main>
-  if (!reservation) return <main className="reservation-management-shell"><section className="reservation-management-empty"><h1>예약 정보를 불러올 수 없습니다</h1><p>예약 정보가 만료되었거나 더 이상 이 브라우저에서 확인할 수 없습니다.</p><a className="primary" href={locale === 'en' ? '/en/reservations' : '/reservations'}>내 예약으로</a></section></main>
-
-  const changeCanContinue = change && canContinueChangePayment(change.status, reservation.id, change.reservationNumberSuffix)
-  return <main className="reservation-management-shell" aria-labelledby="reservation-detail-title">
-    <header className="reservation-management-header"><a className="brand" href={locale === 'en' ? '/en' : '/'}><span>STAY</span> HANEUL</a><a className="manage-link" href={locale === 'en' ? '/en/reservations' : '/reservations'}>내 예약</a></header>
-    <section className="reservation-detail">
-      <a className="reservation-back" href={locale === 'en' ? '/en/reservations' : '/reservations'}>← 내 예약</a>
-      <p className="reservation-status">{reservationStatusLabel(reservation.status)}</p><h1 id="reservation-detail-title">{reservationName(reservation)}</h1>
-      <dl className="reservation-detail-list"><div><dt><CalendarDays size={17} aria-hidden="true" /> 숙박 일정</dt><dd>{date.format(new Date(`${reservation.checkIn}T00:00:00`))} – {date.format(new Date(`${reservation.checkOut}T00:00:00`))}</dd></div><div><dt>객실 수</dt><dd>{reservation.rooms}개</dd></div><div><dt><ReceiptText size={17} aria-hidden="true" /> 결제 상태</dt><dd>{reservation.paymentStatus ?? '서버 확인 필요'}</dd></div><div><dt>결제 금액</dt><dd>{money.format(reservation.total)}원</dd></div></dl>
-      <section className="reservation-policy"><h2>취소 정책</h2><p>{reservation.cancellationPolicy || '서버에서 저장한 취소 정책을 확인합니다.'}</p>{preview && <p>{preview.cancellable ? `취소 가능 시각: ${dateTime.format(new Date(preview.cutoffAt))} · 예상 환불액 ${money.format(preview.refundAmount)}원` : (preview.unavailableReason ?? '현재 예약은 취소할 수 없습니다.')}</p>}</section>
-      {change && <section className="reservation-change-card" aria-labelledby="reservation-change-title"><p className="section-kicker">RESERVATION CHANGE</p><h2 id="reservation-change-title">{changeStatusLabel(change.status)}</h2><p>{date.format(new Date(`${change.checkIn}T00:00:00`))} – {date.format(new Date(`${change.checkOut}T00:00:00`))} · {change.roomTypeName}</p><p>차액 {money.format(change.additionalAmountKrw)}원 · {dateTime.format(new Date(change.expiresAt))}까지</p>{changeCanContinue && <a className="primary" href="/reservation-change-payment"><CreditCard size={18} aria-hidden="true" />추가 결제 계속하기</a>}</section>}
-      {error && <p className="reservation-management-error" role="alert">{error}</p>}
-      {preview?.cancellable && <button className="outline reservation-cancel" type="button" ref={cancelButton} onClick={() => setDialogOpen(true)}>예약 취소</button>}
-    </section>
-    {dialogOpen && preview && <div className="reservation-dialog-backdrop" role="presentation"><div className="reservation-dialog" role="dialog" aria-modal="true" aria-labelledby="cancel-dialog-title" tabIndex={-1} ref={dialog}><button className="reservation-dialog-close" type="button" aria-label="닫기" onClick={closeDialog}><X size={20} /></button><h2 id="cancel-dialog-title">예약을 취소할까요?</h2><p>취소 정책에 따라 예상 환불액은 {money.format(preview.refundAmount)}원입니다. 취소를 실행하면 서버에서 최신 상태와 환불 가능 금액을 다시 확인합니다.</p><div className="reservation-dialog-actions"><button className="outline" type="button" onClick={closeDialog} disabled={cancelling}>돌아가기</button><button className="primary" type="button" onClick={() => void cancelReservation()} disabled={cancelling}>{cancelling ? '예약 취소를 처리하는 중…' : '예약 취소 확정'}</button></div></div></div>}
-  </main>
+  if (loading) return <main className="reservation-management-shell"><p className="reservation-management-state" role="status">{text.loading}</p></main>
+  if (!reservationId) return <main className="reservation-management-shell" aria-labelledby="reservation-management-title"><header className="reservation-management-header"><a className="brand" href={route(locale)}><span>STAY</span> HANEUL</a><a className="manage-link" href={route(locale)}>{text.home}</a></header><section className="reservation-management-list"><p className="section-kicker">MY RESERVATIONS</p><h1 id="reservation-management-title">{text.title}</h1>{entries.length === 0 ? <div className="reservation-management-empty"><h2>{text.empty}</h2><p>{text.emptyHelp}</p><a className="primary" href={route(locale)}>{text.search}</a></div> : <div className="reservation-card-list">{entries.map(({ reservation: item }) => <article className="reservation-card" key={item.id}><div><p className="reservation-status">{reservationStatusLabel(item.status, locale)}</p><h2>{name(item, locale)}</h2><p>{item.checkIn} – {item.checkOut} · {text.rooms} {item.rooms}</p></div><a className="outline" href={route(locale, `/reservations/${item.id}`)} aria-label={`${name(item, locale)} ${text.mine}`}>{text.mine}</a></article>)}</div>}</section></main>
+  if (!access) return <main className="reservation-management-shell"><section className="reservation-management-empty"><h1>{text.missing}</h1><p>{text.missingHelp}</p><a className="primary" href={route(locale, '/reservations')}>{text.mine}</a></section></main>
+  if (!reservation) return <main className="reservation-management-shell"><section className="reservation-management-empty"><h1>{text.unavailable}</h1><p>{text.unavailableHelp}</p><a className="primary" href={route(locale, '/reservations')}>{text.mine}</a></section></main>
+  const canContinue = change && canContinueChangePayment(change.status, reservation.id, change.reservationId)
+  return <main className="reservation-management-shell" aria-labelledby="reservation-detail-title"><header className="reservation-management-header"><a className="brand" href={route(locale)}><span>STAY</span> HANEUL</a><a className="manage-link" href={route(locale, '/reservations')}>{text.mine}</a></header><section className="reservation-detail"><a className="reservation-back" href={route(locale, '/reservations')}>{text.back}</a><p className="reservation-status">{reservationStatusLabel(reservation.status, locale)}</p><h1 id="reservation-detail-title">{name(reservation, locale)}</h1><dl className="reservation-detail-list"><div><dt><CalendarDays size={17} aria-hidden="true" /> {text.schedule}</dt><dd>{date(reservation.checkIn, locale)} – {date(reservation.checkOut, locale)}</dd></div><div><dt>{text.rooms}</dt><dd>{reservation.rooms}</dd></div><div><dt><ReceiptText size={17} aria-hidden="true" /> {text.payment}</dt><dd>{reservation.paymentStatus ?? text.paymentUnknown}</dd></div><div><dt>{text.total}</dt><dd>{money(reservation.total, reservation.currency, locale)}</dd></div></dl><section className="reservation-policy"><h2>{text.policy}</h2><p>{reservation.cancellationPolicy || text.policyUnknown}</p>{preview && <p>{preview.cancellable ? `${text.cutoff}: ${formatReservationDateTime(preview.cutoffAt, locale, preview.timezone)} · ${text.refund} ${money(preview.refundAmount, preview.currency, locale)}` : (preview.unavailableReason ?? text.policyUnknown)}</p>}</section>{change && <section className="reservation-change-card" aria-labelledby="reservation-change-title"><p className="section-kicker">RESERVATION CHANGE</p><h2 id="reservation-change-title">{changeStatusLabel(change.status, locale)}</h2><p>{date(change.checkIn, locale)} – {date(change.checkOut, locale)} · {change.roomTypeName}</p><p>{text.difference} {money(change.additionalAmountKrw, change.currency, locale)} · {formatReservationDateTime(change.expiresAt, locale, 'Asia/Seoul')} {text.until}</p>{canContinue && <a className="primary" href={route(locale, '/reservation-change-payment')}><CreditCard size={18} aria-hidden="true" />{text.continue}</a>}</section>}{preview?.cancellable && <button className="outline reservation-cancel" type="button" ref={cancelButton} onClick={() => setDialogOpen(true)}>{text.cancel}</button>}</section>{dialogOpen && preview && <div className="reservation-dialog-backdrop" role="presentation"><div className="reservation-dialog" role="dialog" aria-modal="true" aria-labelledby="cancel-dialog-title" tabIndex={-1} ref={dialog}><button className="reservation-dialog-close" type="button" aria-label={text.close} onClick={closeDialog} ref={closeButton}><X size={20} /></button><h2 id="cancel-dialog-title">{text.cancelTitle}</h2><p>{text.cancelHelp.replace('{amount}', money(preview.refundAmount, preview.currency, locale))}</p>{error && <p className="reservation-management-error" role="alert" tabIndex={-1} ref={errorRef}>{error}</p>}<div className="reservation-dialog-actions"><button className="outline" type="button" onClick={closeDialog} disabled={cancelling}>{text.backAction}</button><button className="primary" type="button" onClick={() => void cancelReservation()} disabled={cancelling}>{cancelling ? text.cancelling : text.confirm}</button></div></div></div>}</main>
 }

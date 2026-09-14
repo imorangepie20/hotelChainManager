@@ -15,6 +15,7 @@ export type Reservation = {
 }
 
 export type ReservationChangePayment = {
+  reservationId: string
   reservationNumberSuffix: string
   checkIn: string
   checkOut: string
@@ -29,7 +30,7 @@ export type ReservationChangePayment = {
 
 export type CancellationPreview = {
   reservationId: string; status: string; cancellable: boolean; refundAmount: number
-  currency: string; cutoffAt: string; unavailableReason: string | null
+  currency: string; cutoffAt: string; timezone: string; unavailableReason: string | null
 }
 export type PaymentMode = { provider: 'fake' | 'toss-test' | 'disabled' }
 

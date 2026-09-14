@@ -10,5 +10,6 @@ public record CancellationPreview(
         long refundAmount,
         String currency,
         Instant cutoffAt,
+        String timezone,
         String unavailableReason) {
 }

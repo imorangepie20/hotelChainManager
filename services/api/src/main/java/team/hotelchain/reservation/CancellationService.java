@@ -57,7 +57,7 @@ public class CancellationService {
                 ? "확정된 예약만 취소할 수 있습니다."
                 : beforeCutoff ? null : "취소 가능 시간이 지났습니다.";
         return new CancellationPreview(reservationId, reservation.status(), confirmed && beforeCutoff,
-                confirmed && beforeCutoff ? reservation.total() : 0, "KRW", cutoff, unavailableReason);
+                confirmed && beforeCutoff ? reservation.total() : 0, "KRW", cutoff, reservation.timezone(), unavailableReason);
     }
 
     StaffCancellationPreview previewForStaff(UUID reservationId) {
