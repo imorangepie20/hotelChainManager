@@ -55,6 +55,22 @@ class TossPaymentsHttpClientTest {
         assertThat(http.body()).contains("\"orderId\":\"order\"").contains("\"amount\":120000");
     }
 
+    @Test
+    void mapsIncompleteDoneResponseToUnknown() {
+        CapturingHttpClient http = new CapturingHttpClient("""
+                {"paymentKey":"pay","orderId":"order","totalAmount":0,
+                 "currency":"KRW","status":"DONE","transactionKey":"txn"}
+                """);
+        TossPaymentsHttpClient client = new TossPaymentsHttpClient(
+                properties("test_ck_x", "test_sk_x"), http);
+
+        TossPaymentsClient.ProviderPayment result = client.confirm(
+                new TossPaymentsClient.ConfirmCommand("pay", "order", 120000, "KRW", "idem-1"));
+
+        assertThat(result.status()).isEqualTo(TossPaymentsClient.ProviderStatus.UNKNOWN);
+        assertThat(result.errorCode()).isEqualTo("INCOMPLETE_DONE_RESPONSE");
+    }
+
     private TossPaymentsProperties properties(String clientKey, String secretKey) {
         return new TossPaymentsProperties(clientKey, secretKey, "hotel-test", "http://127.0.0.1:4000");
     }

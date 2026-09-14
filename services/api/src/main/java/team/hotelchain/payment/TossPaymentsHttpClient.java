@@ -88,10 +88,17 @@ public final class TossPaymentsHttpClient implements TossPaymentsClient {
             JsonNode body = json.readTree(responseBody == null ? "{}" : responseBody);
             if (statusCode >= 400) return new ProviderPayment(null, null, 0, null,
                     ProviderStatus.FAILED, null, safeCode(body.path("code").asText(null), "HTTP_4XX"));
+            String paymentKey = body.path("paymentKey").asText(null);
+            String orderId = body.path("orderId").asText(null);
+            long amountKrw = body.path("totalAmount").asLong();
+            String currency = body.path("currency").asText(null);
+            if ("DONE".equals(body.path("status").asText())
+                    && (!hasText(paymentKey) || !hasText(orderId) || amountKrw <= 0 || !"KRW".equals(currency))) {
+                return unknown("INCOMPLETE_DONE_RESPONSE");
+            }
             ProviderStatus status = "DONE".equals(body.path("status").asText())
                     ? ProviderStatus.DONE : ProviderStatus.FAILED;
-            return new ProviderPayment(body.path("paymentKey").asText(null), body.path("orderId").asText(null),
-                    body.path("totalAmount").asLong(), body.path("currency").asText(null), status,
+            return new ProviderPayment(paymentKey, orderId, amountKrw, currency, status,
                     body.path("transactionKey").asText(null),
                     status == ProviderStatus.DONE ? null : safeCode(body.path("code").asText(null), "STATUS_NOT_DONE"));
         } catch (JsonProcessingException exception) {
@@ -105,6 +112,10 @@ public final class TossPaymentsHttpClient implements TossPaymentsClient {
 
     private String safeCode(String code, String fallback) {
         return code == null || !code.matches("[A-Z0-9_]{1,80}") ? fallback : code;
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 
     private String requestBody(Object... fields) {
