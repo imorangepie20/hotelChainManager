@@ -86,7 +86,7 @@ export function ReservationChangePaymentPage() {
               </div>
               <div>
                 <dt><CalendarDays size={17} aria-hidden="true" /> 변경 일정</dt>
-                <dd>{date.format(new Date(`${payment.targetCheckIn}T00:00:00`))} – {date.format(new Date(`${payment.targetCheckOut}T00:00:00`))}</dd>
+                <dd>{date.format(new Date(`${payment.checkIn}T00:00:00`))} – {date.format(new Date(`${payment.checkOut}T00:00:00`))}</dd>
               </div>
               <div>
                 <dt>객실 · 요금</dt>

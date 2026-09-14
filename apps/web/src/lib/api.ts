@@ -11,12 +11,13 @@ export type Reservation = {
   id: string; status: string; checkIn: string; checkOut: string; rooms: number
   expiresAt: string; total: number; currency: string; nightlyPrices: NightlyPrice[]
   cancellationPolicy: string; guest: { name: string; email: string }
+  roomTypeName?: string; ratePlanName?: string; paymentStatus?: string
 }
 
 export type ReservationChangePayment = {
   reservationNumberSuffix: string
-  targetCheckIn: string
-  targetCheckOut: string
+  checkIn: string
+  checkOut: string
   roomTypeName: string
   ratePlanName: string
   additionalAmountKrw: number
@@ -24,6 +25,11 @@ export type ReservationChangePayment = {
   expiresAt: string
   environmentLabel: string
   status: string
+}
+
+export type CancellationPreview = {
+  reservationId: string; status: string; cancellable: boolean; refundAmount: number
+  currency: string; cutoffAt: string; unavailableReason: string | null
 }
 export type PaymentMode = { provider: 'fake' | 'toss-test' | 'disabled' }
 
@@ -101,6 +107,9 @@ export const api = {
     method: 'POST', headers: headers(token, key), body: JSON.stringify(body),
   }),
   getReservation: (id: string, token: string) => request<Reservation>(`/api/reservations/${id}`, { headers: headers(token) }),
+  cancellationPreview: (id: string, token: string) => request<CancellationPreview>(`/api/reservations/${encodeURIComponent(id)}/cancellation-preview`, {
+    headers: headers(token), cache: 'no-store',
+  }),
   tossCheckout: (id: string, token: string, key: string) => request<TossCheckout>(reservationPaymentPath(id, 'checkout'), {
     method: 'POST', headers: headers(token, key),
   }),

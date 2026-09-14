@@ -47,6 +47,19 @@ public class CancellationService {
         return cancelLocked(reservationId, idempotencyKey, reservation, null);
     }
 
+    @Transactional(readOnly = true)
+    public CancellationPreview preview(UUID reservationId, String token) {
+        CancellationReservation reservation = findReservation(reservationId, access.hashToken(token));
+        var cutoff = cutoff(reservation);
+        boolean confirmed = "CONFIRMED".equals(reservation.status());
+        boolean beforeCutoff = clock.instant().isBefore(cutoff);
+        String unavailableReason = !confirmed
+                ? "확정된 예약만 취소할 수 있습니다."
+                : beforeCutoff ? null : "취소 가능 시간이 지났습니다.";
+        return new CancellationPreview(reservationId, reservation.status(), confirmed && beforeCutoff,
+                confirmed && beforeCutoff ? reservation.total() : 0, "KRW", cutoff, unavailableReason);
+    }
+
     StaffCancellationPreview previewForStaff(UUID reservationId) {
         CancellationReservation reservation = findReservationForStaff(reservationId, false);
         var cutoff = cutoff(reservation);
@@ -153,6 +166,20 @@ public class CancellationService {
         if (reservation == null) {
             throw new ReservationNotFoundException();
         }
+        return reservation;
+    }
+
+    private CancellationReservation findReservation(UUID id, String tokenHash) {
+        CancellationReservation reservation = jdbc.query("""
+                SELECT id, room_type_id, check_in, check_out, rooms, status, total_krw,
+                       COALESCE(policy_snapshot->>'timezone', 'Asia/Seoul') AS timezone,
+                       COALESCE((policy_snapshot->>'refundCutoffDaysBefore')::integer, 1) AS cutoff_days,
+                       COALESCE((policy_snapshot->>'refundCutoffLocalTime')::time, '18:00'::time) AS cutoff_time,
+                       (SELECT count(*) FROM reservation_night rn WHERE rn.reservation_id = r.id) AS nights
+                  FROM reservation r
+                 WHERE id = ? AND management_token_hash = ?
+                """, rs -> rs.next() ? mapReservation(rs) : null, id, tokenHash);
+        if (reservation == null) throw new ReservationNotFoundException();
         return reservation;
     }
 
