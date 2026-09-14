@@ -29,9 +29,9 @@ import {
   updateStaffReservationStay,
 } from "@/lib/staff-api";
 import { ReservationChangeTimeline, reservationChangeStatusLabel } from "@/components/hotel-admin/reservation-change-timeline";
+import { describeReservationChangeLink, shouldPollReservationChangeRequest, type ReservationChangeLinkState } from "@/lib/reservation-change-link-state";
 
 const terminalStatuses = new Set(["COMPLETED", "REJECTED", "CANCELLED", "EXPIRED"]);
-const pollingStatuses = new Set(["AWAITING_PAYMENT", "REFUND_PENDING", "READY_TO_APPLY", "APPLYING"]);
 
 function createPublicToken() {
   const bytes = window.crypto.getRandomValues(new Uint8Array(32));
@@ -91,8 +91,12 @@ export function ReservationChangePanel({
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [saving, setSaving] = useState(false);
   const [customerUrl, setCustomerUrl] = useState("");
+  const [customerLinkCreatedAt, setCustomerLinkCreatedAt] = useState("");
+  const [customerLinkExpiresAt, setCustomerLinkExpiresAt] = useState("");
+  const [customerLinkState, setCustomerLinkState] = useState<ReservationChangeLinkState>("NOT_CREATED");
   const settlementAttempt = useRef<{ requestId: string; key: string; publicToken: string } | null>(null);
   const completedNotification = useRef<string | null>(null);
+  const customerLinkInputRef = useRef<HTMLInputElement | null>(null);
   const canPreview = checkIn.length > 0 && checkOut.length > 0 && checkOut > checkIn;
   const selectedOffer = preview?.offers.find((offer) => offerId(offer) === selectedOfferId) ?? null;
 
@@ -122,7 +126,7 @@ export function ReservationChangePanel({
   }, [reservation.reservationId, staff?.hotelId]);
 
   useEffect(() => {
-    if (!activeRequest || !pollingStatuses.has(activeRequest.status)) return;
+    if (!activeRequest || !shouldPollReservationChangeRequest(activeRequest.status)) return;
     const token = window.localStorage.getItem("hotel-chain-staff-session");
     if (!token) return;
     let current = true;
@@ -259,6 +263,7 @@ export function ReservationChangePanel({
       : { requestId: activeRequest.id, key: window.crypto.randomUUID(), publicToken: createPublicToken() };
     settlementAttempt.current = attempt;
     setSaving(true);
+    setCustomerLinkState("CREATING");
     setError(null);
     try {
       const link = await createReservationChangePaymentLink(
@@ -266,12 +271,40 @@ export function ReservationChangePanel({
         { version: activeRequest.version, publicToken: attempt.publicToken },
       );
       setCustomerUrl(link.customerUrl);
+      setCustomerLinkCreatedAt(link.createdAt ?? new Date().toISOString());
+      setCustomerLinkExpiresAt(link.expiresAt);
+      setCustomerLinkState(link.status === "EXPIRED" ? "EXPIRED" : "READY");
       setActiveRequest(await getReservationChangeRequest(token, activeRequest.id));
     } catch (cause) {
+      setCustomerLinkState("NOT_CREATED");
       setError(cause instanceof Error ? cause.message : "고객 결제 링크를 만들지 못했습니다.");
     } finally {
       setSaving(false);
     }
+  }
+
+  async function copyCustomerUrl() {
+    if (!customerUrl) return;
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
+      await navigator.clipboard.writeText(customerUrl);
+      setCustomerLinkState("COPIED");
+      setError(null);
+    } catch {
+      customerLinkInputRef.current?.focus();
+      customerLinkInputRef.current?.select();
+      setError("클립보드에 복사하지 못했습니다. 아래 URL을 선택해 전달해 주세요.");
+    }
+  }
+
+  function startNewRequestForExpiredLink() {
+    setCustomerUrl("");
+    setCustomerLinkCreatedAt("");
+    setCustomerLinkExpiresAt("");
+    setCustomerLinkState("NOT_CREATED");
+    settlementAttempt.current = null;
+    setActiveRequest(null);
+    beginEditing();
   }
 
   async function startRefund() {
@@ -310,7 +343,8 @@ export function ReservationChangePanel({
     }
   }
 
-  if (activeRequest && !terminalStatuses.has(activeRequest.status)) {
+  const linkDisplay = describeReservationChangeLink(activeRequest?.status ?? null, Boolean(customerUrl), customerLinkState);
+  if (activeRequest && (!terminalStatuses.has(activeRequest.status) || linkDisplay.keepVisible)) {
     return (
       <section aria-labelledby="reservation-change-title" className="space-y-4 border-b pb-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -339,10 +373,16 @@ export function ReservationChangePanel({
           <div className="space-y-2 rounded-xl border p-4">
             <Label htmlFor="reservation-change-customer-link">고객 결제 링크</Label>
             <div className="flex min-w-0 gap-2">
-              <Input id="reservation-change-customer-link" readOnly value={customerUrl} className="min-w-0" />
-              <Button type="button" variant="outline" aria-label="고객 결제 링크 복사" onClick={() => void navigator.clipboard.writeText(customerUrl)}><Copy className="size-4" aria-hidden="true" /></Button>
+              <Input ref={customerLinkInputRef} id="reservation-change-customer-link" readOnly value={customerUrl} onFocus={(event) => event.currentTarget.select()} className="min-w-0" />
+              <Button type="button" variant="outline" aria-label="고객 결제 링크 복사" onClick={() => void copyCustomerUrl()}><Copy className="size-4" aria-hidden="true" /></Button>
             </div>
-            <p className="text-xs text-muted-foreground">링크에는 예약 개인정보가 포함되지 않으며 15분 동안만 사용할 수 있습니다.</p>
+            <dl className="grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
+              <div><dt className="inline font-medium text-foreground">생성 시각: </dt><dd className="inline">{customerLinkCreatedAt ? displayDateTime(customerLinkCreatedAt) : "확인 중"}</dd></div>
+              <div><dt className="inline font-medium text-foreground">만료 시각: </dt><dd className="inline">{customerLinkExpiresAt ? displayDateTime(customerLinkExpiresAt) : "확인 중"}</dd></div>
+            </dl>
+            <p className="text-xs text-muted-foreground">로컬 테스트 결제 링크입니다. 이메일이나 문자로 자동 전달하지 않으므로 URL을 고객에게 직접 전달해 주세요.</p>
+            {customerLinkState === "COPIED" && <p role="status" className="text-xs text-emerald-700">복사했습니다. 고객에게 전달해 주세요.</p>}
+            {linkDisplay.state === "EXPIRED" && <p role="status" className="text-xs text-destructive">결제 링크가 만료되었습니다. 새 결제 링크를 위해 변경 요청을 다시 만들어 주세요.</p>}
           </div>
         )}
         <div className="flex flex-wrap justify-end gap-2">
@@ -353,7 +393,10 @@ export function ReservationChangePanel({
             <Button type="button" variant="ghost" disabled={saving} onClick={() => void runRequestAction("CANCEL")}>변경 요청 취소</Button>
           )}
           {activeRequest.actions.includes("PAYMENT_LINK") && (
-            <Button type="button" disabled={saving} onClick={() => void createPaymentLink()}><CreditCard className="size-4" aria-hidden="true" />고객 결제 링크 만들기</Button>
+            <Button type="button" disabled={saving} onClick={() => void createPaymentLink()}><CreditCard className="size-4" aria-hidden="true" />{customerLinkState === "CREATING" ? "고객 결제 링크 만드는 중" : "고객 결제 링크 만들기"}</Button>
+          )}
+          {linkDisplay.canStartNewRequest && (
+            <Button type="button" variant="outline" onClick={startNewRequestForExpiredLink}>새 결제 링크를 위해 변경 요청 만들기</Button>
           )}
           {activeRequest.actions.includes("REFUND") && (
             <Button type="button" disabled={saving} onClick={() => void startRefund()}>원 결제 수단으로 부분 환불</Button>

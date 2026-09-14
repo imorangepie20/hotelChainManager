@@ -231,8 +231,10 @@ public class ReservationChangeSettlementService {
     public CustomerReservationChangePaymentView current(String sessionToken) {
         CustomerContext context = customerContext(sessionToken, true);
         return new CustomerReservationChangePaymentView(
-                context.reservationId(), suffix(context.reservationId()), context.checkIn(), context.checkOut(),
-                context.roomTypeName(), context.ratePlanName(), context.amountKrw(), context.currency(),
+                context.reservationId(), suffix(context.reservationId()),
+                context.previousCheckIn(), context.previousCheckOut(), context.previousRoomTypeName(), context.previousRatePlanName(), context.previousTotalKrw(),
+                context.checkIn(), context.checkOut(), context.roomTypeName(), context.ratePlanName(), context.totalKrw(), context.differenceKrw(),
+                context.additionalAmountKrw(), context.currency(),
                 context.expiresAt(), "테스트 결제", context.status());
     }
 
@@ -345,14 +347,20 @@ public class ReservationChangeSettlementService {
     private CustomerContext customerContext(String sessionToken, boolean touch) {
         String tokenHash = reservationAccess.hashToken(sessionToken);
         CustomerContext context = jdbc.query("""
-                select session.id as session_id, request.reservation_id, request.target_check_in,
-                       request.target_check_out, room_type.name as room_type_name,
-                       rate_plan.name as rate_plan_name, quote.difference_krw, quote.currency,
+                select session.id as session_id, request.reservation_id,
+                       request.previous_check_in, request.previous_check_out,
+                       previous_room_type.name as previous_room_type_name,
+                       previous_rate_plan.name as previous_rate_plan_name,
+                       quote.previous_total_krw,
+                       request.target_check_in, request.target_check_out, room_type.name as room_type_name,
+                       rate_plan.name as rate_plan_name, quote.total_krw, quote.difference_krw, quote.currency,
                        request.settlement_expires_at, request.status,
                        attempt.id as attempt_id, attempt.checkout_url
                 from reservation_change_customer_session session
                 join reservation_change_request request on request.id = session.request_id
                 join reservation_change_quote quote on quote.id = request.current_quote_id
+                join room_type previous_room_type on previous_room_type.id = request.previous_room_type_id
+                join rate_plan previous_rate_plan on previous_rate_plan.id = request.previous_rate_plan_id
                 join room_type on room_type.id = request.target_room_type_id
                 join rate_plan on rate_plan.id = request.target_rate_plan_id
                 join payment_adjustment_attempt attempt on attempt.request_id = request.id
@@ -423,15 +431,19 @@ public class ReservationChangeSettlementService {
 
     private ReservationChangePaymentLinkView paymentLinkView(UUID requestId, String publicToken) {
         return jdbc.query("""
-                select status, version, settlement_expires_at
-                from reservation_change_request where id = ?
+                select request.status, request.version, request.settlement_expires_at, attempt.created_at
+                from reservation_change_request request
+                join payment_adjustment_attempt attempt on attempt.request_id = request.id
+                    and attempt.adjustment_type = 'CREATE_CHECKOUT' and attempt.public_token_hash = ?
+                where request.id = ?
                 """, rs -> {
             if (!rs.next()) throw new ReservationNotFoundException();
             return new ReservationChangePaymentLinkView(
                     requestId, rs.getString("status"), rs.getLong("version"),
                     customerBaseUrl + "/reservation-change-payment#" + publicToken,
+                    rs.getTimestamp("created_at").toInstant(),
                     rs.getTimestamp("settlement_expires_at").toInstant());
-        }, requestId);
+        }, reservationAccess.hashToken(publicToken), requestId);
     }
 
     private GatewayAttempt gatewayAttempt(UUID attemptId, boolean forUpdate) {
@@ -458,9 +470,11 @@ public class ReservationChangeSettlementService {
     private CustomerContext mapCustomerContext(ResultSet rs) throws SQLException {
         return new CustomerContext(
                 rs.getObject("session_id", UUID.class), rs.getObject("reservation_id", UUID.class),
+                rs.getDate("previous_check_in").toLocalDate(), rs.getDate("previous_check_out").toLocalDate(),
+                rs.getString("previous_room_type_name"), rs.getString("previous_rate_plan_name"), rs.getLong("previous_total_krw"),
                 rs.getDate("target_check_in").toLocalDate(), rs.getDate("target_check_out").toLocalDate(),
                 rs.getString("room_type_name"), rs.getString("rate_plan_name"),
-                rs.getLong("difference_krw"), rs.getString("currency").trim(),
+                rs.getLong("total_krw"), rs.getLong("difference_krw"), rs.getLong("difference_krw"), rs.getString("currency").trim(),
                 rs.getTimestamp("settlement_expires_at").toInstant(), rs.getString("status"),
                 rs.getObject("attempt_id", UUID.class), rs.getString("checkout_url"));
     }
@@ -542,11 +556,18 @@ public class ReservationChangeSettlementService {
     private record CustomerContext(
             UUID sessionId,
             UUID reservationId,
+            LocalDate previousCheckIn,
+            LocalDate previousCheckOut,
+            String previousRoomTypeName,
+            String previousRatePlanName,
+            long previousTotalKrw,
             LocalDate checkIn,
             LocalDate checkOut,
             String roomTypeName,
             String ratePlanName,
-            long amountKrw,
+            long totalKrw,
+            long differenceKrw,
+            long additionalAmountKrw,
             String currency,
             Instant expiresAt,
             String status,

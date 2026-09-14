@@ -199,6 +199,15 @@ class ReservationChangeSettlementIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.reservationNumberSuffix").value(
                         reservation.id().toString().substring(reservation.id().toString().length() - 8)))
+                .andExpect(jsonPath("$.previousCheckIn").value(reservation.checkIn().toString()))
+                .andExpect(jsonPath("$.previousCheckOut").value(reservation.checkOut().toString()))
+                .andExpect(jsonPath("$.previousRoomTypeName").value("정산 테스트 객실"))
+                .andExpect(jsonPath("$.previousRatePlanName").value("정산 테스트 요금"))
+                .andExpect(jsonPath("$.previousTotalKrw").value(200_000))
+                .andExpect(jsonPath("$.checkIn").value(targetCheckIn.toString()))
+                .andExpect(jsonPath("$.checkOut").value(targetCheckIn.plusDays(2).toString()))
+                .andExpect(jsonPath("$.totalKrw").value(300_000))
+                .andExpect(jsonPath("$.differenceKrw").value(100_000))
                 .andExpect(jsonPath("$.additionalAmountKrw").value(100_000))
                 .andExpect(jsonPath("$.environmentLabel").value("테스트 결제"));
         mockMvc.perform(post("/api/reservation-change-payments/current/checkout").cookie(sessionCookie))

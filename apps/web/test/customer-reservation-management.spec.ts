@@ -68,3 +68,41 @@ test('같은 suffix의 다른 예약 변경 세션은 연결하지 않는다', a
   await page.goto(`/reservations/${id}`)
   await expect(page.getByRole('link', { name: '추가 결제 계속하기' })).toHaveCount(0)
 })
+
+test('예약 변경 결제는 기존·변경 예약과 서버 상태를 함께 표시한다', async ({ page }) => {
+  const token = 'A'.repeat(43)
+  const change = {
+    reservationId: id, reservationNumberSuffix: id.slice(-8),
+    previousCheckIn: '2026-09-22', previousCheckOut: '2026-09-24', previousRoomTypeName: '스탠다드 시티', previousRatePlanName: '룸 온리', previousTotalKrw: 360000,
+    checkIn: '2026-09-24', checkOut: '2026-09-26', roomTypeName: '디럭스 오션', ratePlanName: '유연 취소', totalKrw: 460000, differenceKrw: 100000,
+    additionalAmountKrw: 100000, currency: 'KRW', expiresAt: '2026-09-20T10:00:00.000Z', environmentLabel: '테스트 결제', status: 'AWAITING_PAYMENT',
+  }
+  await page.route('**/api/**', route => {
+    const url = new URL(route.request().url())
+    if (url.pathname === '/api/reservation-change-payments/session') return route.fulfill({ status: 204 })
+    if (url.pathname === '/api/reservation-change-payments/current') return route.fulfill({ json: change })
+    return route.fulfill({ status: 404, json: { code: 'NOT_FOUND', message: '없음' } })
+  })
+  await page.goto(`/reservation-change-payment#${token}`)
+  await expect(page.getByRole('term', { name: '기존 예약' })).toBeVisible()
+  await expect(page.getByRole('term', { name: '변경 예약' })).toBeVisible()
+  await expect(page.getByText('추가 결제 100,000원')).toBeVisible()
+  await expect(page).toHaveURL(/\/reservation-change-payment$/)
+})
+
+test('예약 변경 결제는 만료와 조정 필요 상태에서 결제를 다시 시작하지 않는다', async ({ page }) => {
+  for (const status of ['EXPIRED', 'RECONCILIATION_REQUIRED', 'COMPLETED']) {
+    await page.route('**/api/**', route => {
+      const url = new URL(route.request().url())
+      if (url.pathname === '/api/reservation-change-payments/current') return route.fulfill({ json: {
+        reservationId: id, reservationNumberSuffix: id.slice(-8), previousCheckIn: '2026-09-22', previousCheckOut: '2026-09-24', previousRoomTypeName: '스탠다드 시티', previousRatePlanName: '룸 온리', previousTotalKrw: 360000,
+        checkIn: '2026-09-24', checkOut: '2026-09-26', roomTypeName: '디럭스 오션', ratePlanName: '유연 취소', totalKrw: 460000, differenceKrw: 100000,
+        additionalAmountKrw: 100000, currency: 'KRW', expiresAt: '2026-09-20T10:00:00.000Z', environmentLabel: '테스트 결제', status,
+      } })
+      return route.fulfill({ status: 204 })
+    })
+    await page.goto('/reservation-change-payment')
+    await expect(page.getByRole('button', { name: /결제하기|Pay now/ })).toHaveCount(0)
+    await page.unroute('**/api/**')
+  }
+})

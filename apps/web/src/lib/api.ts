@@ -17,10 +17,17 @@ export type Reservation = {
 export type ReservationChangePayment = {
   reservationId: string
   reservationNumberSuffix: string
+  previousCheckIn: string
+  previousCheckOut: string
+  previousRoomTypeName: string
+  previousRatePlanName: string
+  previousTotalKrw: number
   checkIn: string
   checkOut: string
   roomTypeName: string
   ratePlanName: string
+  totalKrw: number
+  differenceKrw: number
   additionalAmountKrw: number
   currency: string
   expiresAt: string

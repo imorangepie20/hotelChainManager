@@ -60,6 +60,7 @@ test('응답 유실 재시도에도 같은 token과 key로 고객 링크를 만�
     return route.fulfill({ json: {
       requestId: REQUEST, status: 'AWAITING_PAYMENT', version: 5,
       customerUrl: `http://127.0.0.1:4000/reservation-change-payment#${bodies[0]!.publicToken}`,
+      createdAt: '2026-09-14T00:00:00Z',
       expiresAt: '2026-09-14T00:15:00Z',
     } })
   })
@@ -82,4 +83,51 @@ test('응답 유실 재시도에도 같은 token과 key로 고객 링크를 만�
   expect(bodies[1]).toEqual(bodies[0])
   await expect(detail.getByRole('textbox', { name: '고객 결제 링크' })).toHaveValue(/reservation-change-payment#/)
   expect(await page.evaluate(() => localStorage.getItem('reservation-change-payment-token'))).toBeNull()
+})
+
+test('결제 링크는 복사 결과와 선택 가능한 대체 URL을 표시한다', async ({ page }) => {
+  await mockDashboard(page)
+  await page.addInitScript(() => Object.defineProperty(navigator, 'clipboard', {
+    configurable: true, value: { writeText: () => Promise.resolve() },
+  }))
+  await page.route(`**/api/staff/reservation-change-requests/${REQUEST}/payment-link`, route => route.fulfill({ json: {
+    requestId: REQUEST, status: 'AWAITING_PAYMENT', version: 5,
+    customerUrl: `http://127.0.0.1:4000/reservation-change-payment#${'A'.repeat(43)}`,
+    createdAt: '2026-09-14T00:00:00Z',
+    expiresAt: '2026-09-14T00:15:00Z',
+  } }))
+  await page.route(`**/api/staff/reservation-change-requests/${REQUEST}`, route => route.fulfill({ json: request('AWAITING_PAYMENT', []) }))
+
+  await page.goto('/dashboard/reservations')
+  await page.getByRole('button', { name: '김하늘 예약 상세' }).click()
+  const detail = page.getByRole('dialog')
+  await detail.getByRole('button', { name: '고객 결제 링크 만들기' }).click()
+  await expect(detail.getByText('로컬 테스트 결제 링크')).toBeVisible()
+  await expect(detail.getByText('생성 시각')).toBeVisible()
+  await expect(detail.getByText('만료 시각')).toBeVisible()
+  await detail.getByRole('button', { name: '고객 결제 링크 복사' }).click()
+  await expect(detail.getByRole('status')).toContainText('복사했습니다')
+  await expect(detail.getByRole('textbox', { name: '고객 결제 링크' })).toHaveValue(/reservation-change-payment#/)
+})
+
+test('클립보드 복사 실패에도 고객 결제 URL은 선택할 수 있다', async ({ page }) => {
+  await mockDashboard(page)
+  await page.addInitScript(() => Object.defineProperty(navigator, 'clipboard', {
+    configurable: true, value: { writeText: () => Promise.reject(new Error('denied')) },
+  }))
+  await page.route(`**/api/staff/reservation-change-requests/${REQUEST}/payment-link`, route => route.fulfill({ json: {
+    requestId: REQUEST, status: 'AWAITING_PAYMENT', version: 5,
+    customerUrl: `http://127.0.0.1:4000/reservation-change-payment#${'A'.repeat(43)}`,
+    createdAt: '2026-09-14T00:00:00Z',
+    expiresAt: '2026-09-14T00:15:00Z',
+  } }))
+  await page.route(`**/api/staff/reservation-change-requests/${REQUEST}`, route => route.fulfill({ json: request('AWAITING_PAYMENT', []) }))
+
+  await page.goto('/dashboard/reservations')
+  await page.getByRole('button', { name: '김하늘 예약 상세' }).click()
+  const detail = page.getByRole('dialog')
+  await detail.getByRole('button', { name: '고객 결제 링크 만들기' }).click()
+  await detail.getByRole('button', { name: '고객 결제 링크 복사' }).click()
+  await expect(detail.getByRole('alert')).toContainText('복사하지 못했습니다')
+  await expect(detail.getByRole('textbox', { name: '고객 결제 링크' })).toBeEditable({ editable: false })
 })
