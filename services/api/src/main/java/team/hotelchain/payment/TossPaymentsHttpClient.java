@@ -18,6 +18,7 @@ public final class TossPaymentsHttpClient implements TossPaymentsClient {
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
     private static final Set<String> TERMINAL_REJECTION_STATUSES = Set.of(
             "CANCELED", "PARTIAL_CANCELED", "ABORTED", "EXPIRED");
+    private static final Set<Integer> INDETERMINATE_LOOKUP_STATUSES = Set.of(401, 403, 429);
 
     private final TossPaymentsProperties properties;
     private final HttpClient http;
@@ -38,7 +39,7 @@ public final class TossPaymentsHttpClient implements TossPaymentsClient {
         requireConfirm(command);
         return send("/v1/payments/confirm", requestBody(
                 "paymentKey", command.paymentKey(), "orderId", command.orderId(), "amount", command.amountKrw()),
-                command.idempotencyKey());
+                command.idempotencyKey(), false);
     }
 
     @Override
@@ -46,7 +47,7 @@ public final class TossPaymentsHttpClient implements TossPaymentsClient {
         if (paymentKey == null || paymentKey.isBlank()) {
             throw new IllegalArgumentException("결제 키가 필요합니다.");
         }
-        return send("/v1/payments/" + paymentKey, null, null);
+        return send("/v1/payments/" + paymentKey, null, null, true);
     }
 
     @Override
@@ -56,10 +57,10 @@ public final class TossPaymentsHttpClient implements TossPaymentsClient {
             throw new IllegalArgumentException("취소 결제 키, 금액, Idempotency-Key가 필요합니다.");
         }
         return send("/v1/payments/" + command.paymentKey() + "/cancel", requestBody(
-                "cancelAmount", command.amountKrw(), "cancelReason", command.reason()), command.idempotencyKey());
+                "cancelAmount", command.amountKrw(), "cancelReason", command.reason()), command.idempotencyKey(), false);
     }
 
-    private ProviderPayment send(String path, String requestBody, String idempotencyKey) {
+    private ProviderPayment send(String path, String requestBody, String idempotencyKey, boolean lookup) {
         properties.requireTestConfiguration();
         HttpRequest.Builder request = HttpRequest.newBuilder(API_ORIGIN.resolve(path))
                 .timeout(REQUEST_TIMEOUT)
@@ -71,7 +72,7 @@ public final class TossPaymentsHttpClient implements TossPaymentsClient {
                 .POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8));
         try {
             HttpResponse<String> response = http.send(request.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            return map(response.statusCode(), response.body());
+            return map(response.statusCode(), response.body(), lookup);
         } catch (IOException exception) {
             return unknown("HTTP_IO");
         } catch (InterruptedException exception) {
@@ -85,8 +86,9 @@ public final class TossPaymentsHttpClient implements TossPaymentsClient {
         return "Basic " + credential;
     }
 
-    private ProviderPayment map(int statusCode, String responseBody) {
+    private ProviderPayment map(int statusCode, String responseBody, boolean lookup) {
         if (statusCode >= 500) return unknown("HTTP_5XX");
+        if (lookup && INDETERMINATE_LOOKUP_STATUSES.contains(statusCode)) return unknown("HTTP_" + statusCode);
         try {
             JsonNode body = json.readTree(responseBody == null ? "{}" : responseBody);
             if (statusCode >= 400) return new ProviderPayment(null, null, 0, null,

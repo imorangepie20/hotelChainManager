@@ -209,6 +209,26 @@ class TossReservationPaymentIntegrationTest {
     }
 
     @ParameterizedTest
+    @ValueSource(ints = {401, 403, 429})
+    void approvalResponseLossAndIndeterminateLookupPreserveUnknownHoldAndOrder(int lookupStatus) {
+        ReservationView reservation = create("lookup-" + lookupStatus);
+        CheckoutView checkout = payments.checkout(reservation.id(), TOKEN, "once");
+        provider.response = command -> new ProviderPayment(null, null, 0, null, ProviderStatus.UNKNOWN, null, "HTTP_IO");
+        assertThat(payments.confirm(reservation.id(), TOKEN, confirmation(checkout)).paymentStatus()).isEqualTo("UNKNOWN");
+        provider.lookup = new ProviderPayment(null, null, 0, null, ProviderStatus.UNKNOWN, null, "HTTP_" + lookupStatus);
+
+        assertThat(payments.confirm(reservation.id(), TOKEN, confirmation(checkout)).paymentStatus()).isEqualTo("UNKNOWN");
+        clock.set(reservation.expiresAt());
+        assertThat(expiry.expireDue(10)).isZero();
+        assertThatThrownBy(() -> payments.checkout(reservation.id(), TOKEN, "different-key"))
+                .isInstanceOf(ReservationExpiredException.class);
+        assertThat(count("payment_provider_attempt")).isEqualTo(1);
+        assertThat(provider.calls.get()).isEqualTo(1);
+        assertThat(provider.lookups.get()).isEqualTo(1);
+        assertInventory(2, 0);
+    }
+
+    @ParameterizedTest
     @ValueSource(strings = {"order", "paymentKey", "amount", "currency"})
     void providerMismatchCannotConfirmOrReleaseHold(String mismatch) {
         ReservationView reservation = create("mismatch");

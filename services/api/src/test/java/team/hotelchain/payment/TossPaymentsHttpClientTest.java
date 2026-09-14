@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.net.URI;
+import java.io.IOException;
 import java.net.Authenticator;
 import java.net.CookieHandler;
 import java.net.ProxySelector;
@@ -29,6 +30,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class TossPaymentsHttpClientTest {
 
@@ -131,6 +133,52 @@ class TossPaymentsHttpClientTest {
         assertThat(result.errorCode()).isEqualTo("PAYMENT_CANCELED");
     }
 
+    @ParameterizedTest
+    @ValueSource(ints = {401, 403, 429, 500, 503})
+    void mapsLookupAuthorizationAndRateLimitResponsesToUnknown(int statusCode) {
+        TossPaymentsHttpClient client = new TossPaymentsHttpClient(
+                properties("test_ck_x", "test_sk_x"),
+                new CapturingHttpClient(statusCode, "{\"code\":\"PROVIDER_REJECTED\"}"));
+
+        TossPaymentsClient.ProviderPayment result = client.lookup("pay");
+
+        assertThat(result.status()).isEqualTo(TossPaymentsClient.ProviderStatus.UNKNOWN);
+        assertThat(result.errorCode()).isEqualTo(statusCode >= 500 ? "HTTP_5XX" : "HTTP_" + statusCode);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"not-json", "{}"})
+    void mapsMalformedOrIndeterminateLookupResponseToUnknown(String responseBody) {
+        TossPaymentsHttpClient client = new TossPaymentsHttpClient(
+                properties("test_ck_x", "test_sk_x"), new CapturingHttpClient(responseBody));
+
+        assertThat(client.lookup("pay").status()).isEqualTo(TossPaymentsClient.ProviderStatus.UNKNOWN);
+    }
+
+    @Test
+    void mapsLookupIoFailureToUnknown() {
+        TossPaymentsHttpClient client = new TossPaymentsHttpClient(
+                properties("test_ck_x", "test_sk_x"), new CapturingHttpClient(new IOException("lost")));
+
+        TossPaymentsClient.ProviderPayment result = client.lookup("pay");
+
+        assertThat(result.status()).isEqualTo(TossPaymentsClient.ProviderStatus.UNKNOWN);
+        assertThat(result.errorCode()).isEqualTo("HTTP_IO");
+    }
+
+    @Test
+    void keepsExplicitConfirmationRejectionFailed() {
+        TossPaymentsHttpClient client = new TossPaymentsHttpClient(
+                properties("test_ck_x", "test_sk_x"),
+                new CapturingHttpClient(400, "{\"code\":\"INVALID_PAYMENT_AMOUNT\"}"));
+
+        TossPaymentsClient.ProviderPayment result = client.confirm(
+                new TossPaymentsClient.ConfirmCommand("pay", "order", 120000, "KRW", "idem-1"));
+
+        assertThat(result.status()).isEqualTo(TossPaymentsClient.ProviderStatus.FAILED);
+        assertThat(result.errorCode()).isEqualTo("INVALID_PAYMENT_AMOUNT");
+    }
+
     private static Stream<Arguments> malformedStatuses() {
         return Stream.of(
                 Arguments.of(""),
@@ -167,11 +215,25 @@ class TossPaymentsHttpClientTest {
     }
 
     private static final class CapturingHttpClient extends HttpClient {
+        private final int statusCode;
         private final String responseBody;
+        private final IOException failure;
         private final AtomicReference<HttpRequest> request = new AtomicReference<>();
 
         private CapturingHttpClient(String responseBody) {
+            this(200, responseBody);
+        }
+
+        private CapturingHttpClient(int statusCode, String responseBody) {
+            this.statusCode = statusCode;
             this.responseBody = responseBody;
+            this.failure = null;
+        }
+
+        private CapturingHttpClient(IOException failure) {
+            this.statusCode = 0;
+            this.responseBody = null;
+            this.failure = failure;
         }
 
         String body() {
@@ -191,12 +253,13 @@ class TossPaymentsHttpClientTest {
         @Override public Optional<Executor> executor() { return Optional.empty(); }
 
         @Override
-        public <T> HttpResponse<T> send(HttpRequest request, HttpResponse.BodyHandler<T> responseBodyHandler) {
+        public <T> HttpResponse<T> send(HttpRequest request, HttpResponse.BodyHandler<T> responseBodyHandler) throws IOException {
             this.request.set(request);
+            if (failure != null) throw failure;
             @SuppressWarnings("unchecked")
             T body = (T) responseBody;
             return new HttpResponse<>() {
-                @Override public int statusCode() { return 200; }
+                @Override public int statusCode() { return statusCode; }
                 @Override public HttpRequest request() { return request; }
                 @Override public Optional<HttpResponse<T>> previousResponse() { return Optional.empty(); }
                 @Override public HttpHeaders headers() { return HttpHeaders.of(Map.of(), (a, b) -> true); }
@@ -209,13 +272,21 @@ class TossPaymentsHttpClientTest {
 
         @Override
         public <T> CompletableFuture<HttpResponse<T>> sendAsync(HttpRequest request, HttpResponse.BodyHandler<T> handler) {
-            return CompletableFuture.completedFuture(send(request, handler));
+            try {
+                return CompletableFuture.completedFuture(send(request, handler));
+            } catch (IOException exception) {
+                return CompletableFuture.failedFuture(exception);
+            }
         }
 
         @Override
         public <T> CompletableFuture<HttpResponse<T>> sendAsync(HttpRequest request, HttpResponse.BodyHandler<T> handler,
                 HttpResponse.PushPromiseHandler<T> pushPromiseHandler) {
-            return CompletableFuture.completedFuture(send(request, handler));
+            try {
+                return CompletableFuture.completedFuture(send(request, handler));
+            } catch (IOException exception) {
+                return CompletableFuture.failedFuture(exception);
+            }
         }
     }
 
