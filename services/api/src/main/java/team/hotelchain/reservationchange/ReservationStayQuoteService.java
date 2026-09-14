@@ -34,12 +34,37 @@ public class ReservationStayQuoteService {
             boolean lockReservation) {
         requireDates(checkIn, checkOut);
         ReservationSnapshot reservation = loadReservation(reservationId, lockReservation);
+        return buildQuote(reservation, checkIn, checkOut, reservation.adults(), reservation.children());
+    }
+
+    @Transactional
+    public ReservationStayQuote quote(
+            UUID reservationId,
+            LocalDate checkIn,
+            LocalDate checkOut,
+            int adults,
+            int children,
+            boolean lockReservation) {
+        requireDates(checkIn, checkOut);
+        if (adults < 1 || children < 0) {
+            throw new IllegalArgumentException("투숙 인원을 확인해 주세요.");
+        }
+        ReservationSnapshot reservation = loadReservation(reservationId, lockReservation);
+        return buildQuote(reservation, checkIn, checkOut, adults, children);
+    }
+
+    private ReservationStayQuote buildQuote(
+            ReservationSnapshot reservation,
+            LocalDate checkIn,
+            LocalDate checkOut,
+            int adults,
+            int children) {
         return new ReservationStayQuote(
                 reservation.id(), reservation.roomTypeId(), reservation.ratePlanId(),
                 reservation.hotelId(), reservation.timezone(), reservation.checkIn(), reservation.checkOut(),
-                checkIn, checkOut, reservation.adults(), reservation.children(), reservation.rooms(),
+                checkIn, checkOut, adults, children, reservation.rooms(),
                 reservation.status(), reservation.totalKrw(), reservation.currency(), reservation.operationRevision(),
-                reservation.nights(), reservation.assignments(), findOffers(reservation, checkIn, checkOut));
+                reservation.nights(), reservation.assignments(), findOffers(reservation, checkIn, checkOut, adults, children));
     }
 
     private void requireDates(LocalDate checkIn, LocalDate checkOut) {
@@ -72,7 +97,9 @@ public class ReservationStayQuoteService {
     private List<SelectedStayOffer> findOffers(
             ReservationSnapshot reservation,
             LocalDate checkIn,
-            LocalDate checkOut) {
+            LocalDate checkOut,
+            int adults,
+            int children) {
         int nights = Math.toIntExact(ChronoUnit.DAYS.between(checkIn, checkOut));
         List<OfferNight> rows = jdbc.query("""
                 select rt.id as room_type_id, rt.name as room_type_name, rt.max_occupancy,
@@ -91,7 +118,7 @@ public class ReservationStayQuoteService {
                 """, this::mapOfferNight,
                 reservation.roomTypeId(), reservation.checkIn(), reservation.checkOut(), reservation.rooms(),
                 reservation.hotelId(), checkIn, checkOut, reservation.rooms(),
-                reservation.adults() + reservation.children());
+                adults + children);
         Map<UUID, List<OfferNight>> byRatePlan = new LinkedHashMap<>();
         rows.forEach(row -> byRatePlan.computeIfAbsent(row.ratePlanId(), ignored -> new ArrayList<>()).add(row));
         return byRatePlan.values().stream()

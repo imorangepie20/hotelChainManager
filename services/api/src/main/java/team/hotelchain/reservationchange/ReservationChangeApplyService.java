@@ -54,14 +54,17 @@ public class ReservationChangeApplyService {
                     id, reservation_id, idempotency_key, request_hash, staff_id,
                     previous_room_type_id, room_type_id, previous_rate_plan_id, rate_plan_id,
                     previous_check_in, previous_check_out, check_in, check_out,
-                    previous_total_krw, total_krw, difference_krw, change_request_id)
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    previous_total_krw, total_krw, difference_krw, change_request_id,
+                    actor_origin, previous_adults, previous_children, adults, children)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 on conflict (change_request_id) do nothing
                 """, UUID.randomUUID(), reservation.id(), "change-request:" + request.id(), request.requestHash(),
                 request.requestedBy(), request.previousRoomTypeId(), request.targetRoomTypeId(),
                 request.previousRatePlanId(), request.targetRatePlanId(), request.previousCheckIn(),
                 request.previousCheckOut(), request.targetCheckIn(), request.targetCheckOut(),
-                request.previousTotalKrw(), request.totalKrw(), request.differenceKrw(), request.id());
+                request.previousTotalKrw(), request.totalKrw(), request.differenceKrw(), request.id(),
+                request.requestedBy() == null ? "CUSTOMER" : "STAFF",
+                reservation.adults(), reservation.children(), request.adults(), request.children());
         jdbc.update("""
                 update reservation_change_request
                 set status = 'COMPLETED', version = version + 1,
@@ -175,6 +178,7 @@ public class ReservationChangeApplyService {
         LockedReservation value = jdbc.query("""
                 select reservation.id, reservation.room_type_id, reservation.rate_plan_id,
                        reservation.check_in, reservation.check_out, reservation.rooms,
+                       reservation.adults, reservation.children,
                        reservation.status, reservation.operation_revision, hotel.timezone,
                        (select count(*) from reservation_room_assignment assignment
                         where assignment.reservation_id = reservation.id) as assignments
@@ -186,7 +190,8 @@ public class ReservationChangeApplyService {
                         rs.getObject("id", UUID.class), rs.getObject("room_type_id", UUID.class),
                         rs.getObject("rate_plan_id", UUID.class), rs.getDate("check_in").toLocalDate(),
                         rs.getDate("check_out").toLocalDate(), rs.getInt("rooms"), rs.getString("status"),
-                        rs.getLong("operation_revision"), rs.getString("timezone"), rs.getInt("assignments")) : null,
+                        rs.getLong("operation_revision"), rs.getString("timezone"), rs.getInt("assignments"),
+                        rs.getInt("adults"), rs.getInt("children")) : null,
                 reservationId);
         if (value == null) throw new ReservationNotFoundException();
         return value;
@@ -268,7 +273,8 @@ public class ReservationChangeApplyService {
 
     private record LockedReservation(
             UUID id, UUID roomTypeId, UUID ratePlanId, LocalDate checkIn, LocalDate checkOut,
-            int rooms, String status, long operationRevision, String timezone, int assignments) {
+            int rooms, String status, long operationRevision, String timezone, int assignments,
+            int adults, int children) {
     }
 
     private record LockedChange(

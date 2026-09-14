@@ -37,7 +37,17 @@ export type ReservationChangePayment = {
   status: string
 }
 
-export type ReservationChangeSummary = Pick<ReservationChangePayment, 'reservationId' | 'status' | 'checkIn' | 'checkOut' | 'roomTypeName' | 'ratePlanName' | 'differenceKrw' | 'currency' | 'expiresAt'> & { refundStatus: string | null }
+export type ReservationChangeSummary = Pick<ReservationChangePayment, 'reservationId' | 'status' | 'checkIn' | 'checkOut' | 'roomTypeName' | 'ratePlanName' | 'differenceKrw' | 'currency' | 'expiresAt'> & { requestId: string; requestOrigin: 'STAFF' | 'CUSTOMER'; refundStatus: string | null }
+
+export type CustomerChangeEligibility = { allowed: boolean; reasonCode: string | null }
+export type CustomerChangeQuoteInput = { checkIn: string; checkOut: string; adults: number; children: number }
+export type CustomerChangeQuote = {
+  quoteId: string; baseOperationRevision: number; expiresAt: string
+  checkIn: string; checkOut: string; adults: number; children: number; rooms: number
+  previousTotal: number; currency: string
+  offers: Array<Offer & { difference: number }>
+}
+export type CustomerChangeStart = { requestId: string; status: string; direction: 'CHARGE' | 'REFUND' | 'NONE'; version: number; expiresAt: string }
 
 export type CancellationPreview = {
   reservationId: string; status: string; cancellable: boolean; refundAmount: number
@@ -123,6 +133,10 @@ export const api = {
     method: 'POST', headers: headers(token, key), body: JSON.stringify(body),
   }),
   getReservation: (id: string, token: string) => request<Reservation>(`/api/reservations/${id}`, { headers: headers(token) }),
+  changeEligibility: (id: string, token: string) => request<CustomerChangeEligibility>(`/api/reservations/${encodeURIComponent(id)}/change-eligibility`, { headers: headers(token), cache: 'no-store' }),
+  changeQuote: (id: string, token: string, input: CustomerChangeQuoteInput) => request<CustomerChangeQuote>(`/api/reservations/${encodeURIComponent(id)}/change-quotes`, { method: 'POST', headers: headers(token), body: JSON.stringify(input) }),
+  startChange: (id: string, token: string, key: string, input: { quoteId: string; roomTypeId: string; ratePlanId: string; expectedTotal: number }) => request<CustomerChangeStart>(`/api/reservations/${encodeURIComponent(id)}/change-requests`, { method: 'POST', headers: headers(token, key), body: JSON.stringify(input), credentials: 'include' }),
+  cancelChange: (id: string, requestId: string, token: string, key: string) => request<CustomerChangeStart>(`/api/reservations/${encodeURIComponent(id)}/change-requests/${encodeURIComponent(requestId)}/cancel`, { method: 'POST', headers: headers(token, key) }),
   reservationChangeSummary: (id: string, token: string) => request<ReservationChangeSummary | null>(`/api/reservations/${encodeURIComponent(id)}/change-summary`, { headers: headers(token), cache: 'no-store' }),
   cancellationPreview: (id: string, token: string) => request<CancellationPreview>(`/api/reservations/${encodeURIComponent(id)}/cancellation-preview`, {
     headers: headers(token), cache: 'no-store',
