@@ -104,6 +104,15 @@ public class TossReservationPaymentService {
         }
     }
 
+    /** 고객 권한을 먼저 검증하고 저장된 거래만 조회한다. NEW 주문의 승인은 실행하지 않는다. */
+    public StatusView reconcile(UUID reservationId, String token) {
+        StatusView current = status(reservationId, token);
+        if (current.orderId() != null && ("APPROVING".equals(current.paymentStatus()) || "UNKNOWN".equals(current.paymentStatus()))) {
+            reconcileStoredOrder(current.orderId());
+        }
+        return status(reservationId, token);
+    }
+
     /** 저장 주문의 webhook 힌트는 서버 인증 조회만 실행한다. 새 승인은 시작하지 않는다. */
     public void reconcileStoredOrder(String orderId) {
         var rows=jdbc.queryForList("""

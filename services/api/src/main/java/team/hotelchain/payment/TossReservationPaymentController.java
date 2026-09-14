@@ -39,4 +39,9 @@ public class TossReservationPaymentController {
     public StatusView status(@PathVariable UUID id, @RequestHeader("X-Reservation-Token") String token) {
         return payments.status(id, token);
     }
+
+    @PostMapping("/payment-reconcile")
+    public StatusView reconcile(@PathVariable UUID id, @RequestHeader("X-Reservation-Token") String token) {
+        return payments.reconcile(id, token);
+    }
 }

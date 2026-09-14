@@ -18,6 +18,7 @@ import { HotelSelector } from './components/hotel-selector'
 import { ReservationChangePaymentPage } from './components/reservation-change-payment-page'
 import { ReservationPaymentResultPage } from './components/reservation-payment-result-page'
 import { captureTossReturn, requestTossCheckout } from './lib/toss-payments'
+import { paymentActions, type PaymentProvider } from './lib/payment-recovery'
 
 import { ConciergePanel, type ConciergeCriteria } from './components/concierge-panel'
 import { StayDatePicker } from './components/stay-date-picker'
@@ -70,6 +71,9 @@ function BookingApp() {
   const [websiteLoading, setWebsiteLoading] = useState(true)
   const [pageUnavailable, setPageUnavailable] = useState(false)
   const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [notice, setNotice] = useState(''); const [mobileMenuOpen, setMobileMenuOpen] = useState(false); const reservationPanelRef = useRef<HTMLElement>(null); const bookingFormRef = useRef<HTMLElement>(null)
+  const [provider, setProvider] = useState<PaymentProvider | null>(null)
+  const paymentButtons = paymentActions(provider)
+  useEffect(() => { if (!previewMode) void api.paymentModes().then(mode => setProvider(mode.provider)).catch(() => setProvider(null)) }, [previewMode])
   const errorAlert = useRef<HTMLDivElement>(null)
   useEffect(() => { if (error) errorAlert.current?.focus() }, [error])
   const currentAvailabilityKey = availabilityCriteriaKey({ hotelId, checkIn, checkOut, adults, children, rooms, breakfastOnly, roomTypeId })
@@ -284,7 +288,7 @@ function BookingApp() {
 
   const tossBusy = useRef(false)
   async function payToss() {
-    if (previewMode || !reservation || tossBusy.current) return
+    if (previewMode || provider !== 'toss-test' || !reservation || tossBusy.current) return
     tossBusy.current = true; setBusy(true); setError('')
     try {
       const token = sessionStorage.getItem(`reservation:${reservation.id}`)
@@ -294,7 +298,7 @@ function BookingApp() {
     finally { tossBusy.current = false; setBusy(false) }
   }
 
-  async function pay(outcome: 'SUCCESS' | 'FAILURE') { if (previewMode || !reservation) return; setBusy(true); setError(''); try { const token = sessionStorage.getItem(`reservation:${reservation.id}`)!; const result = await api.pay(reservation.id, token, crypto.randomUUID(), outcome); setReservation(await api.getReservation(reservation.id, token)); setNotice(result.paymentStatus === 'FAILED' ? '테스트 결제가 실패했습니다. 객실 확보 시간 안에 다시 시도할 수 있습니다.' : '테스트 결제가 완료되어 예약이 확정되었습니다.') } catch (reason) { if (reason instanceof ApiFailure && reason.code === 'HOLD_EXPIRED') { const token = sessionStorage.getItem(`reservation:${reservation.id}`)!; setReservation(await api.getReservation(reservation.id, token).catch(() => reservation)); setOffers([]); setSelected(null); setNotice('객실 확보 시간이 만료되었습니다. 날짜와 객실을 다시 검색해 주세요.') } else showError(reason) } finally { setBusy(false) } }
+  async function pay(outcome: 'SUCCESS' | 'FAILURE') { if (previewMode || provider !== 'fake' || !reservation) return; setBusy(true); setError(''); try { const token = sessionStorage.getItem(`reservation:${reservation.id}`)!; const result = await api.pay(reservation.id, token, crypto.randomUUID(), outcome); setReservation(await api.getReservation(reservation.id, token)); setNotice(result.paymentStatus === 'FAILED' ? '테스트 결제가 실패했습니다. 객실 확보 시간 안에 다시 시도할 수 있습니다.' : '테스트 결제가 완료되어 예약이 확정되었습니다.') } catch (reason) { if (reason instanceof ApiFailure && reason.code === 'HOLD_EXPIRED') { const token = sessionStorage.getItem(`reservation:${reservation.id}`)!; setReservation(await api.getReservation(reservation.id, token).catch(() => reservation)); setOffers([]); setSelected(null); setNotice('객실 확보 시간이 만료되었습니다. 날짜와 객실을 다시 검색해 주세요.') } else showError(reason) } finally { setBusy(false) } }
 
   async function cancel() { if (previewMode || !reservation) return; setBusy(true); setError(''); try { const token = sessionStorage.getItem(`reservation:${reservation.id}`)!; const result = await api.cancel(reservation.id, token, crypto.randomUUID()); setReservation(await api.getReservation(reservation.id, token)); setNotice(result.status === 'CANCELLED' ? `예약이 취소되었습니다. 테스트 환불액은 ₩${money.format(result.refundAmount)}입니다.` : result.status === 'CANCELLATION_FAILED' ? '일부 환불이 실패했습니다. 예약 취소를 다시 요청하면 기존 환불 계획으로 재시도합니다.' : '환불 결과를 확인 중입니다. 모든 환불이 확인된 후 예약 취소가 완료됩니다.') } catch (reason) { showError(reason) } finally { setBusy(false) } }
 
@@ -376,7 +380,7 @@ function BookingApp() {
 
       {selected && !reservation && <section id="reservation" className="reservation-panel" ref={reservationPanelRef} tabIndex={-1}><div><p className="section-kicker">GUEST DETAILS</p><h2>{selected.roomTypeName} 예약</h2><p>{checkIn} — {checkOut} · 성인 {adults}명 · 아동 {children}명 · 객실 {rooms}개</p></div><form onSubmit={reserve}><label>예약자 이름<input value={guest.name} onChange={e => setGuest({ ...guest, name: e.target.value })} required placeholder="홍길동" /></label><label>이메일<input type="email" value={guest.email} onChange={e => setGuest({ ...guest, email: e.target.value })} required placeholder="guest@example.com" /></label><div className="reservation-total"><span>결제 예정 금액</span><strong>₩{money.format(selected.total)}</strong></div><button className="primary" disabled={busy}>{busy ? '확보 중…' : '객실 확보하기'} <ArrowRight size={18} /></button></form></section>}
 
-      {reservation && <section id="reservation-management" className="reservation-panel confirmed"><div className="status-icon"><Check /></div><div><p className="section-kicker">RESERVATION {reservation.status}</p><h2>{reservation.status === 'CONFIRMED' ? '예약이 확정되었습니다' : reservation.status === 'CANCELLED' ? '예약이 취소되었습니다' : reservation.status === 'CANCELLATION_PENDING' ? '예약 취소를 처리 중입니다' : reservation.status === 'EXPIRED' ? '예약 확보 시간이 만료되었습니다' : '객실을 확보했습니다'}</h2><p>예약 번호 {reservation.id}</p><p>{reservation.checkIn} — {reservation.checkOut} · {reservation.guest.name}</p></div><div className="manage-actions"><strong>₩{money.format(reservation.total)}</strong>{reservation.status === 'PENDING_PAYMENT' && <><button className="primary" onClick={payToss} disabled={busy || previewMode}>토스 테스트 결제</button><button className="primary" onClick={() => pay('SUCCESS')} disabled={busy}>테스트 결제</button><button className="test-failure" onClick={() => pay('FAILURE')} disabled={busy}>결제 실패 시험</button></>}{reservation.status === 'CONFIRMED' && <button className="outline" onClick={cancel} disabled={busy}>예약 취소</button>}{reservation.status === 'EXPIRED' && <a className="outline" href="#booking">다시 검색</a>}</div><p className="session-note">예약 관리 정보는 현재 브라우저 세션에만 저장됩니다. 창을 닫으면 복구할 수 없습니다.</p></section>}
+      {reservation && <section id="reservation-management" className="reservation-panel confirmed"><div className="status-icon"><Check /></div><div><p className="section-kicker">RESERVATION {reservation.status}</p><h2>{reservation.status === 'CONFIRMED' ? '예약이 확정되었습니다' : reservation.status === 'CANCELLED' ? '예약이 취소되었습니다' : reservation.status === 'CANCELLATION_PENDING' ? '예약 취소를 처리 중입니다' : reservation.status === 'EXPIRED' ? '예약 확보 시간이 만료되었습니다' : '객실을 확보했습니다'}</h2><p>예약 번호 {reservation.id}</p><p>{reservation.checkIn} — {reservation.checkOut} · {reservation.guest.name}</p></div><div className="manage-actions"><strong>₩{money.format(reservation.total)}</strong>{reservation.status === 'PENDING_PAYMENT' && <>{paymentButtons.toss && <button className="primary" onClick={payToss} disabled={busy || previewMode}>토스 테스트 결제</button>}{paymentButtons.fake && <><button className="primary" onClick={() => pay('SUCCESS')} disabled={busy}>테스트 결제</button><button className="test-failure" onClick={() => pay('FAILURE')} disabled={busy}>결제 실패 시험</button></>}</>}{reservation.status === 'CONFIRMED' && <button className="outline" onClick={cancel} disabled={busy}>예약 취소</button>}{reservation.status === 'EXPIRED' && <a className="outline" href="#booking">다시 검색</a>}</div><p className="session-note">예약 관리 정보는 현재 브라우저 세션에만 저장됩니다. 창을 닫으면 복구할 수 없습니다.</p></section>}
 
       <section className="values"><div><Bot /><p>COMING NEXT</p><h2>말로 찾는<br />나만의 스테이</h2></div><p>“다음 주 토요일, 아이와 함께 조식이 포함된 속초 호텔을 찾아줘.”<br />LangGraph 기반 AI 컨시어지가 실제 재고와 요금만 확인해 추천합니다.</p></section></main><footer><div className="brand"><span>STAY</span> HANEUL</div><p>가상의 호텔 체인 예약·운영 플랫폼 포트폴리오</p><p>© 2026 HOTEL CHAIN PROJECT</p></footer></>
 

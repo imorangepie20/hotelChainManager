@@ -4,6 +4,7 @@ import { CalendarDays, Clock3, CreditCard, ShieldCheck } from 'lucide-react'
 import { ApiFailure, api, type ReservationChangePayment } from '../lib/api'
 import { captureReservationChangePaymentToken } from '../lib/reservation-change-payment-session'
 import { requestTossCheckout, type TossReturn, type TossStatus } from '../lib/toss-payments'
+import { paymentActions, type PaymentProvider } from '../lib/payment-recovery'
 
 const money = new Intl.NumberFormat('ko-KR')
 const date = new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' })
@@ -26,9 +27,10 @@ export function ReservationChangePaymentPage({ returned }: { returned: TossRetur
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [tossState, setTossState] = useState<TossStatus | null>(null)
+  const [provider, setProvider] = useState<PaymentProvider | null>(null)
   const alert = useRef<HTMLDivElement>(null)
   const busyRef = useRef(false)
-  const initialRequest = useRef<Promise<{ payment: ReservationChangePayment; status: TossStatus | null }> | null>(null)
+  const initialRequest = useRef<Promise<{ payment: ReservationChangePayment; status: TossStatus | null; provider: PaymentProvider }> | null>(null)
   const returnedFromToss = returned.kind !== 'none'
 
   useEffect(() => { if (error) alert.current?.focus() }, [error])
@@ -38,14 +40,15 @@ export function ReservationChangePaymentPage({ returned }: { returned: TossRetur
     async function load() {
       try {
         if (!initialRequest.current) initialRequest.current = (async () => {
+          const modes = await api.paymentModes()
           if (token) { await api.exchangeReservationChangePaymentToken(token); sessionStorage.removeItem('tossChangeStarted') }
           if (returnedFromToss) sessionStorage.setItem('tossChangeStarted', '1')
-          const status = returned.kind === 'success' ? await api.tossChangeConfirm(returned.input)
+          const status = modes.changeProvider !== 'toss-test' ? null : returned.kind === 'success' ? await api.tossChangeConfirm(returned.input)
             : returnedFromToss || sessionStorage.getItem('tossChangeStarted') ? await api.tossChangeStatus() : null
-          return { payment: await api.reservationChangePayment(), status }
+          return { payment: await api.reservationChangePayment(), status, provider: modes.changeProvider }
         })()
         const current = await initialRequest.current
-        if (active) { setPayment(current.payment); setTossState(current.status) }
+        if (active) { setPayment(current.payment); setTossState(current.status); setProvider(current.provider) }
       } catch (cause) {
         if (active) setError(returnedFromToss ? '결제 세션 또는 결과를 확인하지 못했습니다. 원래 결제 링크를 다시 열어 인증해 주세요. 중복 결제하지 마세요.' : messageFor(cause))
       } finally {
@@ -57,7 +60,7 @@ export function ReservationChangePaymentPage({ returned }: { returned: TossRetur
   }, [token, returned, returnedFromToss])
 
   async function checkout() {
-    if (busyRef.current) return
+    if (provider !== 'fake' || busyRef.current) return
     busyRef.current = true
     setBusy(true)
     setError('')
@@ -72,7 +75,7 @@ export function ReservationChangePaymentPage({ returned }: { returned: TossRetur
   }
 
   async function checkoutToss() {
-    if (busyRef.current) return
+    if (provider !== 'toss-test' || busyRef.current) return
     busyRef.current = true; setBusy(true); setError('')
     try {
       const checkout = await api.tossChangeCheckout()
@@ -91,6 +94,7 @@ export function ReservationChangePaymentPage({ returned }: { returned: TossRetur
   }
 
   const canPay = !returnedFromToss && (!tossState || tossState.paymentStatus === 'NEW') && payment?.status === 'AWAITING_PAYMENT'
+  const actions = paymentActions(provider)
   const completed = payment?.status === 'READY_TO_APPLY' || payment?.status === 'APPLYING'
     || payment?.status === 'COMPLETED'
 
@@ -142,11 +146,11 @@ export function ReservationChangePaymentPage({ returned }: { returned: TossRetur
             </div>
 
             {canPay && (
-              <><button className="change-payment-action" type="button" onClick={checkoutToss} disabled={busy}>토스 테스트 결제</button>
-              <button className="change-payment-action" type="button" onClick={checkout} disabled={busy}>
+              <>{actions.toss && <button className="change-payment-action" type="button" onClick={checkoutToss} disabled={busy}>토스 테스트 결제</button>}
+              {actions.fake && <button className="change-payment-action" type="button" onClick={checkout} disabled={busy}>
                 <CreditCard size={19} aria-hidden="true" />
                 {busy ? '결제 화면을 준비하는 중…' : `${money.format(payment.additionalAmountKrw)}원 결제하기`}
-              </button></>
+              </button>}</>
             )}
             <p className="change-payment-note">결제 금액과 예약 변경 확정은 호텔 서버에서 검증합니다. 카드 정보는 이 화면에 저장되지 않습니다.</p>
           </>

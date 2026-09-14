@@ -24,3 +24,14 @@
 - 브라우저 검증은 API/SDK mock 계약 검증이다. 실제 Toss sandbox 승인·카드사 창·부분 환불·외부 웹훅 검증을 의미하지 않는다. 실제 키 부재와 sandbox 검증 결과는 Task 5에서 별도 기록한다.
 - 상위 작업의 독립 코드 검토와 필요한 수정·재검토를 기다린다.
 - 기존 관리자 디렉터리의 고객 변경 결제 E2E fixture도 날짜 2필드를 실제 DTO로 맞추도록 상위 작업에 전달했다.
+
+## 독립 리뷰 수정: 서버 재조회와 결제 모드
+
+- P1: 신규 결과 화면의 재확인을 `POST /api/reservations/{id}/payment-reconcile`로 연결했다. 서버는 예약 token 권한을 먼저 검증하고 저장된 UNKNOWN/APPROVING 거래에만 기존 PG lookup·검증·원자 적용 경로를 실행한다. NEW는 재조회 API에서 승인하지 않고 그대로 반환한다. terminal 재조회도 중복 승인·거래를 만들지 않는다.
+- 콜백 승인 요청이 서버 도달 전에 유실된 경우에만 동일 주문 NEW 응답을 확인한 뒤 현재 페이지 메모리에 있는 콜백으로 같은 confirm을 재시도한다. UNKNOWN·APPROVING·다른 주문·새로고침으로 콜백이 없는 경우에는 confirm을 재전송하지 않는다.
+- P2: 비민감 `GET /api/payments/mode`가 신규·변경 provider 이름만 반환한다. 고객은 toss-test에서 SDK 버튼만, fake에서 기존 가상 버튼만 표시하며 미설정·불명 모드·설정 조회 실패는 결제 진입을 닫는다. 변경 토스 결제에서 기존 checkoutUrl로 같은 페이지를 반복 여는 경로를 제거했다.
+- TDD: backend 신규 HTTP 계약 3건은 미구현 404로 실패한 뒤 통과했다. recovery/provider 순수 계약은 미구현 모듈 실패 후 통과했다.
+- Maven `TossReservationPaymentIntegrationTest,PaymentExpiryIntegrationTest` 31건 통과(실패·오류·skip 0). 인증 실패 시 lookup 0, UNKNOWN 복구에서 기존 confirm 호출 1회 유지, terminal 재조회 중복 거래 없음, NEW 무승인 포함. 실행 옵션은 Task 3과 같은 context 1 및 변경 worker 1시간 주기다.
+- `payment-recovery.test.ts`, 기존 toss/helper·route·세션 tsx, TypeScript, production build 통과. 수정 Playwright 13건은 `--list`로 구문·탐색만 확인했다.
+- 이번 리뷰 수정 후 브라우저 E2E는 **미실행**이다. 상위 작업이 사용자 요청으로 main 고객 4000 서버를 실행했고 이를 중단·교체하지 말라는 지시가 있어 보존했다. 위의 11건 통과는 리뷰 수정 전 결과이며 이번 수정의 브라우저 통과로 간주하지 않는다. 관리자 4001과 main 실행 스크립트는 변경하지 않았다.
+- 기존 관리자 디렉터리 고객 fixture에도 fake mode API mock이 필요하다고 상위 작업에 전달했다. 실제 sandbox/외부 webhook은 계속 미검증이다.

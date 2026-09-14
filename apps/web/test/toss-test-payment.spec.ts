@@ -8,6 +8,7 @@ const reservation = { id, status: 'PENDING_PAYMENT', checkIn: '2026-10-10', chec
 const change = { reservationNumberSuffix: '12ab34cd', checkIn: '2026-10-10', checkOut: '2026-10-12', roomTypeName: '디럭스 오션', ratePlanName: '조식 포함', additionalAmountKrw: 100000, currency: 'KRW', expiresAt: '2026-10-01T03:15:00Z', environmentLabel: '테스트 결제', status: 'AWAITING_PAYMENT' }
 
 test.beforeEach(async ({ page }) => {
+  await page.route('**/api/payments/mode', route => route.fulfill({ json: { provider: 'toss-test', changeProvider: 'toss-test' } }))
   await page.addInitScript(({ id, token }) => {
     sessionStorage.setItem('latestReservation', id)
     sessionStorage.setItem(`reservation:${id}`, token)
@@ -24,6 +25,8 @@ test('신규 SDK는 서버 주문만 사용하며 이중 클릭과 모바일 키
   await page.route(`**/api/reservations/${id}/payment-checkout`, async route => { requests++; expect(route.request().headers()['x-reservation-token']).toBe(token); await route.fulfill({ json: checkout }) })
   await page.route('https://js.tosspayments.com/v2/standard', route => route.fulfill({ contentType: 'text/javascript', body: `window.TossPayments = Object.assign(key => ({payment: options => ({requestPayment: input => {window.sdkInput = {key, options, input}; return new Promise(() => {})}})}), {ANONYMOUS: 'ANONYMOUS'});` }))
   await page.goto('/')
+  await expect(page.getByRole('button', { name: '테스트 결제', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '결제 실패 시험', exact: true })).toHaveCount(0)
   const button = page.getByRole('button', { name: '토스 테스트 결제', exact: true })
   await button.focus(); await page.keyboard.press('Enter'); await page.keyboard.press('Enter')
   await expect.poll(() => page.evaluate(() => (window as unknown as { sdkInput: unknown }).sdkInput)).toEqual({ key: 'test_ck_fixture', options: { customerKey: 'ANONYMOUS' }, input: { method: 'CARD', amount: { currency: 'KRW', value: 120000 }, orderId: 'test-order', orderName: '호텔 예약 테스트 결제', successUrl: checkout.successUrl, failUrl: checkout.failUrl } })
@@ -52,11 +55,11 @@ test('복귀 query 즉시 제거 후 권한으로 승인하고 새로고침은 �
 test('UNKNOWN 복귀는 성공으로 표시하지 않고 서버 상태 재확인이 가능하다', async ({ page }) => {
   const status = { reservationId: id, orderId: 'test-order', status: 'PENDING_PAYMENT', paymentStatus: 'UNKNOWN' }
   await page.route(`**/api/reservations/${id}/payment-confirm`, route => route.fulfill({ json: status }))
-  await page.route(`**/api/reservations/${id}/payment-status`, route => route.fulfill({ json: status }))
+  await page.route(`**/api/reservations/${id}/payment-reconcile`, route => route.fulfill({ json: { ...status, status: 'CONFIRMED', paymentStatus: 'SUCCEEDED' } }))
   await page.goto(`${resultPath}?result=success&paymentKey=pk&orderId=test-order&amount=120000`)
   await expect(page.getByText(/결제 결과를 확인 중입니다/)).toBeVisible()
   await page.getByRole('button', { name: '서버 상태 다시 확인' }).click()
-  await expect(page.getByText(/예약이 확정되었습니다/)).toHaveCount(0)
+  await expect(page.getByText('결제가 확인되어 예약이 확정되었습니다.', { exact: true })).toBeVisible()
 })
 
 test('권한 유실은 주문만으로 승인하지 않으며 오류에 초점을 둔다', async ({ page }) => {
@@ -115,6 +118,7 @@ test('변경 결제 세션 만료는 재인증을 요청하며 주문만으로 �
 })
 
 test('변경 fragment 교환과 fake 결제는 기존 흐름을 유지한다', async ({ page }) => {
+  await page.route('**/api/payments/mode', route => route.fulfill({ json: { provider: 'fake', changeProvider: 'fake' } }))
   let exchanges = 0
   await page.route('**/api/reservation-change-payments/session', async route => { exchanges++; expect(page.url()).toBe('http://localhost:4000/reservation-change-payment'); await route.fulfill({ status: 204 }) })
   await page.route('**/api/reservation-change-payments/current/checkout', route => route.fulfill({ json: { checkoutUrl: 'http://localhost:4000/fake-checkout' } }))
@@ -122,8 +126,30 @@ test('변경 fragment 교환과 fake 결제는 기존 흐름을 유지한다', a
   await page.goto(`/reservation-change-payment#${token}`)
   await expect(page.getByText('디럭스 오션')).toBeVisible()
   expect(exchanges).toBe(1)
+  await expect(page.getByRole('button', { name: '토스 테스트 결제', exact: true })).toHaveCount(0)
   await page.getByRole('button', { name: '100,000원 결제하기' }).click()
   await expect(page.getByRole('heading', { name: 'Fake checkout' })).toBeVisible()
+})
+
+test('변경 토스 모드는 SDK만 표시하고 legacy 자사 URL로 이동하지 않는다', async ({ page }) => {
+  await page.goto('/reservation-change-payment')
+  await expect(page.getByRole('button', { name: '토스 테스트 결제', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '100,000원 결제하기', exact: true })).toHaveCount(0)
+})
+
+test('승인 요청이 서버 도달 전에 유실되면 NEW 확인 후 메모리 callback으로만 재시도한다', async ({ page }) => {
+  let confirms = 0
+  await page.route(`**/api/reservations/${id}/payment-confirm`, async route => {
+    confirms++
+    if (confirms === 1) await route.abort()
+    else await route.fulfill({ json: { status: 'CONFIRMED', paymentStatus: 'SUCCEEDED', orderId: 'test-order' } })
+  })
+  await page.route(`**/api/reservations/${id}/payment-reconcile`, route => route.fulfill({ json: { status: 'PENDING_PAYMENT', paymentStatus: 'NEW', orderId: 'test-order' } }))
+  await page.goto(`${resultPath}?result=success&paymentKey=pk&orderId=test-order&amount=120000`)
+  await expect(page.getByRole('alert')).toBeVisible()
+  await page.getByRole('button', { name: '서버 상태 다시 확인' }).click()
+  await expect(page.getByText('결제가 확인되어 예약이 확정되었습니다.', { exact: true })).toBeVisible()
+  expect(confirms).toBe(2)
 })
 
 test('고객 전체 취소 pending을 완료로 표시하지 않는다', async ({ page }) => {

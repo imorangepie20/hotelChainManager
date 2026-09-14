@@ -347,6 +347,43 @@ class TossReservationPaymentIntegrationTest {
         mvc.perform(get("/api/reservations/{id}/payment-status", reservation.id())).andExpect(status().isBadRequest());
     }
 
+    @Test void customerReconcileLooksUpUnknownWithoutReconfirmingAndRequiresOwnership() throws Exception {
+        var reservation = create("customer-reconcile");
+        var checkout = payments.checkout(reservation.id(), TOKEN, "checkout");
+        provider.response = command -> { throw new IllegalStateException("response lost"); };
+        assertThat(payments.confirm(reservation.id(), TOKEN, confirmation(checkout)).paymentStatus()).isEqualTo("UNKNOWN");
+        provider.lookup = new ProviderPayment("pay", checkout.orderId(), 200000, "KRW", ProviderStatus.DONE, "txn", null);
+        var mvc = MockMvcBuilders.webAppContextSetup(context).build();
+        mvc.perform(post("/api/reservations/{id}/payment-reconcile", reservation.id())
+                .header("X-Reservation-Token", java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(new byte[33])))
+                .andExpect(status().is4xxClientError());
+        assertThat(provider.lookups.get()).isZero();
+        mvc.perform(post("/api/reservations/{id}/payment-reconcile", reservation.id()).header("X-Reservation-Token", TOKEN))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("CONFIRMED"));
+        mvc.perform(post("/api/reservations/{id}/payment-reconcile", reservation.id()).header("X-Reservation-Token", TOKEN))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.paymentStatus").value("SUCCEEDED"));
+        assertThat(provider.calls.get()).isEqualTo(1);
+        assertThat(provider.lookups.get()).isEqualTo(1);
+        assertThat(count("payment_transaction")).isEqualTo(1);
+    }
+
+    @Test void customerReconcileNeverApprovesNewCheckout() throws Exception {
+        var reservation = create("customer-new");
+        payments.checkout(reservation.id(), TOKEN, "checkout");
+        MockMvcBuilders.webAppContextSetup(context).build()
+                .perform(post("/api/reservations/{id}/payment-reconcile", reservation.id()).header("X-Reservation-Token", TOKEN))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.paymentStatus").value("NEW"));
+        assertThat(provider.calls.get()).isZero();
+        assertThat(provider.lookups.get()).isZero();
+        assertInventory(2, 0);
+    }
+
+    @Test void customerPaymentModesExposeOnlySafeProviderNames() throws Exception {
+        MockMvcBuilders.webAppContextSetup(context).build().perform(get("/api/payments/mode"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.provider").value("toss-test"))
+                .andExpect(jsonPath("$.clientKey").doesNotExist()).andExpect(jsonPath("$.secretKey").doesNotExist());
+    }
+
     private ReservationView create(String key) {
         return reservations.create(key, TOKEN, new ReservationRequest(ROOM, RATE, CHECK_IN, CHECK_IN.plusDays(2),
                 2, 0, 1, 200000, new ReservationGuest("결제 고객", "toss@example.com")));

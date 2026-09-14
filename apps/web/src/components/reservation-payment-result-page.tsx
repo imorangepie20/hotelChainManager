@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { paymentMessage, type TossReturn, type TossStatus } from '../lib/toss-payments'
+import { recoverTossPayment } from '../lib/payment-recovery'
 
 export function ReservationPaymentResultPage({ reservationId, returned }: { reservationId: string; returned: TossReturn }) {
   const [state, setState] = useState<TossStatus | null>(null)
@@ -31,7 +32,7 @@ export function ReservationPaymentResultPage({ reservationId, returned }: { rese
   async function refresh() {
     if (busyRef.current) return
     busyRef.current = true; setBusy(true); setError('')
-    try { setState(await api.tossStatus(reservationId, token())) }
+    try { setState(await recoverTossPayment(() => api.tossReconcile(reservationId, token()), input => api.tossConfirm(reservationId, token(), input), returned)) }
     catch { setError('서버 상태를 확인하지 못했습니다. 예약한 브라우저에서 잠시 후 다시 확인해 주세요.') }
     finally { busyRef.current = false; setBusy(false) }
   }
