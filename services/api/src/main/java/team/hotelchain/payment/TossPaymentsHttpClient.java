@@ -1,0 +1,127 @@
+package team.hotelchain.payment;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.Base64;
+
+public final class TossPaymentsHttpClient implements TossPaymentsClient {
+    private static final URI API_ORIGIN = URI.create("https://api.tosspayments.com");
+    private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
+
+    private final TossPaymentsProperties properties;
+    private final HttpClient http;
+    private final ObjectMapper json;
+
+    public TossPaymentsHttpClient(TossPaymentsProperties properties, HttpClient http) {
+        this(properties, http, new ObjectMapper());
+    }
+
+    TossPaymentsHttpClient(TossPaymentsProperties properties, HttpClient http, ObjectMapper json) {
+        this.properties = properties;
+        this.http = http;
+        this.json = json;
+    }
+
+    @Override
+    public ProviderPayment confirm(ConfirmCommand command) {
+        requireConfirm(command);
+        return send("/v1/payments/confirm", requestBody(
+                "paymentKey", command.paymentKey(), "orderId", command.orderId(), "amount", command.amountKrw()),
+                command.idempotencyKey());
+    }
+
+    @Override
+    public ProviderPayment lookup(String paymentKey) {
+        if (paymentKey == null || paymentKey.isBlank()) {
+            throw new IllegalArgumentException("결제 키가 필요합니다.");
+        }
+        return send("/v1/payments/" + paymentKey, null, null);
+    }
+
+    @Override
+    public ProviderPayment cancel(CancelCommand command) {
+        if (command == null || command.paymentKey() == null || command.paymentKey().isBlank()
+                || command.amountKrw() <= 0 || command.idempotencyKey() == null || command.idempotencyKey().isBlank()) {
+            throw new IllegalArgumentException("취소 결제 키, 금액, Idempotency-Key가 필요합니다.");
+        }
+        return send("/v1/payments/" + command.paymentKey() + "/cancel", requestBody(
+                "cancelAmount", command.amountKrw(), "cancelReason", command.reason()), command.idempotencyKey());
+    }
+
+    private ProviderPayment send(String path, String requestBody, String idempotencyKey) {
+        properties.requireTestConfiguration();
+        HttpRequest.Builder request = HttpRequest.newBuilder(API_ORIGIN.resolve(path))
+                .timeout(REQUEST_TIMEOUT)
+                .header("Authorization", authorization())
+                .header("Accept", "application/json");
+        if (idempotencyKey != null) request.header("Idempotency-Key", idempotencyKey);
+        if (requestBody == null) request.GET();
+        else request.header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8));
+        try {
+            HttpResponse<String> response = http.send(request.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            return map(response.statusCode(), response.body());
+        } catch (IOException exception) {
+            return unknown("HTTP_IO");
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            return unknown("HTTP_INTERRUPTED");
+        }
+    }
+
+    private String authorization() {
+        String credential = Base64.getEncoder().encodeToString((properties.secretKey() + ":").getBytes(StandardCharsets.UTF_8));
+        return "Basic " + credential;
+    }
+
+    private ProviderPayment map(int statusCode, String responseBody) {
+        if (statusCode >= 500) return unknown("HTTP_5XX");
+        try {
+            JsonNode body = json.readTree(responseBody == null ? "{}" : responseBody);
+            if (statusCode >= 400) return new ProviderPayment(null, null, 0, null,
+                    ProviderStatus.FAILED, null, safeCode(body.path("code").asText(null), "HTTP_4XX"));
+            ProviderStatus status = "DONE".equals(body.path("status").asText())
+                    ? ProviderStatus.DONE : ProviderStatus.FAILED;
+            return new ProviderPayment(body.path("paymentKey").asText(null), body.path("orderId").asText(null),
+                    body.path("totalAmount").asLong(), body.path("currency").asText(null), status,
+                    body.path("transactionKey").asText(null),
+                    status == ProviderStatus.DONE ? null : safeCode(body.path("code").asText(null), "STATUS_NOT_DONE"));
+        } catch (JsonProcessingException exception) {
+            return unknown("MALFORMED_RESPONSE");
+        }
+    }
+
+    private ProviderPayment unknown(String errorCode) {
+        return new ProviderPayment(null, null, 0, null, ProviderStatus.UNKNOWN, null, errorCode);
+    }
+
+    private String safeCode(String code, String fallback) {
+        return code == null || !code.matches("[A-Z0-9_]{1,80}") ? fallback : code;
+    }
+
+    private String requestBody(Object... fields) {
+        try {
+            java.util.LinkedHashMap<String, Object> body = new java.util.LinkedHashMap<>();
+            for (int index = 0; index < fields.length; index += 2) body.put((String) fields[index], fields[index + 1]);
+            return json.writeValueAsString(body);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("Toss 결제 요청을 만들 수 없습니다.", exception);
+        }
+    }
+
+    private void requireConfirm(ConfirmCommand command) {
+        if (command == null || command.paymentKey() == null || command.paymentKey().isBlank()
+                || command.orderId() == null || command.orderId().isBlank() || command.amountKrw() <= 0
+                || !"KRW".equals(command.currency()) || command.idempotencyKey() == null || command.idempotencyKey().isBlank()) {
+            throw new IllegalArgumentException("결제 키, 주문번호, KRW 금액, Idempotency-Key가 필요합니다.");
+        }
+    }
+}
