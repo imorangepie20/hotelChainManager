@@ -91,3 +91,14 @@ Compose API에 `PAYMENT_PROVIDER`, `TOSS_PAYMENTS_CLIENT_KEY`, `TOSS_PAYMENTS_SE
 - 새 DB 회귀는 외부 공급자 취소·변경/기존 대기열 차단, 구조화 DTO와 관리 token 승인·환불 summary를 작성하고 test-compile만 통과했다. DB 통합과 브라우저 계약은 실행하지 않았다.
 - `git diff --check`: 종료 코드 0. Node의 관리자 모듈 재해석 경고와 Mockito의 dynamic agent 경고가 있었지만 테스트 실패는 없다.
 - 초기 TSX 변환 문법/테스트 node assert 타입 오류를 수정 후 재검사했다. 관리자 순수 테스트 첫 명령은 경로 착오로 실행되지 않아 올바른 `src/lib` 경로로 재실행했다.
+
+### 최종 재리뷰 2차 보완
+
+- 변경 완료 summary를 먼저 반영해 polling effect가 정리되면서 지연된 예약 상세 응답을 버리던 순서를 수정한다. 새 상세를 받은 뒤 terminal summary를 반영하고, 숙박일/객실 수/총액 변경 시 취소 미리보기도 새로 조회한다.
+- 실제 Toss 응답인 `/reservations/{uuid}/payment-result?result=success|fail`도 검증된 경로만 `/en`으로 변환하고 같은 origin·허용 query 검증을 유지한다.
+- 정산 비활성 통합 테스트의 외부 capture를 실제 fixture INSERT로 구성하고 정리한다. 고객 브라우저 계약의 스코프 밖 `options` 참조를 제거한다.
+- 완료 기준은 해당 순수 계약, 고객 타입/빌드 및 브라우저 계약 파일의 정적 타입 검사, API test-compile·선택 비DB 테스트 통과다. 브라우저/DB/라이브 실행은 하지 않는다.
+
+- 2차 검증: `booking-copy`, `toss-payments`, `reservation-management-state` 순수 계약, 고객 `tsc -b`·production build, 브라우저 계약 두 파일의 `tsc --ignoreConfig --noEmit --target es2022 --module esnext --moduleResolution bundler --skipLibCheck`가 종료 코드 0으로 통과했다. 첫 정적 검사 명령은 TypeScript 7의 `--ignoreConfig` 요구를 표시해 옵션 추가 후 재실행했다.
+- API `mvnw.cmd -q -DskipTests test-compile` 및 `TossPaymentsHttpClientTest,TossPaymentsPropertiesTest,PaymentProviderSafetyTest,CustomerReservationChangeControllerTest` 비DB 11건이 통과했다. `git diff --check`도 통과했다.
+- 지연된 상세 응답과 새 환불 예상액을 확인하는 브라우저 회귀는 작성·정적 타입 검사만 했으며, DB fixture도 컴파일만 했다. 관리자 코드는 변경하지 않아 이번 2차에는 관리자 검사를 반복하지 않았다.

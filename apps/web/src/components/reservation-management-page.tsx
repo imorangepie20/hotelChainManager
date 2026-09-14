@@ -32,7 +32,7 @@ export function ReservationManagementPage({ reservationId, locale = 'ko' }: Prop
   const reservation = reservationId ? entries.find(item => item.access.reservationId === reservationId)?.reservation ?? null : null
 
   useEffect(() => { let active = true; const accesses = reservationId ? (access ? [access] : []) : session.current.listReservationAccess(); Promise.all(accesses.map(async item => { try { return { access: item, reservation: await api.getReservation(item.reservationId, item.managementToken) } } catch { return null } })).then(results => { if (active) { setEntries(results.filter((item): item is LoadedReservation => item !== null)); setLoading(false) } }); return () => { active = false } }, [reservationId])
-  useEffect(() => { if (!reservation || !access || reservation.status !== 'CONFIRMED') { setPreview(null); return }; let active = true; api.cancellationPreview(reservation.id, access.managementToken).then(result => { if (active) setPreview(result) }).catch(() => { if (active) setPreview(null) }); return () => { active = false } }, [reservation?.id, reservation?.status, access?.managementToken])
+  useEffect(() => { if (!reservation || !access || reservation.status !== 'CONFIRMED') { setPreview(null); return }; setPreview(null); let active = true; api.cancellationPreview(reservation.id, access.managementToken).then(result => { if (active) setPreview(result) }).catch(() => { if (active) setPreview(null) }); return () => { active = false } }, [reservation?.id, reservation?.status, reservation?.checkIn, reservation?.checkOut, reservation?.total, reservation?.rooms, access?.managementToken])
   useEffect(() => { if (!reservation) { setChange(null); return }; let active = true; api.reservationChangeSummary(reservation.id, access!.managementToken).then(result => { if (active) setChange(result) }).catch(() => { if (active) setChange(null) }); api.reservationChangePayment().then(result => { if (active) setLinkedPayment(result.reservationId === reservation.id && result.status === 'AWAITING_PAYMENT') }).catch(() => { if (active) setLinkedPayment(false) }); return () => { active = false } }, [reservation?.id])
 
   useEffect(() => {
@@ -45,11 +45,14 @@ export function ReservationManagementPage({ reservationId, locale = 'ko' }: Prop
       try {
         const next = await api.reservationChangeSummary(access.reservationId, access.managementToken)
         if (!active) return
-        setChange(next)
         if (next?.status === 'COMPLETED') {
           const updated = await api.getReservation(access.reservationId, access.managementToken)
-          if (active) setEntries(current => current.map(item => item.reservation.id === updated.id ? { ...item, reservation: updated } : item))
+          if (!active) return
+          setPreview(null)
+          setEntries(current => current.map(item => item.reservation.id === updated.id ? { ...item, reservation: updated } : item))
         }
+        // Publish the terminal status only after the refreshed reservation is ready.
+        if (active) setChange(next)
       } catch { /* Keep the last server-confirmed summary until a successful refresh. */ }
       finally { inFlight = false }
     }, 3000)

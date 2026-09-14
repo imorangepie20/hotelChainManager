@@ -273,7 +273,12 @@ class CancellationIntegrationTest {
     @Test
     void externalCaptureCannotBeCancelledByFakeGatewayAndViewHasStructuredDetails() {
         ReservationView reservation = confirmedReservation("external-provider-gate");
-        jdbc.update("update payment_transaction set provider='TOSS_TEST' where reservation_id=?", reservation.id());
+        assertThat(jdbc.update("""
+                insert into payment_transaction
+                    (id, reservation_id, provider, merchant_account, gateway_transaction_id,
+                     transaction_type, captured_amount_krw, currency)
+                values (?, ?, 'TOSS_TEST', 'fixture-merchant', 'external-capture-fixture', 'ORIGINAL_CHARGE', 200000, 'KRW')
+                """, UUID.randomUUID(), reservation.id())).isEqualTo(1);
         assertThat(cancellationService.preview(reservation.id(), TOKEN).cancellable()).isFalse();
         assertThatThrownBy(() -> cancellationService.cancel(reservation.id(), TOKEN, "blocked-cancel"))
                 .isInstanceOf(BusinessConflictException.class);
@@ -307,6 +312,7 @@ class CancellationIntegrationTest {
         jdbc.update("delete from staff_session");
         jdbc.update("delete from cancellation_attempt");
         jdbc.update("delete from staff_member where id in (?, ?)", STAFF_ID, OTHER_STAFF_ID);
+        jdbc.update("delete from payment_transaction where reservation_id in (select id from reservation where room_type_id=?)", ROOM_TYPE_ID);
         jdbc.update("delete from payment_attempt");
         jdbc.update("delete from reservation_idempotency");
         jdbc.update("delete from reservation_night");

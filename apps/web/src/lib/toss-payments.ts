@@ -113,7 +113,7 @@ export function validateTossCheckout(checkout: TossCheckout, origin: string) {
   for (const value of [checkout.successUrl, checkout.failUrl]) {
     const url = new URL(value)
     const bookingComplete = /^\/(?:en\/)?booking\/complete$/.test(url.pathname) && url.search === ''
-    const reservationResult = /^\/reservations\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/payment-result$/.test(url.pathname)
+    const reservationResult = /^\/(?:en\/)?reservations\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/payment-result$/.test(url.pathname)
       && /^\?result=(success|fail)$/.test(url.search)
     if (url.origin !== origin || url.username || url.password || url.hash || (!bookingComplete && !reservationResult)) {
       throw new TossCheckoutFailure('안전한 결제 복귀 주소를 확인할 수 없습니다. 서버 상태를 다시 확인해 주세요.')
@@ -166,6 +166,12 @@ function loadTossSdk(): Promise<TossFactory> {
 export function localizedTossCheckout(checkout: TossCheckout, locale: 'ko' | 'en'): TossCheckout {
   // Validate the server origin and return route before preserving the selected UI locale.
   validateTossCheckout(checkout, new URL(checkout.successUrl).origin)
-  const localize = (value: string) => { const url = new URL(value); if (/^\/(?:en\/)?booking\/complete$/.test(url.pathname)) url.pathname = `${locale === 'en' ? '/en' : ''}/booking/complete`; return url.toString() }
+  const localize = (value: string) => {
+    const url = new URL(value)
+    // Both allowed server return forms have already been checked above.
+    const path = url.pathname.replace(/^\/en(?=\/)/, '')
+    url.pathname = `${locale === 'en' ? '/en' : ''}${path}`
+    return url.toString()
+  }
   return { ...checkout, successUrl: localize(checkout.successUrl), failUrl: localize(checkout.failUrl) }
 }

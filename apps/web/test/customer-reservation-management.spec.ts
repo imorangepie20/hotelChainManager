@@ -81,7 +81,6 @@ test('예약 변경 결제는 기존·변경 예약과 서버 상태를 함께 �
   await page.route('**/api/**', route => {
     const url = new URL(route.request().url())
     if (url.pathname === '/api/reservation-change-payments/session') return route.fulfill({ status: 204 })
-    if (url.pathname === `/api/reservations/${id}/change-summary`) return route.fulfill({ json: options.change ? { differenceKrw: 100000, refundStatus: null, ...options.change } : null })
     if (url.pathname === '/api/reservation-change-payments/current') return route.fulfill({ json: change })
     return route.fulfill({ status: 404, json: { code: 'NOT_FOUND', message: '없음' } })
   })
@@ -96,8 +95,7 @@ test('예약 변경 결제는 만료와 조정 필요 상태에서 결제를 다
   for (const status of ['EXPIRED', 'RECONCILIATION_REQUIRED', 'COMPLETED']) {
     await page.route('**/api/**', route => {
       const url = new URL(route.request().url())
-      if (url.pathname === `/api/reservations/${id}/change-summary`) return route.fulfill({ json: options.change ? { differenceKrw: 100000, refundStatus: null, ...options.change } : null })
-    if (url.pathname === '/api/reservation-change-payments/current') return route.fulfill({ json: {
+      if (url.pathname === '/api/reservation-change-payments/current') return route.fulfill({ json: {
         reservationId: id, reservationNumberSuffix: id.slice(-8), previousCheckIn: '2026-09-22', previousCheckOut: '2026-09-24', previousRoomTypeName: '스탠다드 시티', previousRatePlanName: '룸 온리', previousTotalKrw: 360000,
         checkIn: '2026-09-24', checkOut: '2026-09-26', roomTypeName: '디럭스 오션', ratePlanName: '유연 취소', totalKrw: 460000, differenceKrw: 100000,
         additionalAmountKrw: 100000, currency: 'KRW', expiresAt: '2026-09-20T10:00:00.000Z', environmentLabel: '테스트 결제', status,
@@ -108,4 +106,30 @@ test('예약 변경 결제는 만료와 조정 필요 상태에서 결제를 다
     await expect(page.getByRole('button', { name: /결제하기|Pay now/ })).toHaveCount(0)
     await page.unroute('**/api/**')
   }
+})
+
+test('변경 완료는 지연된 예약 상세와 새 환불 예상을 함께 반영한다', async ({ page }) => {
+  await storeAccess(page)
+  await mockApi(page)
+  let summaryReads = 0
+  let reservationReads = 0
+  let previewReads = 0
+  await page.route(`**/api/reservations/${id}/change-summary`, route => route.fulfill({ json: {
+    reservationId: id, status: ++summaryReads === 1 ? 'APPLYING' : 'COMPLETED', checkIn: '2026-09-24', checkOut: '2026-09-26',
+    roomTypeName: '디럭스 오션', ratePlanName: '유연 취소', differenceKrw: 100000, currency: 'KRW', expiresAt: '2026-09-20T10:00:00Z', refundStatus: null,
+  } }))
+  await page.route(`**/api/reservations/${id}`, async route => {
+    if (++reservationReads === 1) return route.fulfill({ json: confirmed })
+    await new Promise(resolve => setTimeout(resolve, 50))
+    return route.fulfill({ json: { ...confirmed, roomTypeName: '디럭스 오션', checkIn: '2026-09-24', checkOut: '2026-09-26', total: 460000 } })
+  })
+  await page.route(`**/api/reservations/${id}/cancellation-preview`, route => route.fulfill({ json: {
+    reservationId: id, status: 'CONFIRMED', cancellable: true, refundAmount: ++previewReads === 1 ? 360000 : 460000,
+    currency: 'KRW', cutoffAt: '2026-09-23T09:00:00Z', timezone: 'Asia/Seoul', unavailableReason: null,
+  } }))
+  await page.goto(`/reservations/${id}`)
+  await expect(page.getByRole('heading', { name: '스탠다드 시티' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '변경 완료' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '디럭스 오션' })).toBeVisible()
+  await expect(page.getByText(/예상 환불액 ₩460,000/)).toBeVisible()
 })
