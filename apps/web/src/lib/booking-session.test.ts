@@ -26,6 +26,9 @@ function runBookingSessionTests() {
   store.saveSelection(selection)
   expectEqual(store.loadSelection(), selection, '새로고침 뒤에도 객실과 요금제 선택을 복원한다')
 
+  store.clearSelection()
+  expectEqual(store.loadSelection(), null, '검색 조건을 바꾸면 이전 객실 선택을 제거한다')
+
   store.saveReservationAccess({ reservationId: 'r1', managementToken: 'secret' })
   expectEqual(store.listReservationAccess(), [{ reservationId: 'r1', managementToken: 'secret' }], '관리 토큰은 같은 브라우저 세션에서만 복원한다')
 

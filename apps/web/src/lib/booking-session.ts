@@ -38,6 +38,10 @@ export class BookingSessionStore {
     this.set(selectionStorageKey, { version: storageVersion, selection })
   }
 
+  clearSelection(): void {
+    this.remove(selectionStorageKey)
+  }
+
   saveReservationAccess(access: ReservationAccess): void {
     if (!isReservationAccess(access)) return
     const accesses = this.listReservationAccess().filter(item => item.reservationId !== access.reservationId)
