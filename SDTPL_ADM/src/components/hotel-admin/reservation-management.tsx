@@ -27,6 +27,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { ReservationChangeApprovalQueue } from "@/components/hotel-admin/reservation-change-approval-queue";
 import { ReservationChangePanel } from "@/components/hotel-admin/reservation-change-panel";
 import { CheckedInRoomMove } from "@/components/hotel-admin/checked-in-room-move";
+import { cancellationNotice } from "@/lib/cancellation-notice";
 import {
   assignRoom,
   cancelStaffReservation,
@@ -241,7 +242,7 @@ export function ReservationManagement() {
     setCancellationError(null);
     try {
       const result = await cancelStaffReservation(token, cancellationTarget.reservationId, cancellationKey);
-      setNotice(`예약이 취소되었습니다. 환불 예정 금액은 ${money(result.refundAmount, result.currency)}입니다.`);
+      setNotice(cancellationNotice(result.status, money(result.refundAmount, result.currency)));
       setCancellationTarget(null);
       setCancellationPreview(null);
       setSelectedReservation(null);
