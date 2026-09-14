@@ -18,6 +18,7 @@ type SessionStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
 const selectionStorageKey = 'hotel-chain.booking.selection.v1'
 const reservationAccessStorageKey = 'hotel-chain.booking.reservation-access.v1'
 const checkoutProgressStorageKey = 'hotel-chain.booking.checkout-progress.v1'
+const checkoutAttemptKey = 'hotel-chain.booking.checkout-attempt.v1'
 const storageVersion = 1
 
 export class BookingSessionStore {
@@ -25,6 +26,27 @@ export class BookingSessionStore {
 
   constructor(storage: SessionStorage | null = getSessionStorage()) {
     this.storage = storage
+  }
+
+  savePaymentResultAccess(access: ReservationAccess): void { if (isReservationAccess(access)) this.set('hotel-chain.booking.payment-result.v1', access) }
+  loadPaymentResultAccess(): ReservationAccess | null {
+    const access = parseStoredValue(this.get('hotel-chain.booking.payment-result.v1'))
+    return isReservationAccess(access) ? access : null
+  }
+
+  clearCheckoutProgress(): void { this.remove(checkoutProgressStorageKey) }
+
+  clearCheckoutAttempt(): void { this.remove(checkoutAttemptKey) }
+
+  checkoutAttempt(fingerprint: string, credentials: { managementToken: string; idempotencyKey: string }) {
+    const stored = parseStoredValue(this.get(checkoutAttemptKey))
+    if (isRecord(stored) && typeof stored.fingerprint === 'string' && typeof stored.managementToken === 'string' && typeof stored.idempotencyKey === 'string') {
+      if (stored.fingerprint !== fingerprint) throw new Error('CHECKOUT_RETRY_INPUT_CHANGED')
+      return { managementToken: stored.managementToken, idempotencyKey: stored.idempotencyKey }
+    }
+    this.set(checkoutAttemptKey, { fingerprint, ...credentials })
+    if (!this.get(checkoutAttemptKey)) throw new Error('CHECKOUT_STORAGE_REQUIRED')
+    return credentials
   }
 
   loadSelection(): BookingSelection | null {

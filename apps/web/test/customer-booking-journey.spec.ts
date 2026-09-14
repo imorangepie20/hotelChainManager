@@ -22,8 +22,8 @@ const offer = {
 
 const pendingReservation = {
   id: 'reservation-123', status: 'PENDING_PAYMENT', checkIn: '2026-09-22', checkOut: '2026-09-24', rooms: 1,
-  expiresAt: '2026-09-22T10:10:00.000Z', total: 360000, currency: 'KRW', nightlyPrices: offer.nightlyPrices,
-  cancellationPolicy: '{"version":"v1"}', guest: { name: '변경 테스트', email: 'change-test@example.com' },
+  expiresAt: new Date(Date.now() + 600000).toISOString(), total: 360000, currency: 'KRW', nightlyPrices: offer.nightlyPrices,
+  roomTypeName: offer.roomTypeName, ratePlanName: offer.ratePlanName, adults: 2, children: 0, paymentStatus: 'NOT_STARTED', cancellationPolicyDetails: { refundCutoffDaysBefore: 1, refundCutoffLocalTime: '18:00', timezone: 'Asia/Seoul' }, cancellationPolicy: '{"version":"v1"}', guest: { name: '변경 테스트', email: 'change-test@example.com' },
 }
 
 async function mockCustomerApi(page: Page) {
@@ -83,10 +83,10 @@ test('영문 예약 경로를 결과와 선택 뒤에도 유지한다', async ({
   await mockCustomerApi(page)
   await page.goto('/en/booking/results?hotelId=sokcho&checkIn=2026-09-22&checkOut=2026-09-24&adults=2&children=0&rooms=1')
   await expect(page.getByRole('link', { name: /STAY HANEUL/ })).toHaveAttribute('href', '/en')
-  await page.getByRole('button', { name: /검색 조건 수정/ }).click()
-  await page.getByRole('button', { name: '조건 적용' }).click()
+  await page.getByRole('button', { name: /Edit search/ }).click()
+  await page.getByRole('button', { name: 'Apply search' }).click()
   await expect(page).toHaveURL(/\/en\/booking\/results\?/)
-  await page.getByRole('button', { name: /스탠다드 시티 선택/ }).click()
+  await page.getByRole('button', { name: /스탠다드 시티 Select/ }).click()
   await expect(page).toHaveURL('/en/booking/checkout')
 })
 
@@ -101,4 +101,24 @@ test('예약자 입력 뒤 서버 확보와 결제 재시도를 준비한다', a
   await expect(page.getByText(/남은 확보 시간/)).toBeVisible()
   await expect(page.getByRole('button', { name: '토스 테스트 결제' })).toBeEnabled()
   await expect(page).not.toHaveURL(/change-test%40example\.com|managementToken|paymentKey/)
+})
+
+test('영문 fake 결제는 완료와 새로고침에서 서버 예약 상태를 확인한다', async ({ page }) => {
+  await mockCustomerApi(page)
+  let paid = false
+  await page.route('**/api/payments/mode', route => route.fulfill({ json: { provider: 'fake' } }))
+  await page.route('**/api/reservations/reservation-123', route => route.fulfill({ json: { ...pendingReservation, status: paid ? 'CONFIRMED' : 'PENDING_PAYMENT', paymentStatus: paid ? 'SUCCEEDED' : 'NOT_STARTED' } }))
+  await page.route('**/api/reservations/reservation-123/test-payment', route => { paid = true; return route.fulfill({ json: { status: 'CONFIRMED', paymentStatus: 'SUCCEEDED' } }) })
+  await page.goto('/en/booking/results?hotelId=sokcho&checkIn=2026-09-22&checkOut=2026-09-24&adults=2&children=0&rooms=1')
+  await page.getByRole('button', { name: /스탠다드 시티 Select/ }).click()
+  await page.getByLabel('Guest name').fill('Test Guest')
+  await page.getByLabel('Email').fill('test@example.com')
+  await page.getByRole('checkbox').check()
+  await page.getByRole('button', { name: 'Continue to payment' }).click()
+  await page.getByRole('button', { name: 'Complete test payment' }).click()
+  await expect(page.getByRole('heading', { name: 'Your reservation is confirmed' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'View reservation' })).toHaveAttribute('href', '/en/reservations/reservation-123')
+  await page.reload()
+  await expect(page.getByRole('heading', { name: 'Your reservation is confirmed' })).toBeVisible()
+  expect(await page.evaluate(() => sessionStorage.getItem('hotel-chain.booking.checkout-progress.v1'))).toBeNull()
 })

@@ -47,7 +47,7 @@ export function paymentMessage(state: Pick<TossStatus, 'status' | 'paymentStatus
   return { completed: false, text: '결제 결과를 확인하고 있습니다. 중복 결제하지 말고 서버 상태를 다시 확인해 주세요.' }
 }
 
-export async function requestTossCheckout(checkout: TossCheckout): Promise<void> {
+export async function requestTossCheckout(checkout: TossCheckout, locale: 'ko' | 'en' = 'ko'): Promise<void> {
   let stage: CheckoutStage = 'CONFIG'
   try {
     validateTossCheckout(checkout, window.location.origin)
@@ -67,7 +67,7 @@ export async function requestTossCheckout(checkout: TossCheckout): Promise<void>
             requested = true
             void widgets.requestPayment({
               orderId: checkout.orderId,
-              orderName: '호텔 예약 테스트 결제',
+              orderName: locale === 'en' ? 'Hotel reservation test payment' : '호텔 예약 테스트 결제',
               successUrl: checkout.successUrl,
               failUrl: checkout.failUrl,
             }).then(resolve, reject)
@@ -85,11 +85,11 @@ export async function requestTossCheckout(checkout: TossCheckout): Promise<void>
     }
     await sdk(checkout.clientKey).payment({ customerKey: sdk.ANONYMOUS }).requestPayment({
       method: 'CARD', amount: { currency: 'KRW', value: checkout.amountKrw }, orderId: checkout.orderId,
-      orderName: '호텔 예약 테스트 결제', successUrl: checkout.successUrl, failUrl: checkout.failUrl,
+      orderName: locale === 'en' ? 'Hotel reservation test payment' : '호텔 예약 테스트 결제', successUrl: checkout.successUrl, failUrl: checkout.failUrl,
     })
   } catch (reason) {
     if (reason instanceof TossCheckoutFailure) throw reason
-    throw new TossCheckoutFailure(checkoutFailureMessage(stage, reason))
+    throw new TossCheckoutFailure(locale === 'en' ? 'The payment window did not complete. Retry within the hold time or check the server status.' : checkoutFailureMessage(stage, reason))
   }
 }
 
@@ -161,4 +161,11 @@ function loadTossSdk(): Promise<TossFactory> {
     document.head.appendChild(script)
   })
   return sdkPromise
+}
+
+export function localizedTossCheckout(checkout: TossCheckout, locale: 'ko' | 'en'): TossCheckout {
+  // Validate the server origin and return route before preserving the selected UI locale.
+  validateTossCheckout(checkout, new URL(checkout.successUrl).origin)
+  const localize = (value: string) => { const url = new URL(value); if (/^\/(?:en\/)?booking\/complete$/.test(url.pathname)) url.pathname = `${locale === 'en' ? '/en' : ''}/booking/complete`; return url.toString() }
+  return { ...checkout, successUrl: localize(checkout.successUrl), failUrl: localize(checkout.failUrl) }
 }

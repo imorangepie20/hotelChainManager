@@ -11,7 +11,8 @@ export type Reservation = {
   id: string; status: string; checkIn: string; checkOut: string; rooms: number
   expiresAt: string; total: number; currency: string; nightlyPrices: NightlyPrice[]
   cancellationPolicy: string; guest: { name: string; email: string }
-  roomTypeName?: string; ratePlanName?: string; paymentStatus?: string
+  roomTypeName?: string; ratePlanName?: string; paymentStatus?: string; adults?: number; children?: number
+  cancellationPolicyDetails?: { refundCutoffDaysBefore: number; refundCutoffLocalTime: string; timezone: string }
 }
 
 export type ReservationChangePayment = {
@@ -34,6 +35,8 @@ export type ReservationChangePayment = {
   environmentLabel: string
   status: string
 }
+
+export type ReservationChangeSummary = Pick<ReservationChangePayment, 'reservationId' | 'status' | 'checkIn' | 'checkOut' | 'roomTypeName' | 'ratePlanName' | 'differenceKrw' | 'currency' | 'expiresAt'> & { refundStatus: string | null }
 
 export type CancellationPreview = {
   reservationId: string; status: string; cancellable: boolean; refundAmount: number
@@ -78,6 +81,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     throw await apiFailure(response)
   }
+  if (response.status === 204) return null as T
   return response.json() as Promise<T>
 }
 
@@ -115,6 +119,7 @@ export const api = {
     method: 'POST', headers: headers(token, key), body: JSON.stringify(body),
   }),
   getReservation: (id: string, token: string) => request<Reservation>(`/api/reservations/${id}`, { headers: headers(token) }),
+  reservationChangeSummary: (id: string, token: string) => request<ReservationChangeSummary | null>(`/api/reservations/${encodeURIComponent(id)}/change-summary`, { headers: headers(token), cache: 'no-store' }),
   cancellationPreview: (id: string, token: string) => request<CancellationPreview>(`/api/reservations/${encodeURIComponent(id)}/cancellation-preview`, {
     headers: headers(token), cache: 'no-store',
   }),

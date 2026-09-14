@@ -16,6 +16,7 @@ export function reservationStatusLabel(status: string, locale: 'ko' | 'en' = 'ko
 
 export function changeStatusLabel(status: string, locale: 'ko' | 'en' = 'ko'): string {
   const korean = {
+    PENDING_APPROVAL: '변경 승인 대기', APPROVED: '변경 승인 완료', REFUNDING: '환불 처리 중', REJECTED: '변경 반려', CANCELLED: '변경 취소',
     AWAITING_PAYMENT: '추가 결제 대기',
     READY_TO_APPLY: '변경 처리 중',
     APPLYING: '변경 처리 중',
@@ -25,6 +26,7 @@ export function changeStatusLabel(status: string, locale: 'ko' | 'en' = 'ko'): s
     RECONCILIATION_REQUIRED: '변경 결과 확인 중',
   } as Record<string, string>
   const english = {
+    PENDING_APPROVAL: 'Awaiting change approval', APPROVED: 'Change approved', REFUNDING: 'Refund in progress', REJECTED: 'Change rejected', CANCELLED: 'Change cancelled',
     AWAITING_PAYMENT: 'Additional payment pending', READY_TO_APPLY: 'Change in progress', APPLYING: 'Change in progress',
     REFUND_PENDING: 'Refund in progress', COMPLETED: 'Change completed', EXPIRED: 'Change request expired',
     RECONCILIATION_REQUIRED: 'Checking change result',

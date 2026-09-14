@@ -45,3 +45,23 @@ function runBookingSessionTests() {
 }
 
 runBookingSessionTests()
+
+const retryStorage = new MemoryStorage()
+const retryStore = new BookingSessionStore(retryStorage)
+const firstCredentials = { managementToken: 'first-secret', idempotencyKey: 'first-key' }
+expectEqual(retryStore.checkoutAttempt('request-digest', firstCredentials), firstCredentials, '요청 전에 재시도 자격 증명을 보존한다')
+expectEqual(new BookingSessionStore(retryStorage).checkoutAttempt('request-digest', { managementToken: 'new-secret', idempotencyKey: 'new-key' }), firstCredentials, '응답 유실 후 새로고침에도 같은 요청 자격 증명을 사용한다')
+let mismatchRejected = false
+try { retryStore.checkoutAttempt('different-request', firstCredentials) } catch { mismatchRejected = true }
+expectEqual(mismatchRejected, true, '불명확 요청의 입력 변경을 차단한다')
+retryStore.clearCheckoutAttempt()
+expectEqual(retryStore.checkoutAttempt('different-request', firstCredentials), firstCredentials, '확실히 끝난 요청만 새로운 입력을 허용한다')
+retryStore.saveCheckoutProgress(selection, { reservationId: 'done', managementToken: 'secret' })
+retryStore.savePaymentResultAccess({ reservationId: 'done', managementToken: 'secret' })
+retryStore.clearCheckoutProgress()
+retryStore.saveSelection(selection)
+expectEqual(retryStore.loadCheckoutProgress(selection), null, '종료한 확보는 같은 객실을 다시 선택해도 복원하지 않는다')
+expectEqual(retryStore.loadPaymentResultAccess()?.reservationId, 'done', '완료 화면 새로고침 접근은 확보와 별도로 보존한다')
+let unavailableRejected = false
+try { new BookingSessionStore(null).checkoutAttempt('request-digest', firstCredentials) } catch { unavailableRejected = true }
+expectEqual(unavailableRejected, true, '저장 불가 상태에서는 중복 위험이 있는 예약 요청을 시작하지 않는다')

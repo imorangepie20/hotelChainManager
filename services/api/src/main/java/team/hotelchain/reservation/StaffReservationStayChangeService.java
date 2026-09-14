@@ -62,6 +62,7 @@ public class StaffReservationStayChangeService {
                 request == null ? null : request.checkOut(),
                 false);
         staffAccess.requireHotel(staff, quote.hotelId());
+        PaymentProviderSafety.requireFakeSettlement(jdbc, reservationId);
         requireChangeable(quote);
         requireFutureTarget(quote);
 
@@ -91,6 +92,7 @@ public class StaffReservationStayChangeService {
         ValidatedChange change = validateChange(idempotencyKey, request);
         ReservationStay reservation = findReservation(reservationId, true);
         staffAccess.requireHotel(staff, reservation.hotelId());
+        PaymentProviderSafety.requireFakeSettlement(jdbc, reservationId);
         String requestHash = requestHash(staff.id(), change);
 
         ExistingChange existing = existingChange(reservationId, idempotencyKey);

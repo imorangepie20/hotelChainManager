@@ -63,6 +63,7 @@ public class ReservationChangeRequestService {
         ReservationStayQuote quote = quoteService.quote(
                 reservationId, request.checkIn(), request.checkOut(), true);
         staffAccess.requireHotel(staff, quote.hotelId());
+        team.hotelchain.reservation.PaymentProviderSafety.requireFakeSettlement(jdbc, reservationId);
 
         ExistingRequest existing = findExisting(reservationId, idempotencyKey);
         if (existing != null) {
@@ -184,6 +185,7 @@ public class ReservationChangeRequestService {
         StaffPrincipal staff = staffAccess.current(token);
         RequestTarget target = findTarget(requestId);
         staffAccess.requireHotel(staff, target.hotelId());
+        team.hotelchain.reservation.PaymentProviderSafety.requireFakeSettlement(jdbc, target.reservationId());
         ReservationStayQuote quote = quoteService.quote(
                 target.reservationId(), target.checkIn(), target.checkOut(), true);
         LockedRequest locked = lockRequestWithAccess(staff, requestId);

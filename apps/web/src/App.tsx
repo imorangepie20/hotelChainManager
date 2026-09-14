@@ -290,12 +290,12 @@ function BookingApp() {
   if (previewMode && websiteLoading) return <>{renderHeader(true)}<main className="content-section" aria-live="polite">{locale === 'en' ? 'Loading draft…' : '저장 초안을 불러오는 중…'}</main></>
   const bookingRoute = resolveCustomerRoute(pathname)
   if (previewMode && (bookingRoute?.kind === 'booking-results' || bookingRoute?.kind === 'booking-checkout' || bookingRoute?.kind === 'booking-complete' || bookingRoute?.kind === 'reservation-payment-result')) {
-    return <CustomerBookingShell step="search" locale={bookingRoute.locale ?? 'ko'}><section className="booking-route-state"><h1>미리보기에서는 예약을 진행할 수 없습니다</h1><p>발행된 페이지에서 예약 검색을 이용해 주세요.</p></section></CustomerBookingShell>
+    return <CustomerBookingShell step="search" locale={bookingRoute.locale ?? 'ko'}><section className="booking-route-state"><h1>{bookingRoute?.locale === 'en' ? 'Booking is unavailable in preview' : '미리보기에서는 예약을 진행할 수 없습니다'}</h1><p>{bookingRoute?.locale === 'en' ? 'Use room search on the published website.' : '발행된 페이지에서 예약 검색을 이용해 주세요.'}</p></section></CustomerBookingShell>
   }
   if (bookingRoute?.kind === 'booking-results') {
     const criteria = parseBookingCriteria(window.location.search)
     if (criteria) return <BookingSearchPage criteria={criteria} locale={bookingRoute.locale ?? 'ko'} />
-    return <CustomerBookingShell step="search" locale={bookingRoute.locale ?? 'ko'}><section className="booking-route-state"><h1>검색 조건을 확인해 주세요</h1><p>유효한 지점, 날짜, 인원과 객실 수를 입력한 뒤 다시 검색해 주세요.</p><a className="primary" href={bookingRoute.locale === 'en' ? '/en' : '/#booking'}>예약 검색으로 돌아가기</a></section></CustomerBookingShell>
+    return <CustomerBookingShell step="search" locale={bookingRoute.locale ?? 'ko'}><section className="booking-route-state"><h1>{bookingRoute?.locale === 'en' ? 'Check your search criteria' : '검색 조건을 확인해 주세요'}</h1><p>{bookingRoute?.locale === 'en' ? 'Enter a valid hotel, dates, guests and room count, then search again.' : '유효한 지점, 날짜, 인원과 객실 수를 입력한 뒤 다시 검색해 주세요.'}</p><a className="primary" href={bookingRoute.locale === 'en' ? '/en' : '/#booking'}>{bookingRoute?.locale === 'en' ? 'Back to room search' : '예약 검색으로 돌아가기'}</a></section></CustomerBookingShell>
   }
   if (bookingRoute?.kind === 'booking-checkout') return <BookingCheckoutPage locale={bookingRoute.locale ?? 'ko'} />
   if (bookingRoute?.kind === 'booking-complete') return <BookingResultPage locale={bookingRoute.locale ?? 'ko'} returned={initialTossReturn} />

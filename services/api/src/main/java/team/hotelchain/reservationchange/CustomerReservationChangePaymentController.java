@@ -49,13 +49,13 @@ public class CustomerReservationChangePaymentController {
 
     @GetMapping("/current")
     public CustomerReservationChangePaymentView current(
-            @CookieValue(SESSION_COOKIE) String sessionToken) {
+            @CookieValue(value = SESSION_COOKIE, required = false) String sessionToken) {
         return settlements.current(sessionToken);
     }
 
     @PostMapping("/current/checkout")
     public Map<String, String> checkout(
-            @CookieValue(SESSION_COOKIE) String sessionToken) {
+            @CookieValue(value = SESSION_COOKIE, required = false) String sessionToken) {
         return Map.of("checkoutUrl", settlements.checkout(sessionToken));
     }
 

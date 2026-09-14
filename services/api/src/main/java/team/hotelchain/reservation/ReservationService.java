@@ -130,9 +130,26 @@ public class ReservationService {
                 SELECT stay_date, amount_krw FROM reservation_night
                  WHERE reservation_id = ? ORDER BY stay_date
                 """, (rs, index) -> new ReservationNight(rs.getDate(1).toLocalDate(), rs.getInt(2)), reservationId);
+        var details = jdbc.queryForObject("""
+                select rt.name room_type_name, rp.name rate_plan_name, r.adults, r.children,
+                  coalesce((r.policy_snapshot->>'refundCutoffDaysBefore')::integer, 1) cutoff_days,
+                  coalesce(r.policy_snapshot->>'refundCutoffLocalTime', '18:00') cutoff_time,
+                  coalesce(r.policy_snapshot->>'timezone', 'Asia/Seoul') timezone,
+                  case when exists(select 1 from payment_transaction t where t.reservation_id=r.id)
+                    then 'SUCCEEDED'
+                    else coalesce((select p.status from payment_provider_attempt p where p.reservation_id=r.id
+                      order by p.created_at desc limit 1),
+                      (select p.payment_status from payment_attempt p where p.reservation_id=r.id
+                      order by p.created_at desc limit 1), 'NOT_STARTED') end payment_status
+                from reservation r join room_type rt on rt.id=r.room_type_id
+                join rate_plan rp on rp.id=r.rate_plan_id where r.id=?
+                """, (rs, n) -> new DisplayDetails(rs.getString("room_type_name"), rs.getString("rate_plan_name"),
+                    rs.getInt("adults"), rs.getInt("children"), rs.getString("payment_status"),
+                    new CancellationPolicyDetails(rs.getInt("cutoff_days"), rs.getString("cutoff_time"), rs.getString("timezone"))), reservationId);
         return new ReservationView(row.id(), row.status(), row.checkIn(), row.checkOut(), row.rooms(),
                 row.expiresAt(), row.total(), row.currency(), nights, row.policySnapshot(),
-                new ReservationGuest(row.guestName(), row.guestEmail()));
+                new ReservationGuest(row.guestName(), row.guestEmail()), details.roomTypeName(), details.ratePlanName(),
+                details.adults(), details.children(), details.paymentStatus(), details.policy());
     }
 
     private ExistingRequest findExisting(String tokenHash, String idempotencyKey) {
@@ -194,6 +211,9 @@ public class ReservationService {
                 rs.getTimestamp("expires_at").toInstant(), rs.getLong("total_krw"), rs.getString("currency").trim(),
                 rs.getString("policy_snapshot"), rs.getString("guest_name"), rs.getString("guest_email"));
     }
+
+    private record DisplayDetails(String roomTypeName, String ratePlanName, int adults, int children,
+            String paymentStatus, CancellationPolicyDetails policy) {}
 
     private record InventoryNight(LocalDate date, int capacity, int held, int confirmed, Integer amount) {
     }

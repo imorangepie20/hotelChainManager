@@ -1,3 +1,4 @@
+import { bookingText } from '../lib/booking-copy'
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowRight, BedDouble, CalendarDays, Coffee, Waves } from 'lucide-react'
 
@@ -38,7 +39,7 @@ export function BookingSearchPage({ criteria, locale = 'ko' }: BookingSearchPage
     const fields = availabilityRequestFields({ ...criteria, breakfastOnly: false })
     api.availability(new URLSearchParams(Object.entries(fields).map(([key, value]) => [key, String(value)])))
       .then(result => { if (requests.current.isCurrent(request)) setOffers(result.offers) })
-      .catch(() => { if (requests.current.isCurrent(request)) setError('객실 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.') })
+      .catch(() => { if (requests.current.isCurrent(request)) setError(bookingText(locale, "객실 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.")) })
       .finally(() => { if (requests.current.complete(request)) setBusy(false) })
   }, [currentCriteriaKey])
 
@@ -61,34 +62,34 @@ export function BookingSearchPage({ criteria, locale = 'ko' }: BookingSearchPage
     window.location.assign(locale === 'en' ? '/en/booking/checkout' : '/booking/checkout')
   }
 
-  const summary = <><strong>{hotel?.region ?? '선택한 지점'}</strong><span>{criteria.checkIn} — {criteria.checkOut} · 성인 {criteria.adults}명{criteria.children > 0 && <> · 아동 {criteria.children}명</>} · 객실 {criteria.rooms}개</span></>
+  const summary = <><strong>{hotel?.region ?? bookingText(locale, "선택한 지점")}</strong><span>{criteria.checkIn} — {criteria.checkOut} · {bookingText(locale, "성인")} {criteria.adults}{bookingText(locale, "명")} {criteria.children > 0 && <> · {bookingText(locale, "아동")} {criteria.children}{bookingText(locale, "명")}</>} · {bookingText(locale, "객실")} {criteria.rooms}{bookingText(locale, "개")}</span></>
 
   return <CustomerBookingShell step="search" locale={locale} summary={summary}>
     <section className="booking-search-page" aria-labelledby="booking-results-title">
       <div className="booking-results-heading">
-        <div><p className="section-kicker">AVAILABLE ROOMS</p><h1 id="booking-results-title">예약 가능한 객실</h1><p>표시 금액은 전체 숙박 기간의 서버 계산 총액입니다.</p></div>
-        <button type="button" className="outline booking-edit-button" onClick={() => setEditing(current => !current)} aria-expanded={editing}>검색 조건 수정</button>
+        <div><p className="section-kicker">AVAILABLE ROOMS</p><h1 id="booking-results-title">{bookingText(locale, "예약 가능한 객실")}</h1><p>{bookingText(locale, "표시 금액은 전체 숙박 기간의 서버 계산 총액입니다.")}</p></div>
+        <button type="button" className="outline booking-edit-button" onClick={() => setEditing(current => !current)} aria-expanded={editing}>{bookingText(locale, "검색 조건 수정")}</button>
       </div>
       {editing && <form className="booking-edit-form" onSubmit={applyCriteria}>
-        <fieldset className="search-grid" aria-label="예약 검색 조건">
-          <HotelSelector hotels={hotels} value={draft.hotelId} onChange={hotelId => setDraft(current => ({ ...current, hotelId }))} />
-          <StayDatePicker checkIn={draft.checkIn} checkOut={draft.checkOut} onChange={(checkIn, checkOut) => setDraft(current => ({ ...current, checkIn, checkOut }))} />
-          <GuestSelector adults={draft.adults} children={draft.children} rooms={draft.rooms} onChange={next => setDraft(current => ({ ...current, ...next }))} />
-          <button className="primary search-button">조건 적용 <ArrowRight size={18} /></button>
+        <fieldset className="search-grid" aria-label={bookingText(locale, "예약 검색 조건")}>
+          <HotelSelector locale={locale} hotels={hotels} value={draft.hotelId} onChange={hotelId => setDraft(current => ({ ...current, hotelId }))} />
+          <StayDatePicker locale={locale} checkIn={draft.checkIn} checkOut={draft.checkOut} onChange={(checkIn, checkOut) => setDraft(current => ({ ...current, checkIn, checkOut }))} />
+          <GuestSelector locale={locale} adults={draft.adults} children={draft.children} rooms={draft.rooms} onChange={next => setDraft(current => ({ ...current, ...next }))} />
+          <button className="primary search-button">{bookingText(locale, "조건 적용")} <ArrowRight size={18} /></button>
         </fieldset>
       </form>}
       {error && <p className="message error" role="alert">{error}</p>}
-      {busy && <p className="booking-results-state" aria-live="polite">판매 가능 객실을 확인하고 있습니다…</p>}
-      {!busy && !error && <div className="results-summary" aria-live="polite"><strong>{groupedOffers.length}개 객실 유형을 찾았습니다.</strong></div>}
-      {!busy && !error && groupedOffers.length === 0 && <div className="empty-state"><CalendarDays /><h2>예약 가능한 객실이 없습니다</h2><p>날짜 또는 투숙 인원을 바꿔 다시 확인해 주세요.</p></div>}
+      {busy && <p className="booking-results-state" aria-live="polite">{bookingText(locale, "판매 가능 객실을 확인하고 있습니다…")}</p>}
+      {!busy && !error && <div className="results-summary" aria-live="polite"><strong>{groupedOffers.length}{bookingText(locale, "개 객실 유형을 찾았습니다.")}</strong></div>}
+      {!busy && !error && groupedOffers.length === 0 && <div className="empty-state"><CalendarDays /><h2>{bookingText(locale, "예약 가능한 객실이 없습니다")}</h2><p>{bookingText(locale, "날짜 또는 투숙 인원을 바꿔 다시 확인해 주세요.")}</p></div>}
       <div className="booking-room-groups">
         {groupedOffers.map(([roomTypeId, roomOffers], groupIndex) => <section key={roomTypeId} className="booking-room-group" aria-labelledby={`room-type-${roomTypeId}`}>
           <h2 id={`room-type-${roomTypeId}`}>{roomOffers[0]!.roomTypeName}</h2>
           <div className="offers">{roomOffers.map((offer, offerIndex) => <article className="offer-card" key={offer.ratePlanId}>
             <div className={`room-visual visual-${(groupIndex + offerIndex) % 3}`}><span>{String(groupIndex + 1).padStart(2, '0')}</span><Waves size={42} /></div>
-            <div className="offer-body"><div className="offer-top"><div><p>{offer.breakfastIncluded ? 'BREAKFAST INCLUDED' : 'ROOM ONLY'}</p><h3>{offer.ratePlanName}</h3></div><span className="remaining">잔여 {offer.remaining}실</span></div>
-              <div className="amenities"><span><BedDouble /> 성인 {criteria.adults}명{criteria.children > 0 && <> · 아동 {criteria.children}명</>} 기준</span>{offer.breakfastIncluded && <span><Coffee /> 조식 포함</span>}</div>
-              <div className="price-row"><div><small>객실 {criteria.rooms}개 · {offer.nightlyPrices.length}박 총액</small><strong>₩{money.format(offer.total)}</strong></div><button type="button" onClick={() => choose(offer)} aria-label={`${offer.roomTypeName} 선택`}>선택 <ArrowRight size={17} /></button></div>
+            <div className="offer-body"><div className="offer-top"><div><p>{offer.breakfastIncluded ? 'BREAKFAST INCLUDED' : 'ROOM ONLY'}</p><h3>{offer.ratePlanName}</h3></div><span className="remaining">{bookingText(locale, "잔여")} {offer.remaining}{bookingText(locale, "실")}</span></div>
+              <div className="amenities"><span><BedDouble /> {bookingText(locale, "성인")} {criteria.adults}{bookingText(locale, "명")} {criteria.children > 0 && <> · {bookingText(locale, "아동")} {criteria.children}{bookingText(locale, "명")}</>} {bookingText(locale, "기준")}</span>{offer.breakfastIncluded && <span><Coffee /> {bookingText(locale, "조식 포함")}</span>}</div>
+              <div className="price-row"><div><small>{bookingText(locale, "객실")} {criteria.rooms}{bookingText(locale, "개")} · {offer.nightlyPrices.length}{bookingText(locale, "박 총액")}</small><strong>₩{money.format(offer.total)}</strong></div><button type="button" onClick={() => choose(offer)} aria-label={`${offer.roomTypeName} ${bookingText(locale, '선택')}`}>{bookingText(locale, "선택")} <ArrowRight size={17} /></button></div>
             </div>
           </article>)}</div>
         </section>)}

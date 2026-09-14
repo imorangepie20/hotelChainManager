@@ -1,3 +1,4 @@
+import { bookingText } from '../lib/booking-copy'
 import { useEffect, useId, useRef, useState } from 'react'
 import { Check, ChevronDown, MapPin } from 'lucide-react'
 
@@ -5,12 +6,13 @@ import type { Hotel } from '../lib/api'
 import { nextHotelIndex } from '../lib/hotel-selector-state'
 
 type HotelSelectorProps = {
+  locale?: 'ko' | 'en'
   hotels: Hotel[]
   value: string
   onChange: (hotelId: string) => void
 }
 
-export function HotelSelector({ hotels, value, onChange }: HotelSelectorProps) {
+export function HotelSelector({ hotels, value, onChange, locale = 'ko' }: HotelSelectorProps) {
   const [open, setOpen] = useState(false)
   const [activeIndex, setActiveIndex] = useState(() => hotels.findIndex(hotel => hotel.id === value))
   const rootRef = useRef<HTMLDivElement>(null)
@@ -78,13 +80,13 @@ export function HotelSelector({ hotels, value, onChange }: HotelSelectorProps) {
   }
 
   return <div className="hotel-selector" ref={rootRef}>
-    <span className="hotel-selector-label"><MapPin size={16} /> 지점</span>
+    <span className="hotel-selector-label"><MapPin size={16} />{locale === 'en' ? 'Hotel' : '지점'}</span>
     <button ref={triggerRef} type="button" className="hotel-selector-trigger" aria-haspopup="listbox" aria-controls={listboxId} aria-expanded={open} onClick={() => setOpen(current => !current)} onKeyDown={handleTriggerKeyDown}>
-      <span><small>{selectedHotel?.region ?? '지점 선택'}</small><strong>{selectedHotel?.name ?? '호텔을 선택해 주세요'}</strong></span>
+      <span><small>{selectedHotel?.region ?? bookingText(locale, "지점 선택")}</small><strong>{selectedHotel?.name ?? (locale === 'en' ? 'Choose a hotel' : '호텔을 선택해 주세요')}</strong></span>
       <ChevronDown size={18} aria-hidden="true" />
     </button>
-    {open && <div id={listboxId} role="listbox" aria-label="지점 선택" className="hotel-selector-menu">
-      <p>어디에서 머무를까요?</p>
+    {open && <div id={listboxId} role="listbox" aria-label={bookingText(locale, "지점 선택")} className="hotel-selector-menu">
+      <p>{locale === 'en' ? 'Where would you like to stay?' : '어디에서 머무를까요?'}</p>
       {hotels.map((hotel, index) => <button key={hotel.id} ref={element => { optionRefs.current[index] = element }} type="button" role="option" aria-selected={hotel.id === value} className={hotel.id === value ? 'selected' : ''} onClick={() => choose(hotel.id)} onKeyDown={event => handleOptionKeyDown(event, index)}>
         <span><small>{hotel.region}</small><strong>{hotel.name}</strong></span>
         {hotel.id === value && <Check size={17} aria-label="선택됨" />}

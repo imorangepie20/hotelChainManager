@@ -40,7 +40,7 @@ pnpm --dir SDTPL_ADM dev
 
 ### 화면 계약과 접근성
 
-1. 다음 Playwright 계약을 실행한다. 현재 `apps/web/package.json`에는 Playwright 실행기가 선언돼 있지 않아 이 checkout에서 `pnpm exec playwright`는 실행할 수 없다. 고객 test runner 의존성을 준비한 환경에서만 첫 명령을 실행한다. 순수 계약에는 위 Node 명령을 사용했다.
+1. 다음 Playwright 계약을 실행한다. `apps/web/package.json`에 Playwright 실행기와 `playwright.config.ts`의 baseURL(기본 4000)을 추가했다. 고객 서버를 사용자가 미리 실행한 뒤 아래 명령을 실행한다. 설정은 서버를 자동 시작하지 않는다. 순수 계약에는 위 Node 명령을 사용했다.
 
    ```powershell
    cd apps/web
@@ -58,7 +58,7 @@ pnpm --dir SDTPL_ADM dev
 
 ### 실제 Toss 테스트와 DB 대조
 
-실제 카드·OTP·계정 인증은 사용자가 직접 수행한다. 화면 계약을 모두 확인한 뒤에만 Standard City 예약 240,000 KRW 승인 1건, Deluxe Ocean으로 증액 100,000 KRW 승인 1건, 원 조건으로 감액 100,000 KRW 부분 환불 1건을 테스트한다.
+실제 카드·OTP·계정 인증은 사용자가 직접 수행한다. 현재 Toss는 최초 테스트 승인만 지원한다. Toss 승인 예약의 취소·증액/감액 변경은 실제 공급자 정산 어댑터가 연결되기 전까지 서버가 `PAYMENT_PROVIDER_ACTION_UNSUPPORTED`로 차단한다. 따라서 이전 설계의 Toss 추가 결제·부분 환불 시나리오는 아직 실행 가능한 절차가 아니다. fake 예약에서 변경 상태를 확인하고, 실제 Toss 정산은 공급자 구현 후 별도로 검증한다.
 
 각 단계에서 브라우저의 상태와 `reservation`, `inventory_day`, `payment_provider_attempt`, `payment_transaction`, `payment_adjustment_attempt`를 대조한다. 예약·변경 상태, 일자별 재고, 원승인·추가결제·환불 금액과 멱등 재시도 결과를 기록하되 UUID, token, 개인 정보와 키는 마스킹한다.
 
@@ -70,3 +70,24 @@ pnpm --dir SDTPL_ADM dev
 - 이메일·SMS 공급자, public HTTPS webhook, 수수료·회계 reconciliation은 검증하지 않았다.
 
 이 제한 때문에 이번 결과는 코드 계약·컴파일·production build와 비DB payment client 단위 테스트의 증거이며, 실제 예약·재고·결제 정합성의 통과를 의미하지 않는다.
+
+## 최종 리뷰 보완 설계·계획·완료 기준
+
+- 12개 지적의 책임 경계를 확인했다. 외부 승인 건이 fake 환불/변경으로 들어가지 않도록 공급자 gate를 우선 적용하고, 예약 관리 조회 계약을 확장한 뒤 checkout 복구·영문·사용자 실행 계약을 정리한다.
+- 기존 token 및 직원 지점 접근 확인 뒤 공급자 지원 여부를 검사한다. 가격/재고/정산 상태는 서버가 소유하고 DB 스키마는 변경하지 않는다.
+- 최초 예약 요청 전에 관리 token·멱등 key·요청 SHA-256만 세션 저장한다. 입력 원문은 저장하지 않으며 불명확 결과는 동일 입력 재시도만 허용한다. 완료 접근과 활성 확보를 별도로 보관한다.
+- 완료 기준은 고객/관리자 타입·production build, 순수 계약, API compile/test-compile와 선택 비DB 테스트 통과다. DB 통합·브라우저·라이브 서버·Toss·환불은 실행하지 않는다.
+
+### 결제 환경 설정
+
+Compose API에 `PAYMENT_PROVIDER`, `TOSS_PAYMENTS_CLIENT_KEY`, `TOSS_PAYMENTS_SECRET_KEY`, `TOSS_PAYMENTS_MERCHANT_ACCOUNT`, `PAYMENT_CUSTOMER_ORIGIN`을 전달한다. `.env.example`에는 빈 키와 fake 기본값만 둔다. 실제 키는 git에서 제외된 환경 파일에 설정하며 출력하거나 커밋하지 않는다. `PAYMENT_CUSTOMER_ORIGIN`은 고객 웹의 실제 origin과 같아야 한다. `/en/booking/complete` 언어 복귀는 검증된 같은 origin/예약 완료 경로만 사용한다. 설정 변경 후 API 재생성은 사용자가 수행한다.
+
+### 최종 수정 검증 결과
+
+- 고객 `pnpm exec tsc -b`, `pnpm run build`: 종료 코드 0, Vite 2,917 modules.
+- 관리자 `pnpm exec tsc --noEmit`, `pnpm run build`: 종료 코드 0, Next 정적 route 104개.
+- 고객 순수 계약은 기존 11개와 `booking-copy`, `booking-api`를 합쳐 13개를 `node --experimental-strip-types`로 실행해 모두 종료 코드 0을 확인했다. 관리자 `src/lib/reservation-change-link-state.test.ts`도 종료 코드 0이다.
+- API `.\mvnw.cmd -q -DskipTests compile`, `.\mvnw.cmd -q -DskipTests test-compile`: 종료 코드 0. `.\mvnw.cmd -q "-Dtest=TossPaymentsHttpClientTest,TossPaymentsPropertiesTest,PaymentProviderSafetyTest,CustomerReservationChangeControllerTest" test`: 11건, 실패/오류/건너뜀 0.
+- 새 DB 회귀는 외부 공급자 취소·변경/기존 대기열 차단, 구조화 DTO와 관리 token 승인·환불 summary를 작성하고 test-compile만 통과했다. DB 통합과 브라우저 계약은 실행하지 않았다.
+- `git diff --check`: 종료 코드 0. Node의 관리자 모듈 재해석 경고와 Mockito의 dynamic agent 경고가 있었지만 테스트 실패는 없다.
+- 초기 TSX 변환 문법/테스트 node assert 타입 오류를 수정 후 재검사했다. 관리자 순수 테스트 첫 명령은 경로 착오로 실행되지 않아 올바른 `src/lib` 경로로 재실행했다.

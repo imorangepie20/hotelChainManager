@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test'
 
 const id = '123e4567-e89b-12d3-a456-426614174000'
 const access = { reservationId: id, managementToken: 'A'.repeat(43) }
-const confirmed = { id, status: 'CONFIRMED', checkIn: '2026-09-22', checkOut: '2026-09-24', rooms: 1, expiresAt: '2026-09-22T10:10:00.000Z', total: 360000, currency: 'KRW', nightlyPrices: [], cancellationPolicy: '체크인 1일 전 18:00까지 전액 환불', guest: { name: '테스트 고객', email: 'guest@example.com' }, roomTypeName: '스탠다드 시티', paymentStatus: 'SUCCEEDED' }
+const confirmed = { id, status: 'CONFIRMED', checkIn: '2026-09-22', checkOut: '2026-09-24', rooms: 1, expiresAt: '2026-09-22T10:10:00.000Z', total: 360000, currency: 'KRW', nightlyPrices: [], adults: 2, children: 0, ratePlanName: '유연 취소', cancellationPolicyDetails: { refundCutoffDaysBefore: 1, refundCutoffLocalTime: '18:00', timezone: 'Asia/Seoul' }, cancellationPolicy: '{"refundCutoffDaysBefore":1,"refundCutoffLocalTime":"18:00","timezone":"Asia/Seoul"}', guest: { name: '테스트 고객', email: 'guest@example.com' }, roomTypeName: '스탠다드 시티', paymentStatus: 'SUCCEEDED' }
 
 async function storeAccess(page: Page, value: unknown = [access]) {
   await page.addInitScript(entries => sessionStorage.setItem('hotel-chain.booking.reservation-access.v1', JSON.stringify({ version: 1, accesses: entries })), value)
@@ -16,6 +16,7 @@ async function mockApi(page: Page, reservation = confirmed, options: { preview?:
       ? route.fulfill({ json: reservation }) : route.fulfill({ status: 404, json: { code: 'NOT_FOUND', message: '없음' } })
     if (url.pathname === `/api/reservations/${id}/cancellation-preview`) return route.fulfill({ json: options.preview ?? { reservationId: id, status: 'CONFIRMED', cancellable: true, refundAmount: 360000, currency: 'KRW', cutoffAt: '2026-09-21T09:00:00.000Z', timezone: 'Asia/Seoul', unavailableReason: null } })
     if (url.pathname === `/api/reservations/${id}/cancel`) return route.fulfill({ json: { status: 'CANCELLED', refundAmount: 360000 } })
+    if (url.pathname === `/api/reservations/${id}/change-summary`) return route.fulfill({ json: options.change ? { differenceKrw: 100000, refundStatus: null, ...options.change } : null })
     if (url.pathname === '/api/reservation-change-payments/current') return options.change ? route.fulfill({ json: options.change }) : route.fulfill({ status: 404, json: { code: 'NOT_FOUND', message: '없음' } })
     return route.fulfill({ status: 404, json: { code: 'NOT_FOUND', message: '없음' } })
   })
@@ -40,7 +41,7 @@ test('빈 기록과 접근 불가 토큰은 예약 존재를 노출하지 않는
 test('확정 예약은 환불 예상액을 확인한 뒤 취소를 확인한다', async ({ page }) => {
   await storeAccess(page); await mockApi(page)
   await page.goto(`/reservations/${id}`)
-  await expect(page.getByText('예상 환불액 360,000원')).toBeVisible()
+  await expect(page.getByText('예상 환불액 ₩360,000')).toBeVisible()
   await page.getByRole('button', { name: '예약 취소' }).click()
   await expect(page.getByRole('dialog')).toContainText('예약을 취소할까요?')
   await page.getByRole('button', { name: '돌아가기' }).click()
@@ -80,6 +81,7 @@ test('예약 변경 결제는 기존·변경 예약과 서버 상태를 함께 �
   await page.route('**/api/**', route => {
     const url = new URL(route.request().url())
     if (url.pathname === '/api/reservation-change-payments/session') return route.fulfill({ status: 204 })
+    if (url.pathname === `/api/reservations/${id}/change-summary`) return route.fulfill({ json: options.change ? { differenceKrw: 100000, refundStatus: null, ...options.change } : null })
     if (url.pathname === '/api/reservation-change-payments/current') return route.fulfill({ json: change })
     return route.fulfill({ status: 404, json: { code: 'NOT_FOUND', message: '없음' } })
   })
@@ -94,7 +96,8 @@ test('예약 변경 결제는 만료와 조정 필요 상태에서 결제를 다
   for (const status of ['EXPIRED', 'RECONCILIATION_REQUIRED', 'COMPLETED']) {
     await page.route('**/api/**', route => {
       const url = new URL(route.request().url())
-      if (url.pathname === '/api/reservation-change-payments/current') return route.fulfill({ json: {
+      if (url.pathname === `/api/reservations/${id}/change-summary`) return route.fulfill({ json: options.change ? { differenceKrw: 100000, refundStatus: null, ...options.change } : null })
+    if (url.pathname === '/api/reservation-change-payments/current') return route.fulfill({ json: {
         reservationId: id, reservationNumberSuffix: id.slice(-8), previousCheckIn: '2026-09-22', previousCheckOut: '2026-09-24', previousRoomTypeName: '스탠다드 시티', previousRatePlanName: '룸 온리', previousTotalKrw: 360000,
         checkIn: '2026-09-24', checkOut: '2026-09-26', roomTypeName: '디럭스 오션', ratePlanName: '유연 취소', totalKrw: 460000, differenceKrw: 100000,
         additionalAmountKrw: 100000, currency: 'KRW', expiresAt: '2026-09-20T10:00:00.000Z', environmentLabel: '테스트 결제', status,

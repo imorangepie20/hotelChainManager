@@ -270,6 +270,24 @@ class CancellationIntegrationTest {
         assertThat(preview.unavailableReason()).isEqualTo("취소 가능 시간이 지났습니다.");
     }
 
+    @Test
+    void externalCaptureCannotBeCancelledByFakeGatewayAndViewHasStructuredDetails() {
+        ReservationView reservation = confirmedReservation("external-provider-gate");
+        jdbc.update("update payment_transaction set provider='TOSS_TEST' where reservation_id=?", reservation.id());
+        assertThat(cancellationService.preview(reservation.id(), TOKEN).cancellable()).isFalse();
+        assertThatThrownBy(() -> cancellationService.cancel(reservation.id(), TOKEN, "blocked-cancel"))
+                .isInstanceOf(BusinessConflictException.class);
+        assertThat(jdbc.queryForObject("select count(*) from cancellation_attempt where reservation_id=?", Integer.class, reservation.id())).isZero();
+        assertInventory(2);
+        ReservationView view = reservationService.get(reservation.id(), TOKEN);
+        assertThat(view.status()).isEqualTo("CONFIRMED");
+        assertThat(view.roomTypeName()).isEqualTo("스탠다드");
+        assertThat(view.ratePlanName()).isEqualTo("유연 요금");
+        assertThat(view.paymentStatus()).isEqualTo("SUCCEEDED");
+        assertThat(view.adults()).isEqualTo(2);
+        assertThat(view.cancellationPolicyDetails().timezone()).isEqualTo("Asia/Seoul");
+    }
+
     private ReservationView confirmedReservation(String key) {
         ReservationView reservation = reservationService.create(key, TOKEN, new ReservationRequest(
                 ROOM_TYPE_ID, RATE_PLAN_ID, CHECK_IN, CHECK_IN.plusDays(2), 2, 0, 1, 200_000,

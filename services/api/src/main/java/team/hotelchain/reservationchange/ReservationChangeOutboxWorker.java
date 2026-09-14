@@ -50,6 +50,8 @@ public class ReservationChangeOutboxWorker {
         if (claim == null) return false;
 
         try {
+            UUID reservationId = jdbc.queryForObject("select reservation_id from reservation_change_request where id = ?", UUID.class, claim.requestId());
+            team.hotelchain.reservation.PaymentProviderSafety.requireFakeSettlement(jdbc, reservationId);
             AttemptCommand command = loadCommand(claim.attemptId());
             PaymentAdjustmentGateway.GatewayAdjustmentResult result = execute(claim.commandType(), command);
             Boolean accepted = transactions.execute(status -> completeClaim(claim, result));

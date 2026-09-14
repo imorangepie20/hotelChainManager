@@ -68,6 +68,7 @@ public class ReservationChangeSettlementService {
         String publicTokenHash = reservationAccess.hashToken(input.publicToken());
         PaymentContext context = paymentContext(requestId);
         staffAccess.requireHotel(staff, context.hotelId());
+        team.hotelchain.reservation.PaymentProviderSafety.requireFakeSettlement(jdbc, context.reservationId());
         String requestHash = reservationAccess.sha256(String.join(":",
                 staff.id().toString(), Long.toString(input.version()), publicTokenHash)
                 .getBytes(StandardCharsets.UTF_8));
@@ -151,6 +152,7 @@ public class ReservationChangeSettlementService {
         StaffPrincipal staff = staffAccess.current(staffToken);
         PaymentContext context = paymentContext(requestId);
         staffAccess.requireHotel(staff, context.hotelId());
+        team.hotelchain.reservation.PaymentProviderSafety.requireFakeSettlement(jdbc, context.reservationId());
         String requestHash = reservationAccess.sha256(String.join(":",
                 staff.id().toString(), Long.toString(input.version()), "REFUND")
                 .getBytes(StandardCharsets.UTF_8));
@@ -230,6 +232,7 @@ public class ReservationChangeSettlementService {
     @Transactional
     public CustomerReservationChangePaymentView current(String sessionToken) {
         CustomerContext context = customerContext(sessionToken, true);
+        team.hotelchain.reservation.PaymentProviderSafety.requireFakeSettlement(jdbc, context.reservationId());
         return new CustomerReservationChangePaymentView(
                 context.reservationId(), suffix(context.reservationId()),
                 context.previousCheckIn(), context.previousCheckOut(), context.previousRoomTypeName(), context.previousRatePlanName(), context.previousTotalKrw(),
@@ -241,6 +244,7 @@ public class ReservationChangeSettlementService {
     @Transactional
     public String checkout(String sessionToken) {
         CustomerContext context = customerContext(sessionToken, true);
+        team.hotelchain.reservation.PaymentProviderSafety.requireFakeSettlement(jdbc, context.reservationId());
         if (!"AWAITING_PAYMENT".equals(context.status()) || context.checkoutUrl() == null) {
             throw new BusinessConflictException(
                     "CHECKOUT_NOT_READY", "결제 화면을 준비 중입니다. 잠시 후 다시 시도해 주세요.");
@@ -269,6 +273,7 @@ public class ReservationChangeSettlementService {
         jdbc.query("select id from reservation where id = ? for update", rs -> { }, candidate.reservationId());
         jdbc.query("select id from reservation_change_request where id = ? for update", rs -> { }, candidate.requestId());
         GatewayAttempt attempt = gatewayAttempt(attemptId, true);
+        team.hotelchain.reservation.PaymentProviderSafety.requireFakeSettlement(jdbc, attempt.reservationId());
         if (!"CREATE_CHECKOUT".equals(attempt.adjustmentType())
                 && !"REFUND_ORIGINAL".equals(attempt.adjustmentType())
                 && !"REFUND_ADJUSTMENT".equals(attempt.adjustmentType())) {
@@ -345,7 +350,10 @@ public class ReservationChangeSettlementService {
     }
 
     private CustomerContext customerContext(String sessionToken, boolean touch) {
-        String tokenHash = reservationAccess.hashToken(sessionToken);
+        if (sessionToken == null || sessionToken.isBlank()) throw new ReservationNotFoundException();
+        String tokenHash;
+        try { tokenHash = reservationAccess.hashToken(sessionToken); }
+        catch (IllegalArgumentException invalid) { throw new ReservationNotFoundException(); }
         CustomerContext context = jdbc.query("""
                 select session.id as session_id, request.reservation_id,
                        request.previous_check_in, request.previous_check_out,

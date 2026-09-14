@@ -36,6 +36,7 @@ public class ReservationChangeApplyService {
         if (reservationId == null) throw new ReservationNotFoundException();
         LockedReservation reservation = lockReservation(reservationId);
         LockedChange request = lockRequest(requestId, claimToken);
+        team.hotelchain.reservation.PaymentProviderSafety.requireFakeSettlement(jdbc, reservationId);
         verifyInvariants(reservation, request);
 
         List<HeldDay> holds = lockHolds(requestId);

@@ -16,5 +16,7 @@ public record ReservationView(
         String currency,
         List<ReservationNight> nightlyPrices,
         String cancellationPolicy,
-        ReservationGuest guest) {
+        ReservationGuest guest,
+        String roomTypeName, String ratePlanName, int adults, int children,
+        String paymentStatus, CancellationPolicyDetails cancellationPolicyDetails) {
 }
