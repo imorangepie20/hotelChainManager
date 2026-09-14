@@ -286,15 +286,28 @@ class TossPaymentAdjustmentIntegrationTest {
         var originalCommands = jdbc.queryForList("select id,idempotency_key from toss_refund_command order by id");
         if (olderThanFifteenDays) jdbc.update("update toss_refund_command set created_at=now()-interval '16 days'");
         provider.cancelResult = c -> new ProviderPayment(c.paymentKey(), order(c.paymentKey()), c.amountKrw(),"KRW",ProviderStatus.DONE,"cancel-extra",null);
-        assertThat(cancellations.cancel(reservation,TOKEN,"cancel-retry").status()).isEqualTo("CANCELLATION_PENDING");
+        assertThat(cancellations.cancel(reservation,TOKEN,"fresh-client-retry").status()).isEqualTo("CANCELLATION_PENDING");
+        assertThat(cancellations.cancel(reservation,TOKEN,"another-pending-key").status()).isEqualTo("CANCELLATION_PENDING");
         cancellationWorker.processPending();
-        assertThat(cancellations.cancel(reservation,TOKEN,"cancel-retry").status()).isEqualTo("CANCELLED");
+        assertThat(cancellations.cancel(reservation,TOKEN,"fresh-completed-retry").status()).isEqualTo("CANCELLED");
+        assertThat(jdbc.queryForObject("select count(*) from cancellation_attempt",Long.class)).isEqualTo(1);
         assertThat(jdbc.queryForList("select id,idempotency_key from toss_refund_command order by id")).isEqualTo(originalCommands);
         assertThat(provider.cancelCalls.stream().filter(c -> c.paymentKey().equals("original-key")).count()).isEqualTo(1);
         var extraCalls = provider.cancelCalls.stream().filter(c -> c.paymentKey().equals("extra-key")).toList();
         assertThat(extraCalls).hasSize(olderThanFifteenDays ? 1 : 2);
         if (!olderThanFifteenDays) assertThat(extraCalls.get(1).idempotencyKey()).isEqualTo(extraCalls.getFirst().idempotencyKey());
         assertThat(jdbc.queryForObject("select sum(refunded_amount_krw) from payment_transaction",Long.class)).isEqualTo(300000);
+    }
+
+    @Test void freshCancellationRetryKeyCannotChangeStoredActor() {
+        UUID reservation = original();
+        provider.cancelResult = c -> new ProviderPayment(null,null,0,null,ProviderStatus.FAILED,null,"REFUND_REJECTED");
+        cancellations.cancel(reservation,TOKEN,"original-actor");
+        cancellationWorker.processPending();
+        jdbc.update("update cancellation_attempt set request_hash='different-actor'");
+        assertThatThrownBy(() -> cancellations.cancel(reservation,TOKEN,"fresh-actor-key"))
+                .isInstanceOf(BusinessConflictException.class);
+        assertThat(jdbc.queryForObject("select status from toss_refund_command",String.class)).isEqualTo("FAILED");
     }
 
     @Test void unknownCancellationBacklogDoesNotStarveLaterCommands() {

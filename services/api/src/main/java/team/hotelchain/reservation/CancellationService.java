@@ -82,6 +82,18 @@ public class CancellationService {
         String requestHashSource = staffId == null ? REQUEST_HASH_SOURCE : REQUEST_HASH_SOURCE + ":STAFF:" + staffId;
         String requestHash = access.sha256(requestHashSource.getBytes(StandardCharsets.UTF_8));
         ExistingCancellation existing = findExisting(reservationId, idempotencyKey);
+        if (existing == null) {
+            // 브라우저 재접속·대화상자 재오픈이 새 요청 키를 발급해도 기존 환불 계획을 유지한다.
+            String storedKey = jdbc.query("""
+                    select a.idempotency_key from cancellation_attempt a where a.reservation_id=?
+                    and exists(select 1 from toss_refund_command c where c.cancellation_attempt_id=a.id)
+                    order by a.created_at desc limit 1 for update
+                    """, rs -> rs.next() ? rs.getString(1) : null, reservationId);
+            if (storedKey != null) {
+                idempotencyKey = storedKey;
+                existing = findExisting(reservationId, storedKey);
+            }
+        }
         if (existing != null) {
             if (!existing.requestHash().equals(requestHash)) {
                 throw new BusinessConflictException("IDEMPOTENCY_CONFLICT", "같은 요청 키에 다른 취소 내용이 사용되었습니다.");
