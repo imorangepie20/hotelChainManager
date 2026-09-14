@@ -33,6 +33,11 @@ public class ReservationChangeHoldService {
     public HoldResult acquire(UUID requestId, long expectedVersion) {
         UUID reservationId = reservationId(requestId);
         ReservationLock reservation = lockReservation(reservationId);
+        if (Boolean.TRUE.equals(jdbc.queryForObject(
+                "select exists(select 1 from cancellation_attempt where reservation_id=? and refund_status in ('PENDING','UNKNOWN'))",
+                Boolean.class, reservationId))) {
+            throw new BusinessConflictException("CANCELLATION_RECONCILIATION_REQUIRED", "예약 취소 환불을 먼저 완료하거나 조정해 주세요.");
+        }
         ChangeLock request = lockRequest(requestId);
         if (request.version() != expectedVersion) {
             throw new BusinessConflictException(
@@ -148,8 +153,11 @@ public class ReservationChangeHoldService {
 
         boolean uncertainFinancialResult = Boolean.TRUE.equals(jdbc.queryForObject("""
                 select exists(
-                    select 1 from payment_adjustment_attempt
-                    where request_id = ? and status in ('PROCESSING', 'SUCCEEDED', 'UNKNOWN'))
+                    select 1 from payment_adjustment_attempt a
+                    where request_id = ? and status in ('PROCESSING', 'SUCCEEDED', 'UNKNOWN')
+                      and (provider <> 'TOSS_TEST' or adjustment_type <> 'CREATE_CHECKOUT'
+                        or exists(select 1 from toss_adjustment_order o where o.attempt_id=a.id
+                          and o.status in ('APPROVING','SUCCEEDED','UNKNOWN'))))
                 """, Boolean.class, request.id()));
         String nextStatus = uncertainFinancialResult ? "RECONCILIATION_REQUIRED" : "EXPIRED";
         if (!uncertainFinancialResult) release(request.id(), "REQUEST_EXPIRED");

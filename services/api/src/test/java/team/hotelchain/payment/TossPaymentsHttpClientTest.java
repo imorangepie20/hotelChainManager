@@ -147,7 +147,7 @@ class TossPaymentsHttpClientTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"not-json", "{}"})
+    @ValueSource(strings = {"not-json", "{}", "", "   "})
     void mapsMalformedOrIndeterminateLookupResponseToUnknown(String responseBody) {
         TossPaymentsHttpClient client = new TossPaymentsHttpClient(
                 properties("test_ck_x", "test_sk_x"), new CapturingHttpClient(responseBody));
@@ -164,6 +164,50 @@ class TossPaymentsHttpClientTest {
 
         assertThat(result.status()).isEqualTo(TossPaymentsClient.ProviderStatus.UNKNOWN);
         assertThat(result.errorCode()).isEqualTo("HTTP_IO");
+    }
+
+    @Test
+    void verifiesExactSuccessfulCancellationEventAndPersistentKey() {
+        CapturingHttpClient http = new CapturingHttpClient("""
+                {"paymentKey":"pay","orderId":"order","totalAmount":120000,"currency":"KRW",
+                 "status":"PARTIAL_CANCELED","cancels":[
+                   {"transactionKey":"cancel-1","cancelAmount":20000,"cancelStatus":"DONE","cancelReason":"change"}]}
+                """);
+        var client = new TossPaymentsHttpClient(properties("test_ck_x", "test_sk_x"), http);
+        var result = client.cancel(new TossPaymentsClient.CancelCommand("pay", 20000, "change", "stable-1"));
+        assertThat(result.status()).isEqualTo(TossPaymentsClient.ProviderStatus.DONE);
+        assertThat(result.transactionKey()).isEqualTo("cancel-1");
+        assertThat(result.amountKrw()).isEqualTo(20000);
+        assertThat(http.body()).contains("\"cancelAmount\":20000");
+        assertThat(http.request.get().headers().firstValue("Idempotency-Key")).contains("stable-1");
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {401, 403, 429, 500, 503})
+    void indeterminateRefundResponsesRemainUnknown(int code) {
+        var client = new TossPaymentsHttpClient(properties("test_ck_x", "test_sk_x"),
+                new CapturingHttpClient(code, "{\"code\":\"PROVIDER_REJECTED\"}"));
+        assertThat(client.cancel(new TossPaymentsClient.CancelCommand("pay", 20000, "change", "stable-1"))
+                .status()).isEqualTo(TossPaymentsClient.ProviderStatus.UNKNOWN);
+    }
+
+    @Test
+    void alreadyCancelledResponseDoesNotProveThisRefundFailed() {
+        var client=new TossPaymentsHttpClient(properties("test_ck_x","test_sk_x"),
+                new CapturingHttpClient(400,"{\"code\":\"ALREADY_CANCELED_PAYMENT\"}"));
+        assertThat(client.cancel(new TossPaymentsClient.CancelCommand("pay",20000,"change","stable-1")).status())
+                .isEqualTo(TossPaymentsClient.ProviderStatus.UNKNOWN);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"[]", "[{\"transactionKey\":\"c\",\"cancelAmount\":10000,\"cancelStatus\":\"DONE\"}]",
+            "[{\"transactionKey\":\"c\",\"cancelAmount\":20000,\"cancelStatus\":\"PENDING\"}]"})
+    void ambiguousOrWrongRefundEventIsUnknown(String cancels) {
+        var client = new TossPaymentsHttpClient(properties("test_ck_x", "test_sk_x"), new CapturingHttpClient(
+                "{\"paymentKey\":\"pay\",\"orderId\":\"order\",\"totalAmount\":120000,\"currency\":\"KRW\","
+                + "\"status\":\"PARTIAL_CANCELED\",\"cancels\":" + cancels + "}"));
+        assertThat(client.cancel(new TossPaymentsClient.CancelCommand("pay", 20000, "change", "stable-1"))
+                .status()).isEqualTo(TossPaymentsClient.ProviderStatus.UNKNOWN);
     }
 
     @Test

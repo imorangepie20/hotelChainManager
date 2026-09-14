@@ -7,6 +7,10 @@ public interface TossPaymentsClient {
 
     ProviderPayment cancel(CancelCommand command);
 
+    default ProviderPayment lookupCancel(CancelCommand command) {
+        return new ProviderPayment(null, null, 0, null, ProviderStatus.UNKNOWN, null, "REFUND_LOOKUP_UNAVAILABLE");
+    }
+
     record ConfirmCommand(String paymentKey, String orderId, long amountKrw, String currency, String idempotencyKey) {
     }
 

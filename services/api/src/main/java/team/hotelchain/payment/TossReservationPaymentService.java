@@ -104,6 +104,24 @@ public class TossReservationPaymentService {
         }
     }
 
+    /** 저장 주문의 webhook 힌트는 서버 인증 조회만 실행한다. 새 승인은 시작하지 않는다. */
+    public void reconcileStoredOrder(String orderId) {
+        var rows=jdbc.queryForList("""
+                select a.reservation_id,a.payment_key,r.management_token_hash
+                from payment_provider_attempt a join reservation r on r.id=a.reservation_id
+                where a.provider='TOSS_TEST' and a.order_id=? and a.payment_key is not null
+                  and a.status in ('APPROVING','UNKNOWN')
+                """,orderId);
+        if(rows.isEmpty())return;
+        var row=rows.getFirst();
+        UUID reservationId=(UUID)row.get("reservation_id");
+        String tokenHash=(String)row.get("management_token_hash");
+        try {
+            ProviderPayment result=provider.lookup((String)row.get("payment_key"));
+            transactions.executeWithoutResult(t -> apply(reservationId,tokenHash,orderId,result));
+        } catch(RuntimeException ex) {markUnknown(reservationId,tokenHash,orderId);}
+    }
+
     private Claim claim(UUID reservationId, String tokenHash, ConfirmPaymentRequest request) {
         Reservation reservation = lockReservation(reservationId, tokenHash);
         Attempt attempt = findAttempt(reservationId, "order_id = ?", request.orderId());

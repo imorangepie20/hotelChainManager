@@ -52,14 +52,14 @@ public class ReservationChangeOutboxWorker {
         try {
             AttemptCommand command = loadCommand(claim.attemptId());
             PaymentAdjustmentGateway.GatewayAdjustmentResult result = execute(claim.commandType(), command);
-            Boolean accepted = transactions.execute(status -> completeClaim(claim, result));
-            if (Boolean.TRUE.equals(accepted)
-                    && result.status() != PaymentAdjustmentGateway.GatewayResultStatus.PENDING) {
+            transactions.executeWithoutResult(status -> {
+              if (completeClaim(claim, result) && result.status() != PaymentAdjustmentGateway.GatewayResultStatus.PENDING) {
                 String eventId = result.providerEventId() == null
                         ? "outbox:" + claim.outboxId() + ":" + result.status()
                         : result.providerEventId();
                 settlements.recordGatewayResult(claim.attemptId(), eventId, result.status());
-            }
+              }
+            });
         } catch (RuntimeException exception) {
             transactions.executeWithoutResult(status -> failClaim(claim, exception));
         }
@@ -80,6 +80,16 @@ public class ReservationChangeOutboxWorker {
                         rs.getInt("attempt_count") + 1, UUID.randomUUID()) : null,
                 Timestamp.from(clock.instant()), Timestamp.from(clock.instant()));
         if (candidate == null) return null;
+        boolean toss="TOSS_TEST".equals(jdbc.queryForObject("select provider from payment_adjustment_attempt where id=?",String.class,candidate.attemptId()));
+        if(toss) {
+            UUID reservationId=jdbc.queryForObject("select reservation_id from reservation_change_request where id=?",UUID.class,candidate.requestId());
+            jdbc.query("select id from reservation where id=? for update",rs->{},reservationId);
+            String requestStatus=jdbc.queryForObject("select status from reservation_change_request where id=? for update",String.class,candidate.requestId());
+            if (java.util.List.of("EXPIRED","CANCELLED").contains(requestStatus)) {
+                jdbc.update("update reservation_change_outbox set status='DONE',claim_token=null,lease_expires_at=null where id=?",candidate.outboxId());
+                return null;
+            }
+        }
         jdbc.update("""
                 update reservation_change_outbox
                 set status = 'PROCESSING', claim_token = ?, attempt_count = ?,
@@ -87,6 +97,7 @@ public class ReservationChangeOutboxWorker {
                 where id = ?
                 """, candidate.claimToken(), candidate.attemptCount(),
                 Timestamp.from(clock.instant().plus(lease)), Timestamp.from(clock.instant()), candidate.outboxId());
+        if(toss) jdbc.update("update payment_adjustment_attempt set status='PROCESSING' where id=? and status='NEW'",candidate.attemptId());
         return candidate;
     }
 
@@ -138,9 +149,9 @@ public class ReservationChangeOutboxWorker {
         if (updated != 1) return false;
         jdbc.update("""
                 update payment_adjustment_attempt
-                set status = 'PROCESSING', provider_event_id = ?, gateway_transaction_id = ?,
-                    checkout_url = ?, error_code = ?, updated_at = ?
-                where id = ? and status in ('NEW', 'PROCESSING')
+                set status = 'PROCESSING', provider_event_id = ?, gateway_transaction_id = coalesce(?,gateway_transaction_id),
+                    checkout_url = coalesce(?,checkout_url), error_code = ?, updated_at = ?
+                where id = ? and status in ('NEW', 'PROCESSING','UNKNOWN')
                 """, result.providerEventId(), result.gatewayTransactionId(),
                 result.checkoutUrl() == null ? null : result.checkoutUrl().toString(),
                 result.errorCode(), Timestamp.from(clock.instant()), claim.attemptId());

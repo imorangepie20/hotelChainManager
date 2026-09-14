@@ -39,7 +39,7 @@ public final class TossPaymentsHttpClient implements TossPaymentsClient {
         requireConfirm(command);
         return send("/v1/payments/confirm", requestBody(
                 "paymentKey", command.paymentKey(), "orderId", command.orderId(), "amount", command.amountKrw()),
-                command.idempotencyKey(), false);
+                command.idempotencyKey(), false, null);
     }
 
     @Override
@@ -47,7 +47,7 @@ public final class TossPaymentsHttpClient implements TossPaymentsClient {
         if (paymentKey == null || paymentKey.isBlank()) {
             throw new IllegalArgumentException("결제 키가 필요합니다.");
         }
-        return send("/v1/payments/" + paymentKey, null, null, true);
+        return send("/v1/payments/" + paymentKey, null, null, true, null);
     }
 
     @Override
@@ -57,10 +57,15 @@ public final class TossPaymentsHttpClient implements TossPaymentsClient {
             throw new IllegalArgumentException("취소 결제 키, 금액, Idempotency-Key가 필요합니다.");
         }
         return send("/v1/payments/" + command.paymentKey() + "/cancel", requestBody(
-                "cancelAmount", command.amountKrw(), "cancelReason", command.reason()), command.idempotencyKey(), false);
+                "cancelAmount", command.amountKrw(), "cancelReason", command.reason()), command.idempotencyKey(), false, command);
     }
 
-    private ProviderPayment send(String path, String requestBody, String idempotencyKey, boolean lookup) {
+    @Override
+    public ProviderPayment lookupCancel(CancelCommand command) {
+        return send("/v1/payments/" + command.paymentKey(), null, null, true, command);
+    }
+
+    private ProviderPayment send(String path, String requestBody, String idempotencyKey, boolean lookup, CancelCommand cancel) {
         properties.requireTestConfiguration();
         HttpRequest.Builder request = HttpRequest.newBuilder(API_ORIGIN.resolve(path))
                 .timeout(REQUEST_TIMEOUT)
@@ -72,7 +77,7 @@ public final class TossPaymentsHttpClient implements TossPaymentsClient {
                 .POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8));
         try {
             HttpResponse<String> response = http.send(request.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            return map(response.statusCode(), response.body(), lookup);
+            return map(response.statusCode(), response.body(), lookup, cancel);
         } catch (IOException exception) {
             return unknown("HTTP_IO");
         } catch (InterruptedException exception) {
@@ -86,11 +91,17 @@ public final class TossPaymentsHttpClient implements TossPaymentsClient {
         return "Basic " + credential;
     }
 
-    private ProviderPayment map(int statusCode, String responseBody, boolean lookup) {
+    private ProviderPayment map(int statusCode, String responseBody, boolean lookup, CancelCommand cancel) {
         if (statusCode >= 500) return unknown("HTTP_5XX");
-        if (lookup && INDETERMINATE_LOOKUP_STATUSES.contains(statusCode)) return unknown("HTTP_" + statusCode);
+        if (INDETERMINATE_LOOKUP_STATUSES.contains(statusCode)) return unknown("HTTP_" + statusCode);
         try {
             JsonNode body = json.readTree(responseBody == null ? "{}" : responseBody);
+            if (body == null || !body.isObject()) return unknown("MALFORMED_RESPONSE");
+            if (lookup && statusCode >= 400) return unknown("LOOKUP_UNCONFIRMED");
+            if (cancel != null && statusCode >= 400 && (!validCode(textValue(body.path("code")))
+                    || "ALREADY_CANCELED_PAYMENT".equals(textValue(body.path("code"))))) {
+                return unknown("REFUND_UNCONFIRMED");
+            }
             if (statusCode >= 400) return new ProviderPayment(null, null, 0, null,
                     ProviderStatus.FAILED, null, safeCode(body.path("code").asText(null), "HTTP_4XX"));
             String paymentKey = textValue(body.path("paymentKey"));
@@ -103,6 +114,24 @@ public final class TossPaymentsHttpClient implements TossPaymentsClient {
             // 상점 키로 인증한 응답이 권위다. 선택적 mId가 있으면 설정과 추가 대조한다.
             if (body.has("mId") && !properties.merchantAccount().equals(textValue(body.path("mId")))) {
                 return unknown("MERCHANT_MISMATCH");
+            }
+            if (cancel != null) {
+                if (!cancel.paymentKey().equals(paymentKey) || !hasText(orderId) || !"KRW".equals(currency)
+                        || !("CANCELED".equals(providerStatus) || "PARTIAL_CANCELED".equals(providerStatus))) {
+                    return unknown("REFUND_UNCONFIRMED");
+                }
+                JsonNode match = null;
+                for (JsonNode event : body.path("cancels")) {
+                    if (integralAmount(event.path("cancelAmount")) == cancel.amountKrw()
+                            && "DONE".equals(textValue(event.path("cancelStatus")))
+                            && cancel.reason().equals(textValue(event.path("cancelReason")))
+                            && hasText(textValue(event.path("transactionKey")))) {
+                        if (match != null) return unknown("AMBIGUOUS_REFUND");
+                        match = event;
+                    }
+                }
+                return match == null ? unknown("REFUND_UNCONFIRMED") : new ProviderPayment(paymentKey, orderId,
+                        cancel.amountKrw(), currency, ProviderStatus.DONE, textValue(match.path("transactionKey")), null);
             }
             if (done && (!hasText(paymentKey) || !hasText(orderId) || amountKrw <= 0 || !"KRW".equals(currency))) {
                 return unknown("INCOMPLETE_DONE_RESPONSE");
