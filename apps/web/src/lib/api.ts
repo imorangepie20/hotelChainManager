@@ -11,7 +11,7 @@ export type Offer = {
 export type Reservation = {
   id: string; status: string; checkIn: string; checkOut: string; rooms: number
   expiresAt: string; total: number; currency: string; nightlyPrices: NightlyPrice[]
-  cancellationPolicy: string; guest: { name: string; email: string }
+  cancellationPolicy: string; guest: { name: string; email: string; phone?: string | null }
   roomTypeName?: string; ratePlanName?: string; paymentStatus?: string; adults?: number; children?: number
   cancellationPolicyDetails?: { refundCutoffDaysBefore: number; refundCutoffLocalTime: string; timezone: string }
 }

@@ -121,6 +121,18 @@ class ReservationIntegrationTest {
                 .isInstanceOf(ReservationNotFoundException.class);
     }
 
+    @Test
+    void storesAndReturnsTheGuestPhone() {
+        ReservationRequest request = new ReservationRequest(ROOM_TYPE_ID, RATE_PLAN_ID, CHECK_IN, CHECK_IN.plusDays(2),
+                2, 0, 1, 200_000, new ReservationGuest("테스트 고객", "guest@example.com", "010-1234-5678"));
+
+        ReservationView created = reservationService.create("guest-phone", TOKEN, request);
+
+        assertThat(created.guest().phone()).isEqualTo("010-1234-5678");
+        assertThat(jdbc.queryForObject("select guest_phone from reservation where id = ?", String.class, created.id()))
+                .isEqualTo("010-1234-5678");
+    }
+
     private Object reserveAfter(CountDownLatch start, String key, String token, ReservationRequest request) {
         try {
             start.await();

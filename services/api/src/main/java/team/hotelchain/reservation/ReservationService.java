@@ -94,12 +94,12 @@ public class ReservationService {
         jdbc.update("""
                 INSERT INTO reservation
                     (id, room_type_id, rate_plan_id, check_in, check_out, adults, children, rooms,
-                     status, total_krw, currency, expires_at, guest_name, guest_email,
+                     status, total_krw, currency, expires_at, guest_name, guest_email, guest_phone,
                      management_token_hash, policy_snapshot)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING_PAYMENT', ?, 'KRW', ?, ?, ?, ?, CAST(? AS jsonb))
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING_PAYMENT', ?, 'KRW', ?, ?, ?, ?, ?, CAST(? AS jsonb))
                 """, reservationId, request.roomTypeId(), request.ratePlanId(), request.checkIn(), request.checkOut(),
                 request.adults(), request.children(), request.rooms(), actualTotal, Timestamp.from(expiresAt),
-                request.guest().name().trim(), request.guest().email().trim(), tokenHash, policySnapshot);
+                request.guest().name().trim(), request.guest().email().trim(), normalizedPhone(request.guest().phone()), tokenHash, policySnapshot);
 
         for (InventoryNight night : nights) {
             jdbc.update("insert into reservation_night values (?, ?, ?)", reservationId, night.date(), night.amount());
@@ -119,7 +119,7 @@ public class ReservationService {
     private ReservationView getAuthorized(UUID reservationId, String tokenHash) {
         ReservationRow row = jdbc.query("""
                 SELECT id, status, check_in, check_out, rooms, expires_at, total_krw, currency,
-                       policy_snapshot::text, guest_name, guest_email
+                       policy_snapshot::text, guest_name, guest_email, guest_phone
                   FROM reservation
                  WHERE id = ? AND management_token_hash = ?
                 """, rs -> rs.next() ? mapReservation(rs) : null, reservationId, tokenHash);
@@ -148,7 +148,7 @@ public class ReservationService {
                     new CancellationPolicyDetails(rs.getInt("cutoff_days"), rs.getString("cutoff_time"), rs.getString("timezone"))), reservationId);
         return new ReservationView(row.id(), row.status(), row.checkIn(), row.checkOut(), row.rooms(),
                 row.expiresAt(), row.total(), row.currency(), nights, row.policySnapshot(),
-                new ReservationGuest(row.guestName(), row.guestEmail()), details.roomTypeName(), details.ratePlanName(),
+                new ReservationGuest(row.guestName(), row.guestEmail(), row.guestPhone()), details.roomTypeName(), details.ratePlanName(),
                 details.adults(), details.children(), details.paymentStatus(), details.policy());
     }
 
@@ -176,6 +176,9 @@ public class ReservationService {
                 || request.guest().email() == null || request.guest().email().isBlank()) {
             throw new IllegalArgumentException("예약자 이름과 이메일은 필수입니다.");
         }
+        if (request.guest().phone() != null && request.guest().phone().trim().length() > 30) {
+            throw new IllegalArgumentException("전화번호는 30자 이하여야 합니다.");
+        }
     }
 
     private String fingerprint(ReservationRequest request) {
@@ -192,6 +195,7 @@ public class ReservationService {
                 data.writeLong(request.expectedTotal());
                 data.writeUTF(request.guest().name().trim());
                 data.writeUTF(request.guest().email().trim());
+                data.writeUTF(normalizedPhone(request.guest().phone()) == null ? "" : normalizedPhone(request.guest().phone()));
             }
             return access.sha256(buffer.toByteArray());
         } catch (IOException exception) {
@@ -209,7 +213,12 @@ public class ReservationService {
         return new ReservationRow(rs.getObject("id", UUID.class), rs.getString("status"),
                 rs.getDate("check_in").toLocalDate(), rs.getDate("check_out").toLocalDate(), rs.getInt("rooms"),
                 rs.getTimestamp("expires_at").toInstant(), rs.getLong("total_krw"), rs.getString("currency").trim(),
-                rs.getString("policy_snapshot"), rs.getString("guest_name"), rs.getString("guest_email"));
+                rs.getString("policy_snapshot"), rs.getString("guest_name"), rs.getString("guest_email"), rs.getString("guest_phone"));
+    }
+
+    private String normalizedPhone(String phone) {
+        if (phone == null || phone.isBlank()) return null;
+        return phone.trim();
     }
 
     private record DisplayDetails(String roomTypeName, String ratePlanName, int adults, int children,
@@ -225,6 +234,7 @@ public class ReservationService {
     }
 
     private record ReservationRow(UUID id, String status, LocalDate checkIn, LocalDate checkOut, int rooms,
-            Instant expiresAt, long total, String currency, String policySnapshot, String guestName, String guestEmail) {
+            Instant expiresAt, long total, String currency, String policySnapshot, String guestName, String guestEmail,
+            String guestPhone) {
     }
 }

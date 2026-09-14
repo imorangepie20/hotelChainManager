@@ -96,6 +96,7 @@ test('예약자 입력 뒤 서버 확보와 결제 재시도를 준비한다', a
   await page.getByRole('button', { name: /스탠다드 시티 선택/ }).click()
   await page.getByLabel('예약자 이름').fill('변경 테스트')
   await page.getByLabel('이메일').fill('change-test@example.com')
+  await page.getByLabel('전화번호').fill('010-1234-5678')
   await page.getByRole('checkbox', { name: /예약 및 결제 서비스/ }).check()
   await page.getByRole('button', { name: '예약 및 결제 진행' }).click()
   await expect(page.getByText(/남은 확보 시간/)).toBeVisible()

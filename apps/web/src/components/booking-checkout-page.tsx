@@ -28,7 +28,7 @@ export function BookingCheckoutPage({ locale = 'ko' }: Props) {
   const [offer, setOffer] = useState<Offer | null>(null)
   const [reservation, setReservation] = useState<Reservation | null>(null)
   const [state, setState] = useState<CheckoutState>('DETAILS')
-  const [guest, setGuest] = useState({ name: '', email: '' })
+  const [guest, setGuest] = useState({ name: '', email: '', phone: '' })
   const [agreed, setAgreed] = useState(false)
   const [loadingOffer, setLoadingOffer] = useState(Boolean(selection))
   const [error, setError] = useState('')
@@ -100,7 +100,7 @@ export function BookingCheckoutPage({ locale = 'ko' }: Props) {
 
   const criteriaSummary = useMemo(() => selection && <><strong>{selection.criteria.checkIn} — {selection.criteria.checkOut}</strong><span>{bookingText(locale, "성인")} {selection.criteria.adults}{bookingText(locale, "명")} {selection.criteria.children > 0 && <> · {bookingText(locale, "아동")} {selection.criteria.children}{bookingText(locale, "명")}</>} · {bookingText(locale, "객실")} {selection.criteria.rooms}{bookingText(locale, "개")}</span></>, [selection])
   const holdRemaining = reservation ? formatHoldRemaining(reservation.expiresAt, now) : null
-  const canSubmit = Boolean(selection && offer && guest.name.trim() && guest.email.trim() && agreed && state === 'DETAILS')
+  const canSubmit = Boolean(selection && offer && guest.name.trim() && guest.email.trim() && guest.phone.trim() && agreed && state === 'DETAILS')
 
   async function hold(event: FormEvent) {
     event.preventDefault()
@@ -112,7 +112,7 @@ export function BookingCheckoutPage({ locale = 'ko' }: Props) {
         roomTypeId: offer.roomTypeId, ratePlanId: offer.ratePlanId,
         checkIn: selection.criteria.checkIn, checkOut: selection.criteria.checkOut,
         adults: selection.criteria.adults, children: selection.criteria.children, rooms: selection.criteria.rooms,
-        expectedTotal: offer.total, guest: { name: guest.name.trim(), email: guest.email.trim() },
+        expectedTotal: offer.total, guest: { name: guest.name.trim(), email: guest.email.trim(), phone: guest.phone.trim() },
       }
       const fingerprint = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(body))))).map(value => value.toString(16).padStart(2, '0')).join('')
       const attempt = session.current.checkoutAttempt(fingerprint, { managementToken: createManagementToken(), idempotencyKey: crypto.randomUUID() })
@@ -167,6 +167,7 @@ export function BookingCheckoutPage({ locale = 'ko' }: Props) {
             <legend>{bookingText(locale, "예약자 정보")}</legend>
             <label htmlFor="guest-name">{bookingText(locale, "예약자 이름")}<input id="guest-name" name="name" autoComplete="name" value={guest.name} onChange={event => setGuest(current => ({ ...current, name: event.target.value }))} required /></label>
             <label htmlFor="guest-email">{bookingText(locale, "이메일")}<input id="guest-email" name="email" type="email" autoComplete="email" value={guest.email} onChange={event => setGuest(current => ({ ...current, email: event.target.value }))} required /></label>
+            <label htmlFor="guest-phone">{bookingText(locale, "전화번호")}<input id="guest-phone" name="phone" type="tel" inputMode="tel" autoComplete="tel" maxLength={30} value={guest.phone} onChange={event => setGuest(current => ({ ...current, phone: event.target.value }))} required /></label>
             <label className="booking-policy"><input type="checkbox" checked={agreed} onChange={event => setAgreed(event.target.checked)} required /><span>{bookingText(locale, "예약 및 결제 서비스 이용 약관과 개인정보 처리에 동의합니다.")}</span></label>
           </fieldset>
           {state === 'DETAILS' && <button className="primary booking-submit" disabled={!canSubmit}>{bookingText(locale, "예약 및 결제 진행")} <ArrowRight size={18} aria-hidden="true" /></button>}

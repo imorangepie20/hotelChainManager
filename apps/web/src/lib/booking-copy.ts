@@ -49,6 +49,7 @@ const english: Record<string, string> = {
   "예약자 정보": "Guest details",
   "예약자 이름": "Guest name",
   "이메일": "Email",
+  "전화번호": "Phone number",
   "예약 및 결제 서비스 이용 약관과 개인정보 처리에 동의합니다.": "I agree to the booking and payment terms and personal data processing.",
   "예약 및 결제 진행": "Continue to payment",
   "서버에서 객실 재고와 최종 금액을 확인하고 있습니다…": "The server is checking availability and the final total…",
