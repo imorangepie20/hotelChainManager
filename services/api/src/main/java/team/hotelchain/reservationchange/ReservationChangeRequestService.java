@@ -31,6 +31,7 @@ public class ReservationChangeRequestService {
     private final ReservationChangeViews views;
     private final ReservationChangeHoldService holds;
     private final Clock clock;
+    private final String gatewayMode;
 
     public ReservationChangeRequestService(
             JdbcTemplate jdbc,
@@ -40,7 +41,8 @@ public class ReservationChangeRequestService {
             ReservationChangePolicy policy,
             ReservationChangeViews views,
             ReservationChangeHoldService holds,
-            Clock clock) {
+            Clock clock,
+            @org.springframework.beans.factory.annotation.Value("${reservation.change.gateway:disabled}") String gatewayMode) {
         this.jdbc = jdbc;
         this.staffAccess = staffAccess;
         this.reservationAccess = reservationAccess;
@@ -49,6 +51,7 @@ public class ReservationChangeRequestService {
         this.views = views;
         this.holds = holds;
         this.clock = clock;
+        this.gatewayMode = gatewayMode;
     }
 
     @Transactional
@@ -63,6 +66,7 @@ public class ReservationChangeRequestService {
         ReservationStayQuote quote = quoteService.quote(
                 reservationId, request.checkIn(), request.checkOut(), true);
         staffAccess.requireHotel(staff, quote.hotelId());
+        if (policy.settlementEnabled()) team.hotelchain.reservation.PaymentProviderSafety.requireCompatibleSettlement(jdbc, reservationId, gatewayMode);
 
         ExistingRequest existing = findExisting(reservationId, idempotencyKey);
         if (existing != null) {
@@ -184,6 +188,7 @@ public class ReservationChangeRequestService {
         StaffPrincipal staff = staffAccess.current(token);
         RequestTarget target = findTarget(requestId);
         staffAccess.requireHotel(staff, target.hotelId());
+        if (policy.settlementEnabled()) team.hotelchain.reservation.PaymentProviderSafety.requireCompatibleSettlement(jdbc, target.reservationId(), gatewayMode);
         ReservationStayQuote quote = quoteService.quote(
                 target.reservationId(), target.checkIn(), target.checkOut(), true);
         LockedRequest locked = lockRequestWithAccess(staff, requestId);

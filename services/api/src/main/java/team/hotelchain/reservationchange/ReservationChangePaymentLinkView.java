@@ -8,5 +8,6 @@ public record ReservationChangePaymentLinkView(
         String status,
         long version,
         String customerUrl,
+        Instant createdAt,
         Instant expiresAt) {
 }

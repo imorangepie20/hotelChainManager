@@ -158,6 +158,11 @@ class ReservationChangeSettlementIntegrationTest {
                 staffToken, reservation.id(), "create-change-charge",
                 new CreateReservationChangeRequest(
                         targetCheckIn, targetCheckIn.plusDays(2), ROOM_TYPE, RATE_PLAN, 300_000L));
+        mockMvc.perform(get("/api/reservations/{id}/change-summary", reservation.id()).header("X-Reservation-Token", TOKEN))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("APPROVED"))
+                .andExpect(jsonPath("$.differenceKrw").value(100_000));
+        mockMvc.perform(get("/api/reservations/{id}/change-summary", reservation.id()).header("X-Reservation-Token", token(77)))
+                .andExpect(status().isNotFound());
         String publicToken = token(9);
 
         mockMvc.perform(post("/api/staff/reservation-change-requests/{id}/payment-link", request.id())
@@ -199,6 +204,15 @@ class ReservationChangeSettlementIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.reservationNumberSuffix").value(
                         reservation.id().toString().substring(reservation.id().toString().length() - 8)))
+                .andExpect(jsonPath("$.previousCheckIn").value(reservation.checkIn().toString()))
+                .andExpect(jsonPath("$.previousCheckOut").value(reservation.checkOut().toString()))
+                .andExpect(jsonPath("$.previousRoomTypeName").value("정산 테스트 객실"))
+                .andExpect(jsonPath("$.previousRatePlanName").value("정산 테스트 요금"))
+                .andExpect(jsonPath("$.previousTotalKrw").value(200_000))
+                .andExpect(jsonPath("$.checkIn").value(targetCheckIn.toString()))
+                .andExpect(jsonPath("$.checkOut").value(targetCheckIn.plusDays(2).toString()))
+                .andExpect(jsonPath("$.totalKrw").value(300_000))
+                .andExpect(jsonPath("$.differenceKrw").value(100_000))
                 .andExpect(jsonPath("$.additionalAmountKrw").value(100_000))
                 .andExpect(jsonPath("$.environmentLabel").value("테스트 결제"));
         mockMvc.perform(post("/api/reservation-change-payments/current/checkout").cookie(sessionCookie))
@@ -242,6 +256,9 @@ class ReservationChangeSettlementIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("REFUND_PENDING"));
 
+        mockMvc.perform(get("/api/reservations/{id}/change-summary", reservation.id()).header("X-Reservation-Token", TOKEN))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("REFUND_PENDING"))
+                .andExpect(jsonPath("$.differenceKrw").value(-100_000)).andExpect(jsonPath("$.refundStatus").value("NEW"));
         assertThat(jdbc.queryForObject("select command_type from reservation_change_outbox", String.class))
                 .isEqualTo("REFUND");
         assertThat(outboxWorker.processNext()).isTrue();
@@ -253,6 +270,8 @@ class ReservationChangeSettlementIntegrationTest {
                 where reservation_id = ? and transaction_type = 'ORIGINAL_CHARGE'
                 """, Long.class, reservation.id())).isEqualTo(100_000L);
         assertThat(outboxWorker.processNext()).isFalse();
+        mockMvc.perform(get("/api/reservations/{id}/change-summary", reservation.id()).header("X-Reservation-Token", TOKEN))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.refundStatus").value("SUCCEEDED"));
     }
 
     @Test
@@ -326,6 +345,38 @@ class ReservationChangeSettlementIntegrationTest {
                 select count(*) from reservation_change_event
                 where request_id = ? and event_type = 'RECONCILIATION_ACTION'
                 """, Integer.class, request.id())).isEqualTo(1);
+    }
+
+    @Test
+    void previouslyQueuedChangeCannotRunFakeProviderAgainstExternalCapture() {
+        ReservationView reservation = create("queued-provider-gate", 0);
+        payments.pay(reservation.id(), TOKEN, "queued-capture", PaymentOutcome.SUCCESS);
+        String staffToken = staffAccess.login("settlement-hq@example.com", "password").token();
+        LocalDate target = LocalDate.now().plusDays(42);
+        jdbc.update("update rate_day set amount_krw=150000 where rate_plan_id=? and stay_date>=?", RATE_PLAN, target);
+        var request = changeRequests.create(staffToken, reservation.id(), "queued-change",
+            new CreateReservationChangeRequest(target, target.plusDays(2), ROOM_TYPE, RATE_PLAN, 300_000L));
+        settlement.createPaymentLink(staffToken, request.id(), "queued-link",
+            new ReservationChangePaymentLinkRequest(request.version(), token(9)));
+        jdbc.update("update payment_transaction set provider='TOSS_TEST' where reservation_id=?", reservation.id());
+        assertThat(outboxWorker.processNext()).isTrue();
+        assertThat(jdbc.queryForObject("select checkout_url from payment_adjustment_attempt where request_id=?", String.class, request.id())).isNull();
+        assertThat(jdbc.queryForObject("select count(*) from payment_transaction where change_request_id=?", Integer.class, request.id())).isZero();
+        assertThat(reservations.get(reservation.id(), TOKEN).checkIn()).isEqualTo(reservation.checkIn());
+    }
+
+    @Test
+    void externalCapturedReservationCannotCreateFakeChangeRequest() {
+        ReservationView reservation = create("external-change-gate", 0);
+        payments.pay(reservation.id(), TOKEN, "external-capture", PaymentOutcome.SUCCESS);
+        jdbc.update("update payment_transaction set provider='TOSS_TEST' where reservation_id=?", reservation.id());
+        String staffToken = staffAccess.login("settlement-hq@example.com", "password").token();
+        LocalDate target = LocalDate.now().plusDays(42);
+        assertThatThrownBy(() -> changeRequests.create(staffToken, reservation.id(), "blocked-change",
+            new CreateReservationChangeRequest(target, target.plusDays(2), ROOM_TYPE, RATE_PLAN, 200_000L)))
+            .isInstanceOf(team.hotelchain.reservation.BusinessConflictException.class);
+        assertThat(jdbc.queryForObject("select count(*) from reservation_change_request where reservation_id=?", Integer.class, reservation.id())).isZero();
+        assertThat(jdbc.queryForObject("select count(*) from payment_adjustment_attempt", Integer.class)).isZero();
     }
 
     private ReservationView create(String key, int dayOffset) {

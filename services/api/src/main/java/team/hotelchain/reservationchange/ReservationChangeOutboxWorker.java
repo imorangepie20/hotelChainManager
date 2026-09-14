@@ -21,6 +21,7 @@ public class ReservationChangeOutboxWorker {
     private final PaymentAdjustmentGateway gateway;
     private final ReservationChangeSettlementService settlements;
     private final Clock clock;
+    private final String gatewayMode;
     private final Duration lease;
 
     public ReservationChangeOutboxWorker(
@@ -29,12 +30,14 @@ public class ReservationChangeOutboxWorker {
             PaymentAdjustmentGateway gateway,
             ReservationChangeSettlementService settlements,
             Clock clock,
-            @Value("${reservation.change.outbox-lease:30s}") Duration lease) {
+            @Value("${reservation.change.outbox-lease:30s}") Duration lease,
+            @Value("${reservation.change.gateway:disabled}") String gatewayMode) {
         this.jdbc = jdbc;
         this.transactions = transactions;
         this.gateway = gateway;
         this.settlements = settlements;
         this.clock = clock;
+        this.gatewayMode = gatewayMode;
         this.lease = lease;
     }
 
@@ -50,6 +53,8 @@ public class ReservationChangeOutboxWorker {
         if (claim == null) return false;
 
         try {
+            UUID reservationId = jdbc.queryForObject("select reservation_id from reservation_change_request where id = ?", UUID.class, claim.requestId());
+            team.hotelchain.reservation.PaymentProviderSafety.requireCompatibleSettlement(jdbc, reservationId, gatewayMode);
             AttemptCommand command = loadCommand(claim.attemptId());
             PaymentAdjustmentGateway.GatewayAdjustmentResult result = execute(claim.commandType(), command);
             transactions.executeWithoutResult(status -> {

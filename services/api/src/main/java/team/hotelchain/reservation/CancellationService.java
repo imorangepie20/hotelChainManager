@@ -52,19 +52,34 @@ public class CancellationService {
         return cancelLocked(reservationId, idempotencyKey, reservation, null);
     }
 
+    @Transactional(readOnly = true)
+    public CancellationPreview preview(UUID reservationId, String token) {
+        CancellationReservation reservation = findReservation(reservationId, access.hashToken(token));
+        var cutoff = cutoff(reservation);
+        boolean supported = PaymentProviderSafety.supportsSettlement(jdbc, reservationId, tossRefunds.getIfAvailable() == null ? "fake" : "toss-test");
+        boolean confirmed = "CONFIRMED".equals(reservation.status());
+        boolean beforeCutoff = clock.instant().isBefore(cutoff);
+        String unavailableReason = !supported ? "이 결제 공급자의 취소·환불은 아직 지원하지 않습니다. 호텔에 문의해 주세요." : !confirmed
+                ? "확정된 예약만 취소할 수 있습니다."
+                : beforeCutoff ? null : "취소 가능 시간이 지났습니다.";
+        return new CancellationPreview(reservationId, reservation.status(), supported && confirmed && beforeCutoff,
+                supported && confirmed && beforeCutoff ? reservation.total() : 0, "KRW", cutoff, reservation.timezone(), unavailableReason);
+    }
+
     StaffCancellationPreview previewForStaff(UUID reservationId) {
         CancellationReservation reservation = findReservationForStaff(reservationId, false);
         var cutoff = cutoff(reservation);
+        boolean supported = PaymentProviderSafety.supportsSettlement(jdbc, reservationId, tossRefunds.getIfAvailable() == null ? "fake" : "toss-test");
         boolean confirmed = "CONFIRMED".equals(reservation.status());
         boolean beforeCutoff = clock.instant().isBefore(cutoff);
-        String unavailableReason = !confirmed
+        String unavailableReason = !supported ? "이 결제 공급자의 취소·환불은 아직 지원하지 않습니다. 호텔에 문의해 주세요." : !confirmed
                 ? "확정된 예약만 취소할 수 있습니다."
                 : beforeCutoff ? null : "취소 가능 시간이 지났습니다.";
         return new StaffCancellationPreview(
                 reservationId,
                 reservation.status(),
-                confirmed && beforeCutoff,
-                confirmed && beforeCutoff ? reservation.total() : 0,
+                supported && confirmed && beforeCutoff,
+                supported && confirmed && beforeCutoff ? reservation.total() : 0,
                 "KRW",
                 cutoff,
                 unavailableReason
@@ -152,6 +167,7 @@ public class CancellationService {
         if (tossRefunds.getIfAvailable() != null) {
             throw new BusinessConflictException("CANCELLATION_RECONCILIATION_REQUIRED", "토스 모드에서는 이전 가상 거래의 환불을 본사에서 조정해야 합니다.");
         }
+        PaymentProviderSafety.requireFakeSettlement(jdbc, reservationId);
         if (!refundGateway.refund(reservationId, reservation.total())) {
             insertAttempt(reservationId, idempotencyKey, requestHash, reservation.total(), "FAILED", "CONFIRMED", staffId);
             throw new RefundFailedException();
@@ -228,6 +244,20 @@ public class CancellationService {
         if (reservation == null) {
             throw new ReservationNotFoundException();
         }
+        return reservation;
+    }
+
+    private CancellationReservation findReservation(UUID id, String tokenHash) {
+        CancellationReservation reservation = jdbc.query("""
+                SELECT id, room_type_id, check_in, check_out, rooms, status, total_krw,
+                       COALESCE(policy_snapshot->>'timezone', 'Asia/Seoul') AS timezone,
+                       COALESCE((policy_snapshot->>'refundCutoffDaysBefore')::integer, 1) AS cutoff_days,
+                       COALESCE((policy_snapshot->>'refundCutoffLocalTime')::time, '18:00'::time) AS cutoff_time,
+                       (SELECT count(*) FROM reservation_night rn WHERE rn.reservation_id = r.id) AS nights
+                  FROM reservation r
+                 WHERE id = ? AND management_token_hash = ?
+                """, rs -> rs.next() ? mapReservation(rs) : null, id, tokenHash);
+        if (reservation == null) throw new ReservationNotFoundException();
         return reservation;
     }
 

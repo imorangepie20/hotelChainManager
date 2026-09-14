@@ -52,7 +52,8 @@ export function captureTossReturn(location: Pick<Location, 'pathname' | 'search'
   const params = new URLSearchParams(location.search)
   // Query is consumed only in memory, before API or SDK requests.
   replace(location.pathname + (params.has('result') ? '' : location.hash))
-  if (!params.has('result')) return { kind: 'none' }
+  if (!params.size) return { kind: 'none' }
+  if (params.has('code') || params.has('errorCode')) return { kind: 'fail' }
   if (params.get('result') === 'fail') return { kind: 'fail' }
   try { return { kind: 'success', input: toConfirmationInput(params) } } catch { return { kind: 'invalid' } }
 }
@@ -65,8 +66,8 @@ export function validateTossCheckout(checkout: TossCheckout, origin: string) {
   for (const [value, result] of [[checkout.successUrl, 'success'], [checkout.failUrl, 'fail']]) {
     const url = new URL(value)
     if (url.origin !== origin || url.username || url.password || url.hash
-      || !/^\/(reservation-change-payment|reservations\/[A-Za-z0-9-]+\/payment-result)$/.test(url.pathname)
-      || url.search !== `?result=${result}`) throw new Error('안전한 결제 복귀 주소가 아닙니다.')
+      || !((/^\/(?:en\/)?(reservation-change-payment|reservations\/[A-Za-z0-9-]+\/payment-result)$/.test(url.pathname) && url.search === `?result=${result}`)
+        || (/^\/(?:en\/)?booking\/complete$/.test(url.pathname) && url.search === ''))) throw new Error('안전한 결제 복귀 주소가 아닙니다.')
   }
 }
 
@@ -106,7 +107,7 @@ function loadTossSdk(): Promise<TossFactory> {
   return sdkPromise
 }
 
-export async function requestTossCheckout(checkout: TossCheckout) {
+export async function requestTossCheckout(checkout: TossCheckout, locale: 'ko' | 'en' = 'ko') {
   let stage: CheckoutStage = 'CONFIG'
   try {
     validateTossCheckout(checkout, window.location.origin)
@@ -125,7 +126,7 @@ export async function requestTossCheckout(checkout: TossCheckout) {
             if (requested || closed) return
             requested = true
             Promise.resolve().then(() => widgets.requestPayment({
-              orderId: checkout.orderId, orderName: '호텔 예약 테스트 결제',
+              orderId: checkout.orderId, orderName: locale === 'en' ? 'Hotel reservation test payment' : '호텔 예약 테스트 결제',
               successUrl: checkout.successUrl, failUrl: checkout.failUrl,
             })).then(resolve, reject)
           })
@@ -139,9 +140,9 @@ export async function requestTossCheckout(checkout: TossCheckout) {
     }
     await sdk(checkout.clientKey).payment({ customerKey: sdk.ANONYMOUS }).requestPayment({
       method: 'CARD', amount: { currency: 'KRW', value: checkout.amountKrw }, orderId: checkout.orderId,
-      orderName: '호텔 예약 테스트 결제', successUrl: checkout.successUrl, failUrl: checkout.failUrl,
+      orderName: locale === 'en' ? 'Hotel reservation test payment' : '호텔 예약 테스트 결제', successUrl: checkout.successUrl, failUrl: checkout.failUrl,
     })
-  } catch (reason) { throw new TossCheckoutFailure(checkoutFailureMessage(stage, reason)) }
+  } catch (reason) { throw new TossCheckoutFailure(locale === 'en' ? 'The payment window did not complete. Check the server status before retrying.' : checkoutFailureMessage(stage, reason)) }
 }
 
 export function paymentMessage(state: Pick<TossStatus, 'status' | 'paymentStatus'>) {
@@ -149,4 +150,17 @@ export function paymentMessage(state: Pick<TossStatus, 'status' | 'paymentStatus
   if (state.status === 'EXPIRED' && ['NEW', 'NOT_STARTED', 'FAILED'].includes(state.paymentStatus)) return { completed: false, text: '객실 확보 시간이 만료되어 예약이 확정되지 않았습니다. 객실을 다시 검색해 주세요.' }
   if (state.paymentStatus === 'FAILED') return { completed: false, text: '결제가 승인되지 않았습니다. 예약 확보 상태를 확인해 주세요.' }
   return { completed: false, text: '결제 결과를 확인 중입니다. 중복 결제하지 말고 서버 상태를 다시 확인해 주세요.' }
+}
+
+export function localizedTossCheckout(checkout: TossCheckout, locale: 'ko' | 'en'): TossCheckout {
+  // Validate the server origin and return route before preserving the selected UI locale.
+  validateTossCheckout(checkout, new URL(checkout.successUrl).origin)
+  const localize = (value: string) => {
+    const url = new URL(value)
+    // Both allowed server return forms have already been checked above.
+    const path = url.pathname.replace(/^\/en(?=\/)/, '')
+    url.pathname = `${locale === 'en' ? '/en' : ''}${path}`
+    return url.toString()
+  }
+  return { ...checkout, successUrl: localize(checkout.successUrl), failUrl: localize(checkout.failUrl) }
 }

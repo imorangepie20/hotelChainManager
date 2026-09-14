@@ -270,6 +270,7 @@ export type ReservationChangePaymentLinkView = {
   status: ReservationChangeStatus;
   version: number;
   customerUrl: string;
+  createdAt: string;
   expiresAt: string;
 };
 

@@ -1,5 +1,5 @@
-import type { ConfirmationInput, TossCheckout, TossStatus } from './toss-payments'
 import type { PaymentModes } from './payment-recovery'
+import type { ConfirmationInput, TossCheckout, TossStatus } from './toss-payments.ts'
 
 export type Hotel = { id: string; name: string; region: string; timezone: string }
 export type NightlyPrice = { date: string; amount: number }
@@ -12,20 +12,38 @@ export type Reservation = {
   id: string; status: string; checkIn: string; checkOut: string; rooms: number
   expiresAt: string; total: number; currency: string; nightlyPrices: NightlyPrice[]
   cancellationPolicy: string; guest: { name: string; email: string }
+  roomTypeName?: string; ratePlanName?: string; paymentStatus?: string; adults?: number; children?: number
+  cancellationPolicyDetails?: { refundCutoffDaysBefore: number; refundCutoffLocalTime: string; timezone: string }
 }
 
 export type ReservationChangePayment = {
+  reservationId: string
   reservationNumberSuffix: string
+  previousCheckIn: string
+  previousCheckOut: string
+  previousRoomTypeName: string
+  previousRatePlanName: string
+  previousTotalKrw: number
   checkIn: string
   checkOut: string
   roomTypeName: string
   ratePlanName: string
+  totalKrw: number
+  differenceKrw: number
   additionalAmountKrw: number
   currency: string
   expiresAt: string
   environmentLabel: string
   status: string
 }
+
+export type ReservationChangeSummary = Pick<ReservationChangePayment, 'reservationId' | 'status' | 'checkIn' | 'checkOut' | 'roomTypeName' | 'ratePlanName' | 'differenceKrw' | 'currency' | 'expiresAt'> & { refundStatus: string | null }
+
+export type CancellationPreview = {
+  reservationId: string; status: string; cancellable: boolean; refundAmount: number
+  currency: string; cutoffAt: string; timezone: string; unavailableReason: string | null
+}
+export type PaymentMode = PaymentModes
 
 export type WebsiteNavigationItem = {
   id: string
@@ -47,7 +65,9 @@ export type PublishedWebsitePage = {
 }
 
 export class ApiFailure extends Error {
-  constructor(public code: string, message: string, public status: number) { super(message) }
+  readonly code: string
+  readonly status: number
+  constructor(code: string, message: string, status: number) { super(message); this.code = code; this.status = status }
 }
 
 export type WebsitePreviewPageResponse = { page: PublishedWebsitePage; expiresAt: string }
@@ -62,6 +82,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     throw await apiFailure(response)
   }
+  if (response.status === 204) return null as T
   return response.json() as Promise<T>
 }
 
@@ -71,13 +92,13 @@ const headers = (token: string, key?: string) => ({
   ...(key ? { 'Idempotency-Key': key } : {}),
 })
 
+export function reservationPaymentPath(id: string, action: 'checkout' | 'confirm' | 'status' | 'reconcile') {
+  return `/api/reservations/${encodeURIComponent(id)}/payment-${action}`
+}
+
 export const api = {
   hotels: () => request<Hotel[]>('/api/hotels'),
-  paymentModes: () => request<PaymentModes>('/api/payments/mode', { cache: 'no-store' }),
-  tossCheckout: (id: string, token: string, key: string) => request<TossCheckout>(`/api/reservations/${id}/payment-checkout`, { method: 'POST', headers: headers(token, key) }),
-  tossConfirm: (id: string, token: string, input: ConfirmationInput) => request<TossStatus>(`/api/reservations/${id}/payment-confirm`, { method: 'POST', headers: headers(token), body: JSON.stringify(input) }),
-  tossStatus: (id: string, token: string) => request<TossStatus>(`/api/reservations/${id}/payment-status`, { headers: headers(token), cache: 'no-store' }),
-  tossReconcile: (id: string, token: string) => request<TossStatus>(`/api/reservations/${id}/payment-reconcile`, { method: 'POST', headers: headers(token) }),
+  paymentModes: () => request<PaymentMode>('/api/payments/mode', { cache: 'no-store' }),
   tossChangeCheckout: () => request<TossCheckout>('/api/reservation-change-payments/current/toss/checkout', { method: 'POST', credentials: 'include' }),
   tossChangeConfirm: (input: ConfirmationInput) => request<TossStatus>('/api/reservation-change-payments/current/toss/confirm', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }),
   tossChangeStatus: () => request<TossStatus>('/api/reservation-change-payments/current/toss/status', { credentials: 'include', cache: 'no-store' }),
@@ -102,6 +123,22 @@ export const api = {
     method: 'POST', headers: headers(token, key), body: JSON.stringify(body),
   }),
   getReservation: (id: string, token: string) => request<Reservation>(`/api/reservations/${id}`, { headers: headers(token) }),
+  reservationChangeSummary: (id: string, token: string) => request<ReservationChangeSummary | null>(`/api/reservations/${encodeURIComponent(id)}/change-summary`, { headers: headers(token), cache: 'no-store' }),
+  cancellationPreview: (id: string, token: string) => request<CancellationPreview>(`/api/reservations/${encodeURIComponent(id)}/cancellation-preview`, {
+    headers: headers(token), cache: 'no-store',
+  }),
+  tossCheckout: (id: string, token: string, key: string) => request<TossCheckout>(reservationPaymentPath(id, 'checkout'), {
+    method: 'POST', headers: headers(token, key),
+  }),
+  tossConfirm: (id: string, token: string, input: ConfirmationInput) => request<TossStatus>(reservationPaymentPath(id, 'confirm'), {
+    method: 'POST', headers: headers(token), body: JSON.stringify(input),
+  }),
+  tossStatus: (id: string, token: string) => request<TossStatus>(reservationPaymentPath(id, 'status'), {
+    headers: headers(token), cache: 'no-store',
+  }),
+  tossReconcile: (id: string, token: string) => request<TossStatus>(reservationPaymentPath(id, 'reconcile'), {
+    method: 'POST', headers: headers(token),
+  }),
   pay: (id: string, token: string, key: string, outcome: 'SUCCESS' | 'FAILURE') => request<{ status: string; paymentStatus: string }>(`/api/reservations/${id}/test-payment`, {
     method: 'POST', headers: headers(token, key), body: JSON.stringify({ outcome }),
   }),
