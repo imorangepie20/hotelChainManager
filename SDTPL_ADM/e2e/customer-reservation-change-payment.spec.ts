@@ -3,8 +3,8 @@ import { expect, test } from '@playwright/test'
 const token = 'A'.repeat(43)
 const payment = {
   reservationNumberSuffix: '12ab34cd',
-  targetCheckIn: '2026-10-10',
-  targetCheckOut: '2026-10-12',
+  checkIn: '2026-10-10',
+  checkOut: '2026-10-12',
   roomTypeName: '디럭스 오션',
   ratePlanName: '조식 포함',
   additionalAmountKrw: 100000,
@@ -15,6 +15,7 @@ const payment = {
 }
 
 test.beforeEach(async ({ page }) => {
+  await page.route('**/api/payments/mode', route => route.fulfill({ json: { provider: 'fake', changeProvider: 'fake' } }))
   await page.route('**/api/reservation-change-payments/current', route => route.fulfill({ json: payment }))
   await page.route('**/api/reservation-change-payments/current/checkout', route => route.fulfill({
     json: { checkoutUrl: 'http://localhost:4000/fake-checkout' },
