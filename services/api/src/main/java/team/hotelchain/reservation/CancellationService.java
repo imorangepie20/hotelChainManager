@@ -87,6 +87,17 @@ public class CancellationService {
                 throw new BusinessConflictException("IDEMPOTENCY_CONFLICT", "같은 요청 키에 다른 취소 내용이 사용되었습니다.");
             }
             if ("FAILED".equals(existing.refundStatus())) {
+                UUID failedTossAttempt = jdbc.query("""
+                        select a.id from cancellation_attempt a where a.reservation_id=? and a.idempotency_key=?
+                        and exists(select 1 from toss_refund_command c where c.cancellation_attempt_id=a.id)
+                        for update
+                        """, rs -> rs.next() ? rs.getObject(1, UUID.class) : null, reservationId, idempotencyKey);
+                if (failedTossAttempt != null && tossRefunds.getIfAvailable() != null) {
+                    // 같은 계획·PG 멱등 키를 보존한다. UNKNOWN은 재청구하지 않고 worker가 조회한다.
+                    jdbc.update("update toss_refund_command set status='NEW',updated_at=CURRENT_TIMESTAMP where cancellation_attempt_id=? and status='FAILED'",failedTossAttempt);
+                    jdbc.update("update cancellation_attempt set refund_status='PENDING',reservation_status='CANCELLATION_PENDING' where id=?",failedTossAttempt);
+                    return new CancellationResult(reservationId,"CANCELLATION_PENDING",existing.refundAmount(),"KRW");
+                }
                 throw new RefundFailedException();
             }
             return new CancellationResult(reservationId, existing.reservationStatus(), existing.refundAmount(), "KRW");
@@ -167,7 +178,12 @@ public class CancellationService {
         if ("SUCCEEDED".equals(attempt.get("refund_status"))) return;
         boolean unfinished=Boolean.TRUE.equals(jdbc.queryForObject(
                 "select exists(select 1 from toss_refund_command where cancellation_attempt_id=? and status<>'SUCCEEDED')",Boolean.class,attemptId));
-        if(unfinished)return;
+        if(unfinished) {
+            boolean failed=Boolean.TRUE.equals(jdbc.queryForObject("select exists(select 1 from toss_refund_command where cancellation_attempt_id=? and status='FAILED')",Boolean.class,attemptId));
+            jdbc.update("update cancellation_attempt set refund_status=?,reservation_status=? where id=?",
+                    failed ? "FAILED" : "UNKNOWN", failed ? "CANCELLATION_FAILED" : "CANCELLATION_PENDING",attemptId);
+            return;
+        }
         long verified=jdbc.queryForObject("select coalesce(sum(amount_krw),0) from toss_refund_command where cancellation_attempt_id=? and status='SUCCEEDED'",Long.class,attemptId);
         if(verified!=(long)attempt.get("refund_amount_krw") || !"CONFIRMED".equals(reservation.status()))return;
         jdbc.update("update cancellation_attempt set refund_status='SUCCEEDED',reservation_status='CANCELLED' where id=?",attemptId);

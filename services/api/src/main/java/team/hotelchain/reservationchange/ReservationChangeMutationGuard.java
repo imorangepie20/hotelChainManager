@@ -67,7 +67,7 @@ public class ReservationChangeMutationGuard {
     }
 
     private ActiveChange lockActiveChange(UUID reservationId) {
-        if (Boolean.TRUE.equals(jdbc.queryForObject("select exists(select 1 from cancellation_attempt where reservation_id=? and refund_status in ('PENDING','UNKNOWN'))",
+        if (Boolean.TRUE.equals(jdbc.queryForObject("select exists(select 1 from cancellation_attempt where reservation_id=? and (refund_status in ('PENDING','UNKNOWN') or (refund_status='FAILED' and exists(select 1 from toss_refund_command c where c.cancellation_attempt_id=cancellation_attempt.id))))",
                 Boolean.class,reservationId))) {
             throw new BusinessConflictException("CANCELLATION_RECONCILIATION_REQUIRED", "예약 취소 환불을 먼저 완료하거나 조정해 주세요.");
         }

@@ -269,6 +269,49 @@ class TossPaymentAdjustmentIntegrationTest {
         assertThat(jdbc.queryForObject("select status from reservation where id=?",String.class,reservation)).isEqualTo("CONFIRMED");
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void failedCancellationRetriesOnlyFailedCommandWithSameKey(boolean olderThanFifteenDays) {
+        UUID reservation = original();
+        var change = request(reservation, -100000);
+        jdbc.update("insert into payment_transaction(id,reservation_id,provider,merchant_account,gateway_transaction_id,transaction_type,captured_amount_krw,currency) values (?,?,'TOSS_TEST','hotel-test','extra-key','CHANGE_CHARGE',100000,'KRW')", UUID.randomUUID(), reservation);
+        jdbc.update("insert into payment_provider_attempt(id,reservation_id,provider,merchant_account,order_id,payment_key,idempotency_key,amount_krw,currency,status) values (?,?,'TOSS_TEST','hotel-test','extra-order','extra-key','extra-idem',100000,'KRW','SUCCEEDED')", UUID.randomUUID(), reservation);
+        provider.cancelResult = c -> c.paymentKey().equals("extra-key") ? new ProviderPayment(null,null,0,null,ProviderStatus.FAILED,null,"REFUND_REJECTED")
+                : new ProviderPayment(c.paymentKey(), order(c.paymentKey()), c.amountKrw(),"KRW",ProviderStatus.DONE,"cancel-original",null);
+        cancellations.cancel(reservation, TOKEN, "cancel-retry");
+        cancellationWorker.processPending();
+        assertThat(jdbc.queryForObject("select refund_status from cancellation_attempt",String.class)).isEqualTo("FAILED");
+        assertThatThrownBy(() -> settlements.startRefund(staffToken,change.id(),"blocked",new ReservationChangeVersionRequest(change.version())))
+                .isInstanceOf(BusinessConflictException.class);
+        var originalCommands = jdbc.queryForList("select id,idempotency_key from toss_refund_command order by id");
+        if (olderThanFifteenDays) jdbc.update("update toss_refund_command set created_at=now()-interval '16 days'");
+        provider.cancelResult = c -> new ProviderPayment(c.paymentKey(), order(c.paymentKey()), c.amountKrw(),"KRW",ProviderStatus.DONE,"cancel-extra",null);
+        assertThat(cancellations.cancel(reservation,TOKEN,"cancel-retry").status()).isEqualTo("CANCELLATION_PENDING");
+        cancellationWorker.processPending();
+        assertThat(cancellations.cancel(reservation,TOKEN,"cancel-retry").status()).isEqualTo("CANCELLED");
+        assertThat(jdbc.queryForList("select id,idempotency_key from toss_refund_command order by id")).isEqualTo(originalCommands);
+        assertThat(provider.cancelCalls.stream().filter(c -> c.paymentKey().equals("original-key")).count()).isEqualTo(1);
+        var extraCalls = provider.cancelCalls.stream().filter(c -> c.paymentKey().equals("extra-key")).toList();
+        assertThat(extraCalls).hasSize(olderThanFifteenDays ? 1 : 2);
+        if (!olderThanFifteenDays) assertThat(extraCalls.get(1).idempotencyKey()).isEqualTo(extraCalls.getFirst().idempotencyKey());
+        assertThat(jdbc.queryForObject("select sum(refunded_amount_krw) from payment_transaction",Long.class)).isEqualTo(300000);
+    }
+
+    @Test void unknownCancellationBacklogDoesNotStarveLaterCommands() {
+        UUID reservation = original();
+        for (int i=0; i<21; i++) {
+            UUID attempt = UUID.randomUUID(), transaction = UUID.randomUUID(), command = UUID.randomUUID();
+            jdbc.update("insert into cancellation_attempt(id,reservation_id,idempotency_key,request_hash,refund_amount_krw,refund_status,reservation_status,created_at) values (?,?,?,'fixture',100,'PENDING','CANCELLATION_PENDING',now()-interval '1 day')",attempt,reservation,"queue-"+i);
+            jdbc.update("insert into payment_transaction(id,reservation_id,provider,merchant_account,gateway_transaction_id,transaction_type,captured_amount_krw,currency) values (?,?,'TOSS_TEST','hotel-test',?,'CHANGE_CHARGE',100,'KRW')",transaction,reservation,"queue-key-"+i);
+            jdbc.update("insert into toss_refund_command(id,transaction_id,cancellation_attempt_id,merchant_account,payment_key,order_id,amount_krw,idempotency_key,reason,created_at,updated_at) values (?,?,?,'hotel-test',?,?,100,?,'fixture',now()-interval '1 day',now()-interval '1 day')",command,transaction,attempt,"queue-key-"+i,"queue-order-"+i,"queue-refund-"+i);
+        }
+        provider.cancelResult = c -> new ProviderPayment(null,null,0,null,ProviderStatus.UNKNOWN,null,"HTTP_IO");
+        cancellationWorker.processPending();
+        cancellationWorker.processPending();
+        assertThat(provider.cancelCalls).hasSize(21);
+        assertThat(jdbc.queryForObject("select count(*) from toss_refund_command where status='NEW'",Long.class)).isZero();
+    }
+
     @Test void tossModeDoesNotFakeRefundLegacyFakeTransaction() {
         UUID reservation=original();
         jdbc.update("update payment_transaction set provider='FAKE',merchant_account='LOCAL' where reservation_id=?",reservation);

@@ -18,7 +18,11 @@ public class TossCancellationWorker {
     }
     @Scheduled(fixedDelayString="${payment.toss.cancellation-scan-delay:30s}",initialDelayString="${payment.toss.cancellation-scan-delay:30s}")
     public void processPending(){
-        for(UUID attempt:jdbc.queryForList("select id from cancellation_attempt where refund_status in ('PENDING','UNKNOWN') order by created_at limit 20",UUID.class)){
+        for(UUID attempt:jdbc.queryForList("""
+                select a.id from cancellation_attempt a where a.refund_status in ('PENDING','UNKNOWN')
+                order by coalesce((select max(c.updated_at) from toss_refund_command c
+                    where c.cancellation_attempt_id=a.id),a.created_at),a.id limit 20
+                """,UUID.class)){
             for(UUID id:jdbc.queryForList("select id from toss_refund_command where cancellation_attempt_id=? and status<>'SUCCEEDED' order by created_at,id",UUID.class,attempt)){
                 refunds.execute(id,false);
             }
