@@ -4,6 +4,7 @@ import { type FormEvent, type RefObject, useEffect, useMemo, useRef, useState } 
 import { format } from "date-fns";
 import { ko } from "date-fns/locale";
 import { CalendarSearch, Search } from "lucide-react";
+import { useSearchParams } from "next/navigation";
 
 import { Badge } from "@/components/ui/badge";
 import {
@@ -25,6 +26,7 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ReservationChangeApprovalQueue } from "@/components/hotel-admin/reservation-change-approval-queue";
 import { ReservationChangePanel } from "@/components/hotel-admin/reservation-change-panel";
+import { CheckedInRoomMove } from "@/components/hotel-admin/checked-in-room-move";
 import {
   assignRoom,
   cancelStaffReservation,
@@ -35,6 +37,7 @@ import {
   StaffApiError,
   reassignRoom,
   type AssignableRoom,
+  type CheckedInRoomMoveResult,
   type StaffCancellationPreview,
   type StaffPrincipal,
   type StaffReservationGuestUpdateResult,
@@ -111,6 +114,10 @@ function parseDate(value: string) {
 }
 
 export function ReservationManagement() {
+  const searchParams = useSearchParams();
+  const deepLinkDate = useRef(searchParams.get("date"));
+  const deepLinkReservationId = useRef(searchParams.get("reservationId"));
+  const deepLinkHandled = useRef(false);
   const [staff, setStaff] = useState<StaffPrincipal | null>(null);
   const [hotelId, setHotelId] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<Date>();
@@ -134,7 +141,10 @@ export function ReservationManagement() {
 
   useEffect(() => {
     function loadStoredStaff() {
-      const defaultDate = dateInTimeZone(hotels[0].timeZone);
+      const requestedDate = deepLinkDate.current;
+      const defaultDate = requestedDate && /^\d{4}-\d{2}-\d{2}$/.test(requestedDate)
+        ? requestedDate
+        : dateInTimeZone(hotels[0].timeZone);
       setSelectedDate(parseDate(defaultDate));
       setDate(defaultDate);
       const stored = window.localStorage.getItem("hotel-chain-staff");
@@ -163,7 +173,16 @@ export function ReservationManagement() {
       setSelectedReservation(null);
       try {
         const result = await getStaffReservations(sessionToken, selectedHotelId, date, { query, status });
-        if (current) setData(result);
+        if (current) {
+          setData(result);
+          if (!deepLinkHandled.current && deepLinkReservationId.current) {
+            const requestedReservation = result.reservations.find(
+              (reservation) => reservation.reservationId === deepLinkReservationId.current,
+            );
+            if (requestedReservation) setSelectedReservation(requestedReservation);
+            deepLinkHandled.current = true;
+          }
+        }
       } catch (cause) {
         if (current) setError(cause instanceof Error ? cause.message : "예약 목록을 불러오지 못했습니다.");
       } finally {
@@ -248,6 +267,25 @@ export function ReservationManagement() {
     setNotice(`${result.previousRoomNumber}호를 ${result.roomNumber}호로 변경했습니다.`);
     setSelectedReservation(null);
     setRefreshVersion((version) => version + 1);
+  }
+
+  function checkedInRoomMoved(result: CheckedInRoomMoveResult) {
+    const replaceAssignedRoom = (reservation: StaffReservationSummary) => ({
+      ...reservation,
+      assignedRoomNumbers: reservation.assignedRoomNumbers.map((roomNumber) => (
+        roomNumber === result.previousRoomNumber ? result.roomNumber : roomNumber
+      )),
+    });
+    setData((current) => current ? {
+      ...current,
+      reservations: current.reservations.map((reservation) => (
+        reservation.reservationId === result.reservationId ? replaceAssignedRoom(reservation) : reservation
+      )),
+    } : current);
+    setSelectedReservation((current) => (
+      current?.reservationId === result.reservationId ? replaceAssignedRoom(current) : current
+    ));
+    setNotice(`${result.roomNumber}호로 이동했습니다.`);
   }
 
   function partyUpdated(result: StaffReservationPartyUpdateResult) {
@@ -361,6 +399,7 @@ export function ReservationManagement() {
         onGuestDetailsUpdated={guestDetailsUpdated}
         onRoomAssigned={roomAssigned}
         onRoomReassigned={roomReassigned}
+        onCheckedInRoomMoved={checkedInRoomMoved}
         onPartyUpdated={partyUpdated}
         onStayChanged={stayChanged}
         onRequestCancellation={requestCancellation}
@@ -414,6 +453,7 @@ function ReservationDetail({
   onGuestDetailsUpdated,
   onRoomAssigned,
   onRoomReassigned,
+  onCheckedInRoomMoved,
   onPartyUpdated,
   onStayChanged,
   onRequestCancellation,
@@ -427,6 +467,7 @@ function ReservationDetail({
   onGuestDetailsUpdated: (result: StaffReservationGuestUpdateResult) => void;
   onRoomAssigned: (roomNumber: string) => void;
   onRoomReassigned: (result: RoomReassignmentResult) => void;
+  onCheckedInRoomMoved: (result: CheckedInRoomMoveResult) => void;
   onPartyUpdated: (result: StaffReservationPartyUpdateResult) => void;
   onStayChanged: (result: StaffReservationStayChangeResult) => void;
   onRequestCancellation: (reservation: StaffReservationSummary) => Promise<void>;
@@ -469,6 +510,11 @@ function ReservationDetail({
                   {checkingCancellation ? "취소 조건 확인 중" : "예약 취소"}
                 </Button>
               </div>
+            </div>
+          )}
+          {reservation.status === "CHECKED_IN" && (
+            <div className="flex flex-col gap-4 border-t pt-4">
+              <CheckedInRoomMove reservation={reservation} onMoved={onCheckedInRoomMoved} />
             </div>
           )}
         </DialogContent>
