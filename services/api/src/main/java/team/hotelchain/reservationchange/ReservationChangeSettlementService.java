@@ -57,6 +57,134 @@ public class ReservationChangeSettlementService {
     }
 
     @Transactional
+    public CustomerSettlementResult startCustomerSettlement(
+            UUID reservationId,
+            UUID requestId,
+            String managementToken,
+            String idempotencyKey) {
+        requireCustomerAccess(reservationId, managementToken);
+        if (idempotencyKey == null || idempotencyKey.isBlank() || idempotencyKey.length() > 100) {
+            throw new IllegalArgumentException("Idempotency-Key가 필요합니다.");
+        }
+        if (!policy.settlementEnabled()) {
+            throw new BusinessConflictException(
+                    "CHANGE_SETTLEMENT_DISABLED", "예약 변경 정산 기능이 비활성화되어 있습니다.");
+        }
+        PaymentContext context = paymentContext(requestId);
+        if (!context.reservationId().equals(reservationId) || !"APPROVED".equals(context.status())) {
+            throw new BusinessConflictException(
+                    "RESERVATION_CHANGE_STATE_CONFLICT", "현재 상태에서는 예약 변경을 시작할 수 없습니다.");
+        }
+        team.hotelchain.reservation.PaymentProviderSafety.requireCompatibleSettlement(
+                jdbc, reservationId, gatewayMode);
+
+        ReservationChangeHoldService.HoldResult hold = holds.acquire(requestId, context.version());
+        Instant expiresAt = hold.expiresAt();
+        if ("NONE".equals(context.direction())) {
+            transitionAfterCustomerHold(requestId, hold.requestVersion(), "READY_TO_APPLY", expiresAt);
+            insertEvent(requestId, "CUSTOMER_ZERO_DIFFERENCE_READY", "APPROVED", "READY_TO_APPLY",
+                    null, "customer-settle:" + requestId + ":" + idempotencyKey, "CUSTOMER");
+            return new CustomerSettlementResult("READY_TO_APPLY", null, expiresAt);
+        }
+
+        OriginalTransaction original = lockSettleableOriginalTransaction(reservationId);
+        UUID attemptId = UUID.randomUUID();
+        String publicToken = "CHARGE".equals(context.direction()) ? newToken() : null;
+        String requestHash = reservationAccess.sha256(String.join(":", "CUSTOMER",
+                requestId.toString(), Long.toString(context.version()), idempotencyKey)
+                .getBytes(StandardCharsets.UTF_8));
+        if ("CHARGE".equals(context.direction())) {
+            jdbc.update("""
+                    insert into payment_adjustment_attempt (
+                        id, request_id, adjustment_type, provider, idempotency_key, request_hash,
+                        amount_krw, currency, status, public_token_hash)
+                    values (?, ?, 'CREATE_CHECKOUT', ?, ?, ?, ?, ?, 'NEW', ?)
+                    """, attemptId, requestId, "toss-test".equals(gatewayMode) ? "TOSS_TEST" : "FAKE",
+                    idempotencyKey, requestHash, context.differenceKrw(), context.currency(),
+                    reservationAccess.hashToken(publicToken));
+            insertOutbox(requestId, attemptId, "CREATE_CHECKOUT", "create-checkout:" + attemptId);
+            transitionAfterCustomerHold(requestId, hold.requestVersion(), "AWAITING_PAYMENT", expiresAt);
+            String sessionToken = newToken();
+            jdbc.update("""
+                    insert into reservation_change_customer_session (id, request_id, token_hash, expires_at)
+                    values (?, ?, ?, ?)
+                    """, UUID.randomUUID(), requestId, reservationAccess.hashToken(sessionToken),
+                    Timestamp.from(expiresAt));
+            insertEvent(requestId, "CUSTOMER_PAYMENT_STARTED", "APPROVED", "AWAITING_PAYMENT",
+                    null, "customer-settle:" + requestId + ":" + idempotencyKey, "CUSTOMER");
+            return new CustomerSettlementResult("AWAITING_PAYMENT", sessionToken, expiresAt);
+        }
+
+        long refundAmount = Math.abs(context.differenceKrw());
+        if (original.capturedAmountKrw() - original.refundedAmountKrw() < refundAmount) {
+            throw notSettleable();
+        }
+        jdbc.update("""
+                insert into payment_adjustment_attempt (
+                    id, request_id, original_payment_transaction_id, adjustment_type,
+                    provider, idempotency_key, request_hash, amount_krw, currency, status)
+                values (?, ?, ?, 'REFUND_ORIGINAL', ?, ?, ?, ?, ?, 'NEW')
+                """, attemptId, requestId, original.id(), original.provider(), idempotencyKey,
+                requestHash, refundAmount, context.currency());
+        insertOutbox(requestId, attemptId, "REFUND", "refund:" + attemptId);
+        transitionAfterCustomerHold(requestId, hold.requestVersion(), "REFUND_PENDING", expiresAt);
+        insertEvent(requestId, "CUSTOMER_REFUND_STARTED", "APPROVED", "REFUND_PENDING",
+                null, "customer-settle:" + requestId + ":" + idempotencyKey, "CUSTOMER");
+        return new CustomerSettlementResult("REFUND_PENDING", null, expiresAt);
+    }
+
+    @Transactional
+    public String resumeCustomerSession(UUID reservationId, UUID requestId, String managementToken) {
+        requireCustomerAccess(reservationId, managementToken);
+        PaymentContext context = paymentContext(requestId);
+        if (!context.reservationId().equals(reservationId) || !"AWAITING_PAYMENT".equals(context.status())
+                || context.settlementExpiresAt() == null || !context.settlementExpiresAt().isAfter(clock.instant())) {
+            return null;
+        }
+        String sessionToken = newToken();
+        jdbc.update("""
+                insert into reservation_change_customer_session (id,request_id,token_hash,expires_at)
+                values (?,?,?,?)
+                """, UUID.randomUUID(), requestId, reservationAccess.hashToken(sessionToken),
+                Timestamp.from(context.settlementExpiresAt()));
+        return sessionToken;
+    }
+
+    private void requireCustomerAccess(UUID reservationId, String token) {
+        String tokenHash;
+        try { tokenHash = reservationAccess.hashToken(token); }
+        catch (IllegalArgumentException invalid) { throw new ReservationNotFoundException(); }
+        Boolean allowed = jdbc.queryForObject(
+                "select exists(select 1 from reservation where id=? and management_token_hash=?)",
+                Boolean.class, reservationId, tokenHash);
+        if (!Boolean.TRUE.equals(allowed)) throw new ReservationNotFoundException();
+    }
+
+    private void transitionAfterCustomerHold(
+            UUID requestId, long version, String status, Instant expiresAt) {
+        int updated = jdbc.update("""
+                update reservation_change_request
+                set status=?, settlement_expires_at=?, version=version+1, updated_at=?
+                where id=? and version=?
+                """, status, Timestamp.from(expiresAt), Timestamp.from(clock.instant()), requestId, version);
+        if (updated != 1) {
+            throw new BusinessConflictException(
+                    "RESERVATION_CHANGE_VERSION_CONFLICT", "예약 변경 요청이 갱신되었습니다. 다시 확인해 주세요.");
+        }
+    }
+
+    private void insertOutbox(UUID requestId, UUID attemptId, String command, String dedupeKey) {
+        jdbc.update("""
+                insert into reservation_change_outbox (
+                    id, request_id, attempt_id, command_type, dedupe_key, payload)
+                values (?, ?, ?, ?, ?, '{}'::jsonb)
+                """, UUID.randomUUID(), requestId, attemptId, command, dedupeKey);
+    }
+
+    public record CustomerSettlementResult(String status, String sessionToken, Instant expiresAt) {
+    }
+
+    @Transactional
     public ReservationChangePaymentLinkView createPaymentLink(
             String staffToken,
             UUID requestId,

@@ -21,6 +21,7 @@ import { BookingSearchPage } from './components/booking-search-page'
 import { BookingCheckoutPage } from './components/booking-checkout-page'
 import { BookingResultPage } from './components/booking-result-page'
 import { ReservationManagementPage } from './components/reservation-management-page'
+import { ReservationChangePage } from './components/reservation-change-page'
 import { CustomerBookingShell } from './components/customer-shell'
 import { captureTossReturn } from './lib/toss-payments'
 
@@ -302,6 +303,7 @@ function BookingApp() {
   if (bookingRoute?.kind === 'reservation-payment-result') return <BookingResultPage locale={bookingRoute.locale ?? 'ko'} reservationId={bookingRoute.reservationId} returned={initialTossReturn} />
   if (bookingRoute?.kind === 'reservations') return <ReservationManagementPage locale={bookingRoute.locale ?? 'ko'} />
   if (bookingRoute?.kind === 'reservation-detail') return <ReservationManagementPage reservationId={bookingRoute.reservationId} locale={bookingRoute.locale ?? 'ko'} />
+  if (bookingRoute?.kind === 'reservation-change') return <ReservationChangePage reservationId={bookingRoute.reservationId} locale={bookingRoute.locale ?? 'ko'} />
   if (locale === 'en') {
     const route = resolveCustomerRoute(pathname)
     const englishFooter = <footer><div className="brand"><span>STAY</span> HANEUL</div><p>Fictional hotel chain · Portfolio demo</p><p>© 2026 HOTEL CHAIN PROJECT</p></footer>

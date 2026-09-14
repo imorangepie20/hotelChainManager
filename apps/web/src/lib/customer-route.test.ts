@@ -11,6 +11,7 @@ export function runCustomerRouteTests() {
   expectEqual(resolveCustomerRoute('/booking/checkout'), { kind: 'booking-checkout', pathname: '/booking/checkout' }, '예약 결제를 전용 경로로 구분한다')
   expectEqual(resolveCustomerRoute('/booking/complete'), { kind: 'booking-complete', pathname: '/booking/complete' }, '예약 완료를 전용 경로로 구분한다')
   expectEqual(resolveCustomerRoute('/reservations/123e4567-e89b-12d3-a456-426614174000/payment-result'), { kind: 'reservation-payment-result', pathname: '/reservations/123e4567-e89b-12d3-a456-426614174000/payment-result', reservationId: '123e4567-e89b-12d3-a456-426614174000' }, '기존 예약별 결제 결과 경로를 구분한다')
+  expectEqual(resolveCustomerRoute('/reservations/123e4567-e89b-12d3-a456-426614174000/change'), { kind: 'reservation-change', pathname: '/reservations/123e4567-e89b-12d3-a456-426614174000/change', reservationId: '123e4567-e89b-12d3-a456-426614174000' }, '고객 예약 변경 경로를 상세보다 먼저 구분한다')
   expectEqual(resolveCustomerRoute('/reservations'), { kind: 'reservations', pathname: '/reservations' }, '예약 목록을 전용 경로로 구분한다')
   expectEqual(resolveCustomerRoute('/reservations/R1'), { kind: 'reservation-detail', pathname: '/reservations/r1', reservationId: 'r1' }, '예약 상세 ID를 정규화한다')
   expectEqual(resolveCustomerRoute('/en/booking/results'), { kind: 'booking-results', pathname: '/en/booking/results', locale: 'en' }, '영문 예약 경로도 CMS 경로보다 먼저 구분한다')

@@ -76,6 +76,20 @@ class ReservationStayQuoteIntegrationTest {
                 .containsExactly(100_000, 110_000);
     }
 
+    @Test
+    void usesRequestedPartyForCapacityAndQuoteSnapshot() {
+        ReservationStayQuote quote = quotes.quote(
+                RESERVATION, checkIn, checkOut, 3, 1, false);
+
+        assertThat(quote.adults()).isEqualTo(3);
+        assertThat(quote.children()).isEqualTo(1);
+        assertThat(quote.offers()).hasSize(1);
+
+        ReservationStayQuote unavailable = quotes.quote(
+                RESERVATION, checkIn, checkOut, 8, 1, false);
+        assertThat(unavailable.offers()).isEmpty();
+    }
+
     private void clean() {
         jdbc.update("delete from reservation_night where reservation_id = ?", RESERVATION);
         jdbc.update("delete from reservation where id = ?", RESERVATION);

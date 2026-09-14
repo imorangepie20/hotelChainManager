@@ -7,6 +7,7 @@ export type CustomerRoute = (
   | { kind: 'reservation-payment-result'; pathname: string; reservationId: string }
   | { kind: 'reservations'; pathname: string }
   | { kind: 'reservation-detail'; pathname: string; reservationId: string }
+  | { kind: 'reservation-change'; pathname: string; reservationId: string }
   | { kind: 'collection'; pathname: string; hotelSlug?: string; contentKind: 'ROOM' | 'DINING' | 'FACILITY' | 'EXPERIENCE' | 'PROMOTION' | 'GUIDE' | 'BRAND' }
   | { kind: 'page'; pathname: string; segments: string[] }) & { locale?: 'ko' | 'en' }
 
@@ -58,6 +59,9 @@ function resolveBaseRoute(pathname: string): CustomerRoute | null {
 
   const paymentResult = normalizedPathname.match(/^\/reservations\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/payment-result$/)
   if (paymentResult) return { kind: 'reservation-payment-result', pathname: normalizedPathname, reservationId: paymentResult[1]! }
+
+  const reservationChange = normalizedPathname.match(/^\/reservations\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/change$/)
+  if (reservationChange) return { kind: 'reservation-change', pathname: normalizedPathname, reservationId: reservationChange[1]! }
 
   const reservationDetail = normalizedPathname.match(/^\/reservations\/([a-z0-9]+(?:-[a-z0-9]+)*)$/)
   if (reservationDetail) return { kind: 'reservation-detail', pathname: normalizedPathname, reservationId: reservationDetail[1]! }
