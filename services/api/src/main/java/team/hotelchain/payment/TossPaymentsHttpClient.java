@@ -88,19 +88,19 @@ public final class TossPaymentsHttpClient implements TossPaymentsClient {
             JsonNode body = json.readTree(responseBody == null ? "{}" : responseBody);
             if (statusCode >= 400) return new ProviderPayment(null, null, 0, null,
                     ProviderStatus.FAILED, null, safeCode(body.path("code").asText(null), "HTTP_4XX"));
-            String paymentKey = body.path("paymentKey").asText(null);
-            String orderId = body.path("orderId").asText(null);
-            long amountKrw = body.path("totalAmount").asLong();
-            String currency = body.path("currency").asText(null);
-            if ("DONE".equals(body.path("status").asText())
-                    && (!hasText(paymentKey) || !hasText(orderId) || amountKrw <= 0 || !"KRW".equals(currency))) {
+            String paymentKey = textValue(body.path("paymentKey"));
+            String orderId = textValue(body.path("orderId"));
+            JsonNode amount = body.path("totalAmount");
+            long amountKrw = integralAmount(amount);
+            String currency = textValue(body.path("currency"));
+            boolean done = "DONE".equals(textValue(body.path("status")));
+            if (done && (!hasText(paymentKey) || !hasText(orderId) || amountKrw <= 0 || !"KRW".equals(currency))) {
                 return unknown("INCOMPLETE_DONE_RESPONSE");
             }
-            ProviderStatus status = "DONE".equals(body.path("status").asText())
-                    ? ProviderStatus.DONE : ProviderStatus.FAILED;
+            ProviderStatus status = done ? ProviderStatus.DONE : ProviderStatus.FAILED;
             return new ProviderPayment(paymentKey, orderId, amountKrw, currency, status,
-                    body.path("transactionKey").asText(null),
-                    status == ProviderStatus.DONE ? null : safeCode(body.path("code").asText(null), "STATUS_NOT_DONE"));
+                    textValue(body.path("transactionKey")),
+                    status == ProviderStatus.DONE ? null : safeCode(textValue(body.path("code")), "STATUS_NOT_DONE"));
         } catch (JsonProcessingException exception) {
             return unknown("MALFORMED_RESPONSE");
         }
@@ -116,6 +116,14 @@ public final class TossPaymentsHttpClient implements TossPaymentsClient {
 
     private boolean hasText(String value) {
         return value != null && !value.isBlank();
+    }
+
+    private String textValue(JsonNode node) {
+        return node.isTextual() ? node.textValue() : null;
+    }
+
+    private long integralAmount(JsonNode node) {
+        return node.isIntegralNumber() && node.canConvertToLong() ? node.longValue() : 0;
     }
 
     private String requestBody(Object... fields) {

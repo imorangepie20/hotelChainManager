@@ -20,11 +20,15 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Flow;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Stream;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLSession;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 class TossPaymentsHttpClientTest {
 
@@ -69,6 +73,41 @@ class TossPaymentsHttpClientTest {
 
         assertThat(result.status()).isEqualTo(TossPaymentsClient.ProviderStatus.UNKNOWN);
         assertThat(result.errorCode()).isEqualTo("INCOMPLETE_DONE_RESPONSE");
+    }
+
+    @ParameterizedTest
+    @MethodSource("incompleteDoneResponses")
+    void mapsNonContractDoneFieldsToUnknown(String responseBody) {
+        TossPaymentsHttpClient client = new TossPaymentsHttpClient(
+                properties("test_ck_x", "test_sk_x"), new CapturingHttpClient(responseBody));
+
+        TossPaymentsClient.ProviderPayment result = client.confirm(
+                new TossPaymentsClient.ConfirmCommand("pay", "order", 120000, "KRW", "idem-1"));
+
+        assertThat(result.status()).isEqualTo(TossPaymentsClient.ProviderStatus.UNKNOWN);
+        assertThat(result.errorCode()).isEqualTo("INCOMPLETE_DONE_RESPONSE");
+    }
+
+    private static Stream<Arguments> incompleteDoneResponses() {
+        return Stream.of(
+                Arguments.of(done("123", "\"order\"", "120000", "\"KRW\"")),
+                Arguments.of(done("true", "\"order\"", "120000", "\"KRW\"")),
+                Arguments.of(done("\"pay\"", "123", "120000", "\"KRW\"")),
+                Arguments.of(done("\"pay\"", "false", "120000", "\"KRW\"")),
+                Arguments.of(done(null, "\"order\"", "120000", "\"KRW\"")),
+                Arguments.of("{\"paymentKey\":\"pay\",\"totalAmount\":120000,\"currency\":\"KRW\",\"status\":\"DONE\"}"),
+                Arguments.of(done("\"   \"", "\"order\"", "120000", "\"KRW\"")),
+                Arguments.of(done("\"pay\"", "\"\"", "120000", "\"KRW\"")),
+                Arguments.of(done("\"pay\"", "\"order\"", "\"120000\"", "\"KRW\"")),
+                Arguments.of(done("\"pay\"", "\"order\"", "1.5", "\"KRW\"")),
+                Arguments.of(done("\"pay\"", "\"order\"", "-1", "\"KRW\"")),
+                Arguments.of(done("\"pay\"", "\"order\"", "120000", "\"USD\"")));
+    }
+
+    private static String done(String paymentKey, String orderId, String amount, String currency) {
+        String payment = paymentKey == null ? "" : "\"paymentKey\":" + paymentKey + ",";
+        return "{" + payment + "\"orderId\":" + orderId + ",\"totalAmount\":" + amount
+                + ",\"currency\":" + currency + ",\"status\":\"DONE\",\"transactionKey\":\"txn\"}";
     }
 
     private TossPaymentsProperties properties(String clientKey, String secretKey) {
