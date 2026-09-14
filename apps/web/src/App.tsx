@@ -279,14 +279,14 @@ function BookingApp() {
   if (previewMode && websiteLoading) return <>{renderHeader(true)}<main className="content-section" aria-live="polite">{locale === 'en' ? 'Loading draft…' : '저장 초안을 불러오는 중…'}</main></>
   const bookingRoute = resolveCustomerRoute(pathname)
   if (previewMode && (bookingRoute?.kind === 'booking-results' || bookingRoute?.kind === 'booking-checkout')) {
-    return <CustomerBookingShell step="search"><section className="booking-route-state"><h1>미리보기에서는 예약을 진행할 수 없습니다</h1><p>발행된 페이지에서 예약 검색을 이용해 주세요.</p></section></CustomerBookingShell>
+    return <CustomerBookingShell step="search" locale={bookingRoute.locale ?? 'ko'}><section className="booking-route-state"><h1>미리보기에서는 예약을 진행할 수 없습니다</h1><p>발행된 페이지에서 예약 검색을 이용해 주세요.</p></section></CustomerBookingShell>
   }
   if (bookingRoute?.kind === 'booking-results') {
     const criteria = parseBookingCriteria(window.location.search)
-    if (criteria) return <BookingSearchPage criteria={criteria} />
-    return <CustomerBookingShell step="search"><section className="booking-route-state"><h1>검색 조건을 확인해 주세요</h1><p>유효한 지점, 날짜, 인원과 객실 수를 입력한 뒤 다시 검색해 주세요.</p><a className="primary" href="/#booking">예약 검색으로 돌아가기</a></section></CustomerBookingShell>
+    if (criteria) return <BookingSearchPage criteria={criteria} locale={bookingRoute.locale ?? 'ko'} />
+    return <CustomerBookingShell step="search" locale={bookingRoute.locale ?? 'ko'}><section className="booking-route-state"><h1>검색 조건을 확인해 주세요</h1><p>유효한 지점, 날짜, 인원과 객실 수를 입력한 뒤 다시 검색해 주세요.</p><a className="primary" href={bookingRoute.locale === 'en' ? '/en' : '/#booking'}>예약 검색으로 돌아가기</a></section></CustomerBookingShell>
   }
-  if (bookingRoute?.kind === 'booking-checkout') return <CustomerBookingShell step="checkout"><section className="booking-route-state"><h1>예약 정보를 준비하고 있습니다</h1><p>선택한 객실 정보를 확인한 뒤 예약자 정보를 입력할 수 있습니다.</p></section></CustomerBookingShell>
+  if (bookingRoute?.kind === 'booking-checkout') return <CustomerBookingShell step="checkout" locale={bookingRoute.locale ?? 'ko'}><section className="booking-route-state"><h1>예약 정보를 준비하고 있습니다</h1><p>선택한 객실 정보를 확인한 뒤 예약자 정보를 입력할 수 있습니다.</p></section></CustomerBookingShell>
   if (locale === 'en') {
     const route = resolveCustomerRoute(pathname)
     const englishFooter = <footer><div className="brand"><span>STAY</span> HANEUL</div><p>Fictional hotel chain · Portfolio demo</p><p>© 2026 HOTEL CHAIN PROJECT</p></footer>

@@ -4,6 +4,7 @@ type BookingStep = 'search' | 'checkout' | 'complete'
 
 type CustomerBookingShellProps = {
   step: BookingStep
+  locale?: 'ko' | 'en'
   summary?: ReactNode
   children: ReactNode
 }
@@ -14,13 +15,13 @@ const steps: Array<{ key: BookingStep; label: string }> = [
   { key: 'complete', label: '결제' },
 ]
 
-export function CustomerBookingShell({ step, summary, children }: CustomerBookingShellProps) {
+export function CustomerBookingShell({ step, locale = 'ko', summary, children }: CustomerBookingShellProps) {
   const activeIndex = steps.findIndex(item => item.key === step)
 
   return <div className="customer-booking-shell">
     <header className="customer-booking-header">
-      <a className="brand" href="/"><span>STAY</span> HANEUL</a>
-      <a className="manage-link" href="/reservations">예약 조회</a>
+      <a className="brand" href={locale === 'en' ? '/en' : '/'}><span>STAY</span> HANEUL</a>
+      <a className="manage-link" href={locale === 'en' ? '/en/reservations' : '/reservations'}>예약 조회</a>
     </header>
     <main className="customer-booking-main">
       <ol className="booking-steps" aria-label="예약 진행 단계">

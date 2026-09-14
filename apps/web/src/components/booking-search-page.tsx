@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowRight, BedDouble, CalendarDays, Coffee, ShieldCheck, Waves } from 'lucide-react'
+import { ArrowRight, BedDouble, CalendarDays, Coffee, Waves } from 'lucide-react'
 
 import { type Hotel, type Offer, api } from '../lib/api'
 import { type BookingCriteria, serializeBookingCriteria } from '../lib/booking-query'
@@ -12,11 +12,11 @@ import { CustomerBookingShell } from './customer-shell'
 
 const money = new Intl.NumberFormat('ko-KR')
 
-type BookingSearchPageProps = { criteria: BookingCriteria }
+type BookingSearchPageProps = { criteria: BookingCriteria; locale?: 'ko' | 'en' }
 
 const criteriaKey = (criteria: BookingCriteria) => [criteria.hotelId, criteria.checkIn, criteria.checkOut, criteria.adults, criteria.children, criteria.rooms].join('|')
 
-export function BookingSearchPage({ criteria }: BookingSearchPageProps) {
+export function BookingSearchPage({ criteria, locale = 'ko' }: BookingSearchPageProps) {
   const [hotels, setHotels] = useState<Hotel[]>([])
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(criteria)
@@ -53,17 +53,17 @@ export function BookingSearchPage({ criteria }: BookingSearchPageProps) {
   function applyCriteria(event: FormEvent) {
     event.preventDefault()
     const query = serializeBookingCriteria(draft)
-    window.location.assign(`/booking/results?${query}`)
+    window.location.assign(`${locale === 'en' ? '/en' : ''}/booking/results?${query}`)
   }
 
   function choose(offer: Offer) {
     session.current.saveSelection({ criteria, roomTypeId: offer.roomTypeId, ratePlanId: offer.ratePlanId })
-    window.location.assign('/booking/checkout')
+    window.location.assign(locale === 'en' ? '/en/booking/checkout' : '/booking/checkout')
   }
 
   const summary = <><strong>{hotel?.region ?? '선택한 지점'}</strong><span>{criteria.checkIn} — {criteria.checkOut} · 성인 {criteria.adults}명{criteria.children > 0 && <> · 아동 {criteria.children}명</>} · 객실 {criteria.rooms}개</span></>
 
-  return <CustomerBookingShell step="search" summary={summary}>
+  return <CustomerBookingShell step="search" locale={locale} summary={summary}>
     <section className="booking-search-page" aria-labelledby="booking-results-title">
       <div className="booking-results-heading">
         <div><p className="section-kicker">AVAILABLE ROOMS</p><h1 id="booking-results-title">예약 가능한 객실</h1><p>표시 금액은 전체 숙박 기간의 서버 계산 총액입니다.</p></div>
@@ -79,6 +79,7 @@ export function BookingSearchPage({ criteria }: BookingSearchPageProps) {
       </form>}
       {error && <p className="message error" role="alert">{error}</p>}
       {busy && <p className="booking-results-state" aria-live="polite">판매 가능 객실을 확인하고 있습니다…</p>}
+      {!busy && !error && <div className="results-summary" aria-live="polite"><strong>{groupedOffers.length}개 객실 유형을 찾았습니다.</strong></div>}
       {!busy && !error && groupedOffers.length === 0 && <div className="empty-state"><CalendarDays /><h2>예약 가능한 객실이 없습니다</h2><p>날짜 또는 투숙 인원을 바꿔 다시 확인해 주세요.</p></div>}
       <div className="booking-room-groups">
         {groupedOffers.map(([roomTypeId, roomOffers], groupIndex) => <section key={roomTypeId} className="booking-room-group" aria-labelledby={`room-type-${roomTypeId}`}>
@@ -86,7 +87,7 @@ export function BookingSearchPage({ criteria }: BookingSearchPageProps) {
           <div className="offers">{roomOffers.map((offer, offerIndex) => <article className="offer-card" key={offer.ratePlanId}>
             <div className={`room-visual visual-${(groupIndex + offerIndex) % 3}`}><span>{String(groupIndex + 1).padStart(2, '0')}</span><Waves size={42} /></div>
             <div className="offer-body"><div className="offer-top"><div><p>{offer.breakfastIncluded ? 'BREAKFAST INCLUDED' : 'ROOM ONLY'}</p><h3>{offer.ratePlanName}</h3></div><span className="remaining">잔여 {offer.remaining}실</span></div>
-              <div className="amenities"><span><BedDouble /> 성인 {criteria.adults}명{criteria.children > 0 && <> · 아동 {criteria.children}명</>} 기준</span>{offer.breakfastIncluded && <span><Coffee /> 조식 포함</span>}<span><ShieldCheck /> 유연 취소</span></div>
+              <div className="amenities"><span><BedDouble /> 성인 {criteria.adults}명{criteria.children > 0 && <> · 아동 {criteria.children}명</>} 기준</span>{offer.breakfastIncluded && <span><Coffee /> 조식 포함</span>}</div>
               <div className="price-row"><div><small>객실 {criteria.rooms}개 · {offer.nightlyPrices.length}박 총액</small><strong>₩{money.format(offer.total)}</strong></div><button type="button" onClick={() => choose(offer)} aria-label={`${offer.roomTypeName} 선택`}>선택 <ArrowRight size={17} /></button></div>
             </div>
           </article>)}</div>
