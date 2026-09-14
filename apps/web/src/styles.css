@@ -52,3 +52,8 @@ fieldset.search-grid{margin:0;min-width:0;border:0}
 .change-payment-action{width:100%;min-height:52px;display:flex;align-items:center;justify-content:center;gap:9px;border:0;background:var(--navy);color:#fff;font-size:16px;font-weight:700}.change-payment-action:hover:not(:disabled){background:var(--teal)}.change-payment-action:focus-visible{outline:3px solid #d7a34b;outline-offset:3px}.change-payment-action:disabled{opacity:.65}
 .change-payment-note{margin:18px 0 0;color:#667579;font-size:12px;line-height:1.7;text-align:center}
 @media(max-width:520px){.change-payment-shell{place-items:start;padding:0;background:#fff}.change-payment-card{min-height:100vh;border:0;box-shadow:none;padding:30px 20px}.change-payment-header{gap:12px}.change-payment-mark{width:42px;height:42px}.change-payment-status{align-items:flex-start;flex-direction:column;gap:5px}.change-payment-details>div{grid-template-columns:1fr;gap:7px}.change-payment-details dd{text-align:left}.change-payment-total{align-items:flex-start;flex-direction:column;gap:10px}.change-payment-total strong{white-space:normal}.change-payment-action{min-height:52px}}
+/* 결제 결과와 모바일 액션은 줄바꿈과 키보드 초점을 유지한다. */
+.change-payment-action { min-height: 44px; margin-top: 12px; white-space: normal; text-align: center; }
+.change-payment-card { overflow-wrap: anywhere; }
+.change-payment-state:focus { outline: 3px solid #226d72; outline-offset: 3px; }
+.manage-actions button { min-height: 44px; }

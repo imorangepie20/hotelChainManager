@@ -1,6 +1,7 @@
 export type CustomerRoute = (
   | { kind: 'home'; pathname: '/' | '/en' }
   | { kind: 'reservation-change-payment'; pathname: '/reservation-change-payment' }
+  | { kind: 'reservation-payment-result'; pathname: string; reservationId: string }
   | { kind: 'collection'; pathname: string; hotelSlug?: string; contentKind: 'ROOM' | 'DINING' | 'FACILITY' | 'EXPERIENCE' | 'PROMOTION' | 'GUIDE' | 'BRAND' }
   | { kind: 'page'; pathname: string; segments: string[] }) & { locale?: 'ko' | 'en' }
 
@@ -38,6 +39,8 @@ function resolveBaseRoute(pathname: string): CustomerRoute | null {
   const normalizedPathname = normalizeCustomerPathname(pathname)
   if (!normalizedPathname) return null
   if (normalizedPathname === '/') return { kind: 'home', pathname: '/' }
+  const paymentResult = normalizedPathname.match(/^\/reservations\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/payment-result$/)
+  if (paymentResult) return { kind: 'reservation-payment-result', pathname: normalizedPathname, reservationId: paymentResult[1]! }
   if (normalizedPathname === '/reservation-change-payment') {
     return { kind: 'reservation-change-payment', pathname: '/reservation-change-payment' }
   }
