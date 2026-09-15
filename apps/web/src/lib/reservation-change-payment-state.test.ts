@@ -1,4 +1,4 @@
-import { customerPaymentFailureStatus, changePaymentStatusForDisplay, canRecoverChangePayment, describeReservationChangePayment, shouldPollReservationChangePayment, type ReservationChangePaymentState } from './reservation-change-payment-state.ts'
+import { customerPaymentFailureMessage, customerPaymentFailureStatus, changePaymentStatusForDisplay, canRecoverChangePayment, describeReservationChangePayment, shouldPollReservationChangePayment, type ReservationChangePaymentState } from './reservation-change-payment-state.ts'
 
 function expectEqual<T>(actual: T, expected: T, message: string) {
   if (actual !== expected) throw new Error(`${message}: expected ${String(expected)}, received ${String(actual)}`)
@@ -39,6 +39,8 @@ expectEqual(cancelled.canCheckout, false, '취소 상태에서 재결제를 차�
 expectEqual(customerPaymentFailureStatus(401), 'EXPIRED', '만료된 고객 세션 401을 만료 상태로 바꾼다')
 expectEqual(customerPaymentFailureStatus(404), 'EXPIRED', '만료된 고객 세션 404를 만료 상태로 바꾼다')
 expectEqual(customerPaymentFailureStatus(500), null, '서버 오류는 만료로 위장하지 않는다')
+expectEqual(customerPaymentFailureMessage('ko'), '결제 링크가 만료되었습니다. 예약 상세에서 변경을 다시 시작해 주세요.', '만료 안내는 다음 행동을 한국어로 제시한다')
+expectEqual(customerPaymentFailureMessage('en'), 'This payment link has expired. Start the change again from your reservation details.', '만료 안내는 다음 행동을 영어로 제시한다')
 
 void ({} as ReservationChangePaymentState)
 

@@ -109,6 +109,33 @@ class CustomerSelfServiceReservationChangeIntegrationTest {
         assertThat(jdbc.queryForObject("select adults from reservation where id=?", Integer.class, RESERVATION)).isEqualTo(2);
     }
 
+    @Test void laterRefundUsesAvailableChangeChargeAfterOriginalChargeWasPartiallyRefunded() {
+        jdbc.update("update reservation set total_krw=500000 where id=?", RESERVATION);
+        jdbc.update("update payment_transaction set captured_amount_krw=360000,refunded_amount_krw=250000 where reservation_id=?", RESERVATION);
+        UUID changeCharge = UUID.randomUUID();
+        jdbc.update("""
+                insert into payment_transaction
+                    (id,reservation_id,provider,merchant_account,gateway_transaction_id,transaction_type,
+                     captured_amount_krw,refunded_amount_krw,currency)
+                values (?,?,'FAKE','LOCAL','customer-change-charge','CHANGE_CHARGE',390000,0,'KRW')
+                """, changeCharge, RESERVATION);
+        for (int day = 3; day < 5; day++) {
+            jdbc.update("insert into inventory_day values (?,?,2,0,1)", ROOM, checkIn.plusDays(day));
+            jdbc.update("insert into rate_day values (?,?,120000)", RATE, checkIn.plusDays(day));
+        }
+        var quote = service.quote(TOKEN, RESERVATION,
+                new CustomerReservationChangeQuoteRequest(checkIn.plusDays(3), checkIn.plusDays(5), 2, 0));
+        var offer = quote.offers().getFirst();
+
+        var result = service.create(TOKEN, RESERVATION, "customer-later-refund",
+                new CustomerReservationChangeRequest(quote.quoteId(), offer.roomTypeId(), offer.ratePlanId(), offer.total()));
+
+        assertThat(result.view().status()).isEqualTo("REFUND_PENDING");
+        assertThat(jdbc.queryForObject("""
+                select original_payment_transaction_id from payment_adjustment_attempt where request_id=?
+                """, UUID.class, result.view().requestId())).isEqualTo(changeCharge);
+    }
+
     @Test void customerCanCancelUnstartedAdditionalPaymentIdempotently() {
         jdbc.update("update rate_day set amount_krw=130000 where rate_plan_id=?", RATE);
         var quote = service.quote(TOKEN, RESERVATION,

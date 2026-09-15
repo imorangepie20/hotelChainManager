@@ -87,7 +87,6 @@ public class ReservationChangeSettlementService {
             return new CustomerSettlementResult("READY_TO_APPLY", null, expiresAt);
         }
 
-        OriginalTransaction original = lockSettleableOriginalTransaction(reservationId);
         UUID attemptId = UUID.randomUUID();
         String publicToken = "CHARGE".equals(context.direction()) ? newToken() : null;
         String requestHash = reservationAccess.sha256(String.join(":", "CUSTOMER",
@@ -116,9 +115,7 @@ public class ReservationChangeSettlementService {
         }
 
         long refundAmount = Math.abs(context.differenceKrw());
-        if (original.capturedAmountKrw() - original.refundedAmountKrw() < refundAmount) {
-            throw notSettleable();
-        }
+        OriginalTransaction original = lockRefundableTransaction(reservationId, refundAmount);
         jdbc.update("""
                 insert into payment_adjustment_attempt (
                     id, request_id, original_payment_transaction_id, adjustment_type,
@@ -301,11 +298,8 @@ public class ReservationChangeSettlementService {
 
         jdbc.query("select id from reservation where id = ? for update", rs -> { }, context.reservationId());
         jdbc.query("select id from reservation_change_request where id = ? for update", rs -> { }, requestId);
-        OriginalTransaction original = lockSettleableOriginalTransaction(context.reservationId());
         long refundAmount = Math.abs(context.differenceKrw());
-        if (original.capturedAmountKrw() - original.refundedAmountKrw() < refundAmount) {
-            throw notSettleable();
-        }
+        OriginalTransaction original = lockRefundableTransaction(context.reservationId(), refundAmount);
         ReservationChangeHoldService.HoldResult hold = holds.acquire(requestId, input.version());
         UUID attemptId = UUID.randomUUID();
         jdbc.update("""
@@ -564,6 +558,29 @@ public class ReservationChangeSettlementService {
                         rs.getLong("captured_amount_krw"), rs.getLong("refunded_amount_krw"),
                         rs.getString("currency").trim(), rs.getString("gateway_transaction_id"), rs.getString("merchant_account")) : null,
                 reservationId);
+        if (transaction == null || !transaction.currency().equals("KRW")
+                || ("fake".equals(gatewayMode) && !"FAKE".equals(transaction.provider()))
+                || ("toss-test".equals(gatewayMode) && (!"TOSS_TEST".equals(transaction.provider())
+                    || !merchantAccount.equals(transaction.merchantAccount()) || transaction.gatewayTransactionId().isBlank()))) {
+            throw notSettleable();
+        }
+        return transaction;
+    }
+
+    private OriginalTransaction lockRefundableTransaction(UUID reservationId, long refundAmount) {
+        OriginalTransaction transaction = jdbc.query("""
+                select id, provider, captured_amount_krw, refunded_amount_krw,
+                       currency, gateway_transaction_id, merchant_account
+                from payment_transaction
+                where reservation_id = ?
+                  and transaction_type in ('ORIGINAL_CHARGE', 'CHANGE_CHARGE')
+                  and captured_amount_krw - refunded_amount_krw >= ?
+                order by created_at desc limit 1 for update
+                """, rs -> rs.next() ? new OriginalTransaction(
+                        rs.getObject("id", UUID.class), rs.getString("provider"),
+                        rs.getLong("captured_amount_krw"), rs.getLong("refunded_amount_krw"),
+                        rs.getString("currency").trim(), rs.getString("gateway_transaction_id"), rs.getString("merchant_account")) : null,
+                reservationId, refundAmount);
         if (transaction == null || !transaction.currency().equals("KRW")
                 || ("fake".equals(gatewayMode) && !"FAKE".equals(transaction.provider()))
                 || ("toss-test".equals(gatewayMode) && (!"TOSS_TEST".equals(transaction.provider())

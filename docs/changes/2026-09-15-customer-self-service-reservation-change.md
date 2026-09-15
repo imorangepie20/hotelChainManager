@@ -40,3 +40,9 @@
 7. 모바일 배치, 키보드 초점, 오류 안내
 
 실제 Toss 운영 키와 실과금은 검증 범위가 아니다.
+
+## 후속 UI 점검
+
+- 기존 결제 정보를 표시한 뒤 고객 세션이 만료되면 오류 영역과 키보드 초점 대상이 사라지던 문제를 보완했다. 만료 시 민감한 결제 정보를 제거하고 `role="alert"` 안내에 예약 상세에서 다시 시작하라는 다음 행동을 한국어·영어로 표시한다.
+- 520px 이하에서 상태 재확인 버튼을 52px 높이의 전체 폭으로 배치하고, 노치 안전 영역을 카드 여백에 반영했다.
+- `pnpm exec tsx src/lib/customer-route.test.ts`, `reservation-change-state.test.ts`, `reservation-change-payment-state.test.ts`, `reservation-change-copy.test.ts` 및 `pnpm run build`가 통과했다. 실제 모바일 뷰포트와 키보드 조작은 사용자 브라우저 검증 범위로 남겼다.

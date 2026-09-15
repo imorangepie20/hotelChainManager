@@ -65,7 +65,10 @@ export function ReservationChangePage({ reservationId, locale = 'ko' }: Props) {
         quoteId: quote.quoteId, roomTypeId: offer.roomTypeId, ratePlanId: offer.ratePlanId, expectedTotal: offer.total,
       })
       sessionStorage.removeItem(storageKey)
-      if (changeAction(result.status) === 'PAY') window.location.assign(locale === 'en' ? '/en/reservation-change-payment' : '/reservation-change-payment')
+      if (changeAction(result.status) === 'PAY') {
+        sessionStorage.removeItem('tossChangeStarted')
+        window.location.assign(locale === 'en' ? '/en/reservation-change-payment' : '/reservation-change-payment')
+      }
       else window.location.assign(`${locale === 'en' ? '/en' : ''}/reservations/${reservationId}`)
     } catch (reason) { showError(reason); setBusy(null) }
   }
