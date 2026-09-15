@@ -9,7 +9,7 @@ const checkout = {
   successUrl: 'http://localhost:4000/booking/complete', failUrl: 'http://localhost:4000/booking/complete', environmentLabel: '테스트',
 }
 
-async function widgetCheckoutContract() {
+async function widgetCheckoutContract(clientKey = checkout.clientKey, orderName = '호텔 예약 테스트 결제') {
   const calls: unknown[] = []
   const handlers: Record<string, () => void> = {}
   let rendered!: () => void
@@ -28,17 +28,18 @@ async function widgetCheckoutContract() {
   const previous = (globalThis as { window?: unknown }).window
   Object.defineProperty(globalThis, 'window', { configurable: true, value: { location: { origin: 'http://localhost:4000' }, TossPayments: sdk } })
   try {
-    const pending = requestTossCheckout(checkout)
+    const pending = requestTossCheckout({ ...checkout, clientKey })
     await ready
-    equal(calls, [['amount', 'test_gck_fixture', { customerKey: '@@ANONYMOUS' }, { currency: 'KRW', value: 120000 }], 'render'], '위젯 키는 결제 금액을 설정한 뒤 결제창을 렌더링해야 한다')
+    equal(calls, [['amount', clientKey, { customerKey: '@@ANONYMOUS' }, { currency: 'KRW', value: 120000 }], 'render'], '위젯 키는 결제 금액을 설정한 뒤 결제창을 렌더링해야 한다')
     handlers.paymentRequest()
     handlers.paymentRequest()
     await pending
-    equal(calls.slice(2), [['request', { orderId: checkout.orderId, orderName: '호텔 예약 테스트 결제', successUrl: checkout.successUrl, failUrl: checkout.failUrl }], 'destroy'], '구매자 요청 한 번만 결제 요청으로 전달하고 창을 해제해야 한다')
+    equal(calls.slice(2), [['request', { orderId: checkout.orderId, orderName, successUrl: checkout.successUrl, failUrl: checkout.failUrl }], 'destroy'], '구매자 요청 한 번만 결제 요청으로 전달하고 창을 해제해야 한다')
   } finally {
     Object.defineProperty(globalThis, 'window', { configurable: true, value: previous })
   }
 }
 
 await widgetCheckoutContract()
+await widgetCheckoutContract('live_gck_fixture', '호텔 예약 결제')
 console.log('toss widget checkout contract passed')

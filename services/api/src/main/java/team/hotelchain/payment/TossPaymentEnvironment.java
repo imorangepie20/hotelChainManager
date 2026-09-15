@@ -36,6 +36,10 @@ public enum TossPaymentEnvironment {
         return providerCode;
     }
 
+    public String mode() {
+        return mode;
+    }
+
     public void requireConfiguration(TossPaymentsProperties properties) {
         if (properties == null
                 || !hasPrefix(properties.clientKey(), clientKeyPrefix, legacyClientKeyPrefix)

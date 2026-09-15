@@ -59,9 +59,9 @@ export function captureTossReturn(location: Pick<Location, 'pathname' | 'search'
 }
 
 export function validateTossCheckout(checkout: TossCheckout, origin: string) {
-  if (!checkout.clientKey.startsWith('test_') || !Number.isSafeInteger(checkout.amountKrw)
+  if (!/^(?:test|live)_(?:gck|ck)_.+/.test(checkout.clientKey) || !Number.isSafeInteger(checkout.amountKrw)
     || checkout.amountKrw <= 0 || checkout.currency !== 'KRW' || !/^[A-Za-z0-9_-]{1,160}$/.test(checkout.orderId)) {
-    throw new Error('유효한 토스 테스트 결제 설정이 아닙니다.')
+    throw new Error('유효한 토스 결제 설정이 아닙니다.')
   }
   for (const [value, result] of [[checkout.successUrl, 'success'], [checkout.failUrl, 'fail']]) {
     const url = new URL(value)
@@ -114,7 +114,7 @@ export async function requestTossCheckout(checkout: TossCheckout, locale: 'ko' |
     stage = 'SDK'
     const sdk = await loadTossSdk()
     stage = 'PAYMENT_WINDOW'
-    if (checkout.clientKey.startsWith('test_gck_')) {
+    if (/^(?:test|live)_gck_/.test(checkout.clientKey)) {
       const widgets = sdk(checkout.clientKey).widgets({ customerKey: sdk.ANONYMOUS })
       await widgets.setAmount({ currency: 'KRW', value: checkout.amountKrw })
       const paymentWindow = await widgets.renderPaymentWindow()
@@ -126,7 +126,9 @@ export async function requestTossCheckout(checkout: TossCheckout, locale: 'ko' |
             if (requested || closed) return
             requested = true
             Promise.resolve().then(() => widgets.requestPayment({
-              orderId: checkout.orderId, orderName: locale === 'en' ? 'Hotel reservation test payment' : '호텔 예약 테스트 결제',
+              orderId: checkout.orderId, orderName: checkout.clientKey.startsWith('test_')
+                ? (locale === 'en' ? 'Hotel reservation test payment' : '호텔 예약 테스트 결제')
+                : (locale === 'en' ? 'Hotel reservation payment' : '호텔 예약 결제'),
               successUrl: checkout.successUrl, failUrl: checkout.failUrl,
             })).then(resolve, reject)
           })
@@ -140,7 +142,10 @@ export async function requestTossCheckout(checkout: TossCheckout, locale: 'ko' |
     }
     await sdk(checkout.clientKey).payment({ customerKey: sdk.ANONYMOUS }).requestPayment({
       method: 'CARD', amount: { currency: 'KRW', value: checkout.amountKrw }, orderId: checkout.orderId,
-      orderName: locale === 'en' ? 'Hotel reservation test payment' : '호텔 예약 테스트 결제', successUrl: checkout.successUrl, failUrl: checkout.failUrl,
+      orderName: checkout.clientKey.startsWith('test_')
+        ? (locale === 'en' ? 'Hotel reservation test payment' : '호텔 예약 테스트 결제')
+        : (locale === 'en' ? 'Hotel reservation payment' : '호텔 예약 결제'),
+      successUrl: checkout.successUrl, failUrl: checkout.failUrl,
     })
   } catch (reason) { throw new TossCheckoutFailure(locale === 'en' ? 'The payment window did not complete. Check the server status before retrying.' : checkoutFailureMessage(stage, reason)) }
 }

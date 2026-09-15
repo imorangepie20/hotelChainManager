@@ -21,11 +21,17 @@ class PaymentProviderSafetyTest {
     }
     @Test void activeTossAdapterAcceptsOnlyHomogeneousTossTransactions() {
         JdbcTemplate jdbc = mock(JdbcTemplate.class); UUID id = UUID.randomUUID();
-        when(jdbc.queryForObject(anyString(), eq(Boolean.class), eq(id), eq(id))).thenReturn(true);
+        when(jdbc.queryForObject(anyString(), eq(Boolean.class), eq(id), eq("TOSS_TEST"), eq(id), eq("TOSS_TEST"))).thenReturn(true);
         assertThatCode(() -> PaymentProviderSafety.requireCompatibleSettlement(jdbc, id, "toss-test")).doesNotThrowAnyException();
-        when(jdbc.queryForObject(anyString(), eq(Boolean.class), eq(id), eq(id))).thenReturn(false);
+        when(jdbc.queryForObject(anyString(), eq(Boolean.class), eq(id), eq("TOSS_TEST"), eq(id), eq("TOSS_TEST"))).thenReturn(false);
         assertThatThrownBy(() -> PaymentProviderSafety.requireCompatibleSettlement(jdbc, id, "toss-test"))
             .isInstanceOf(BusinessConflictException.class);
+    }
+    @Test void liveAdapterAcceptsOnlyHomogeneousLiveTransactions() {
+        JdbcTemplate jdbc = mock(JdbcTemplate.class); UUID id = UUID.randomUUID();
+        when(jdbc.queryForObject(anyString(), eq(Boolean.class), eq(id), eq("TOSS_LIVE"), eq(id), eq("TOSS_LIVE"))).thenReturn(true);
+
+        assertThat(PaymentProviderSafety.supportsSettlement(jdbc, id, "toss-live")).isTrue();
     }
     @Test void disabledOrUnknownAdapterCannotSettle() {
         JdbcTemplate jdbc = mock(JdbcTemplate.class); UUID id = UUID.randomUUID();

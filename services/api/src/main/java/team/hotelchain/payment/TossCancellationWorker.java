@@ -1,14 +1,14 @@
 package team.hotelchain.payment;
 
 import java.util.UUID;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import team.hotelchain.reservation.CancellationService;
 
 @Service
-@ConditionalOnProperty(name="payment.provider",havingValue="toss-test")
+@ConditionalOnExpression("'${payment.provider:fake}' == 'toss-test' or '${payment.provider:fake}' == 'toss-live'")
 public class TossCancellationWorker {
     private final JdbcTemplate jdbc;
     private final TossRefundService refunds;

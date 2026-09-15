@@ -39,7 +39,7 @@ export function ReservationChangePaymentPage({ locale = 'ko', returned }: Props)
       if (returnedFromToss) sessionStorage.setItem('tossChangeStarted', '1')
       const current = await api.reservationChangePayment()
       let toss: TossStatus | null = null
-      if (modes.changeProvider === 'toss-test') {
+      if (paymentActions(modes.changeProvider).toss) {
         if (returned.kind === 'success') toss = await api.tossChangeConfirm(returned.input)
         else if (returnedFromToss) toss = await api.tossChangeStatus()
         else if (sessionStorage.getItem('tossChangeStarted')) {
@@ -78,7 +78,7 @@ export function ReservationChangePaymentPage({ locale = 'ko', returned }: Props)
     if (busyRef.current || (!paymentActions(provider).fake && !paymentActions(provider).toss)) return
     busyRef.current = true; setBusy(true); setError('')
     try {
-      if (provider === 'toss-test') {
+      if (paymentActions(provider).toss) {
         const checkout = await api.tossChangeCheckout()
         sessionStorage.setItem('tossChangeStarted', '1')
         await requestTossCheckout(localizedTossCheckout(checkout, locale), locale)

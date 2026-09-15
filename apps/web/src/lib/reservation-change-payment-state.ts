@@ -53,5 +53,5 @@ export function changePaymentStatusForDisplay(changeStatus: string, paymentStatu
 }
 
 export function canRecoverChangePayment(returnedFromToss: boolean, provider: string | null, hasTossState: boolean, changeStatus?: string): boolean {
-  return changeStatus !== 'COMPLETED' && (returnedFromToss || (provider === 'toss-test' && (hasTossState || changeStatus === undefined)))
+  return changeStatus !== 'COMPLETED' && (returnedFromToss || ((provider === 'toss-test' || provider === 'toss-live') && (hasTossState || changeStatus === undefined)))
 }

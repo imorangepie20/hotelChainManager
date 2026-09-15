@@ -1,12 +1,12 @@
 package team.hotelchain.reservationchange;
 
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.web.bind.annotation.*;
 import team.hotelchain.payment.TossReservationPaymentView.*;
 
 @RestController
 @RequestMapping("/api/reservation-change-payments/current/toss")
-@ConditionalOnProperty(name="reservation.change.gateway",havingValue="toss-test")
+@ConditionalOnExpression("'${reservation.change.gateway:disabled}' == 'toss-test' or '${reservation.change.gateway:disabled}' == 'toss-live'")
 public class TossChangePaymentController {
     private final TossPaymentAdjustmentGateway gateway;
     public TossChangePaymentController(TossPaymentAdjustmentGateway gateway){this.gateway=gateway;}

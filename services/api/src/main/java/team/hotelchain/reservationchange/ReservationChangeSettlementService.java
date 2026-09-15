@@ -19,6 +19,8 @@ import org.springframework.transaction.annotation.Transactional;
 import team.hotelchain.reservation.BusinessConflictException;
 import team.hotelchain.reservation.ReservationAccess;
 import team.hotelchain.reservation.ReservationNotFoundException;
+import team.hotelchain.payment.PaymentCheckoutPolicy;
+import team.hotelchain.payment.TossPaymentEnvironment;
 import team.hotelchain.staff.StaffAccessService;
 import team.hotelchain.staff.StaffPrincipal;
 
@@ -29,6 +31,7 @@ public class ReservationChangeSettlementService {
     private final ReservationAccess reservationAccess;
     private final ReservationChangeHoldService holds;
     private final ReservationChangePolicy policy;
+    private final PaymentCheckoutPolicy checkoutPolicy;
     private final Clock clock;
     private final String customerBaseUrl;
     private final String gatewayMode;
@@ -41,6 +44,7 @@ public class ReservationChangeSettlementService {
             ReservationAccess reservationAccess,
             ReservationChangeHoldService holds,
             ReservationChangePolicy policy,
+            PaymentCheckoutPolicy checkoutPolicy,
             Clock clock,
             @Value("${reservation.change.customer-base-url:http://127.0.0.1:4000}") String customerBaseUrl,
             @Value("${reservation.change.gateway:disabled}") String gatewayMode,
@@ -50,6 +54,7 @@ public class ReservationChangeSettlementService {
         this.reservationAccess = reservationAccess;
         this.holds = holds;
         this.policy = policy;
+        this.checkoutPolicy = checkoutPolicy;
         this.clock = clock;
         this.customerBaseUrl = customerBaseUrl.replaceAll("/+$", "");
         this.gatewayMode = gatewayMode;
@@ -75,6 +80,7 @@ public class ReservationChangeSettlementService {
             throw new BusinessConflictException(
                     "RESERVATION_CHANGE_STATE_CONFLICT", "현재 상태에서는 예약 변경을 시작할 수 없습니다.");
         }
+        if ("CHARGE".equals(context.direction())) checkoutPolicy.requireEnabled();
         team.hotelchain.reservation.PaymentProviderSafety.requireCompatibleSettlement(
                 jdbc, reservationId, gatewayMode);
 
@@ -98,7 +104,7 @@ public class ReservationChangeSettlementService {
                         id, request_id, adjustment_type, provider, idempotency_key, request_hash,
                         amount_krw, currency, status, public_token_hash)
                     values (?, ?, 'CREATE_CHECKOUT', ?, ?, ?, ?, ?, 'NEW', ?)
-                    """, attemptId, requestId, "toss-test".equals(gatewayMode) ? "TOSS_TEST" : "FAKE",
+                    """, attemptId, requestId, providerCode(),
                     idempotencyKey, requestHash, context.differenceKrw(), context.currency(),
                     reservationAccess.hashToken(publicToken));
             insertOutbox(requestId, attemptId, "CREATE_CHECKOUT", "create-checkout:" + attemptId);
@@ -210,10 +216,11 @@ public class ReservationChangeSettlementService {
             throw new BusinessConflictException(
                     "RESERVATION_CHANGE_ACTION_NOT_ALLOWED", "추가 결제가 필요한 요청만 고객 결제 링크를 만들 수 있습니다.");
         }
+        checkoutPolicy.requireEnabled();
 
         long versionAfterHold;
         Instant expiresAt;
-        if ("toss-test".equals(gatewayMode)) lockSettleableOriginalTransaction(context.reservationId());
+        if (isTossMode()) lockSettleableOriginalTransaction(context.reservationId());
         if ("APPROVED".equals(context.status())) {
             ReservationChangeHoldService.HoldResult hold = holds.acquire(requestId, input.version());
             versionAfterHold = hold.requestVersion();
@@ -245,7 +252,7 @@ public class ReservationChangeSettlementService {
                     id, request_id, adjustment_type, provider, idempotency_key, request_hash,
                     amount_krw, currency, status, public_token_hash)
                 values (?, ?, 'CREATE_CHECKOUT', ?, ?, ?, ?, ?, 'NEW', ?)
-                """, attemptId, requestId, "toss-test".equals(gatewayMode) ? "TOSS_TEST" : "FAKE", idempotencyKey, requestHash,
+                """, attemptId, requestId, providerCode(), idempotencyKey, requestHash,
                 context.differenceKrw(), context.currency(), publicTokenHash);
         jdbc.update("""
                 insert into reservation_change_outbox (
@@ -398,7 +405,7 @@ public class ReservationChangeSettlementService {
         jdbc.query("select id from reservation where id = ? for update", rs -> { }, candidate.reservationId());
         jdbc.query("select id from reservation_change_request where id = ? for update", rs -> { }, candidate.requestId());
         GatewayAttempt attempt = gatewayAttempt(attemptId, true);
-        if ("TOSS_TEST".equals(attempt.provider()) && resultStatus != PaymentAdjustmentGateway.GatewayResultStatus.UNKNOWN
+        if (isTossProvider(attempt.provider()) && resultStatus != PaymentAdjustmentGateway.GatewayResultStatus.UNKNOWN
                 && resultStatus != PaymentAdjustmentGateway.GatewayResultStatus.PENDING) {
             String expected = resultStatus.name();
             Boolean verified = jdbc.queryForObject("""
@@ -440,9 +447,9 @@ public class ReservationChangeSettlementService {
                         values (?, ?, ?, ?, ?, ?, 'CHANGE_CHARGE', ?, 0, ?)
                         on conflict (change_request_id) do nothing
                         """, UUID.randomUUID(), attempt.reservationId(), attempt.requestId(), attempt.provider(),
-                        "TOSS_TEST".equals(attempt.provider()) ? merchantAccount : "LOCAL",
+                        isTossProvider(attempt.provider()) ? merchantAccount : "LOCAL",
                         attempt.gatewayTransactionId(), attempt.amountKrw(), attempt.currency());
-            } else if (!"TOSS_TEST".equals(attempt.provider())) {
+            } else if (!isTossProvider(attempt.provider())) {
                 int refunded = jdbc.update("""
                         update payment_transaction
                         set refunded_amount_krw = refunded_amount_krw + ?, updated_at = ?
@@ -560,7 +567,7 @@ public class ReservationChangeSettlementService {
                 reservationId);
         if (transaction == null || !transaction.currency().equals("KRW")
                 || ("fake".equals(gatewayMode) && !"FAKE".equals(transaction.provider()))
-                || ("toss-test".equals(gatewayMode) && (!"TOSS_TEST".equals(transaction.provider())
+                || (isTossMode() && (!providerCode().equals(transaction.provider())
                     || !merchantAccount.equals(transaction.merchantAccount()) || transaction.gatewayTransactionId().isBlank()))) {
             throw notSettleable();
         }
@@ -583,7 +590,7 @@ public class ReservationChangeSettlementService {
                 reservationId, refundAmount);
         if (transaction == null || !transaction.currency().equals("KRW")
                 || ("fake".equals(gatewayMode) && !"FAKE".equals(transaction.provider()))
-                || ("toss-test".equals(gatewayMode) && (!"TOSS_TEST".equals(transaction.provider())
+                || (isTossMode() && (!providerCode().equals(transaction.provider())
                     || !merchantAccount.equals(transaction.merchantAccount()) || transaction.gatewayTransactionId().isBlank()))) {
             throw notSettleable();
         }
@@ -692,6 +699,19 @@ public class ReservationChangeSettlementService {
     private BusinessConflictException notSettleable() {
         return new BusinessConflictException(
                 "PAYMENT_TRANSACTION_NOT_SETTLEABLE", "환불 가능한 원 결제 거래를 찾을 수 없습니다.");
+    }
+
+    private boolean isTossMode() {
+        return "toss-test".equals(gatewayMode) || "toss-live".equals(gatewayMode);
+    }
+
+    private boolean isTossProvider(String provider) {
+        return isTossMode() && providerCode().equals(provider);
+    }
+
+    private String providerCode() {
+        if ("fake".equals(gatewayMode)) return "FAKE";
+        return TossPaymentEnvironment.from(gatewayMode).providerCode();
     }
 
     public record CustomerSession(String token, Instant expiresAt) {

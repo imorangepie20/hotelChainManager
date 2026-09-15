@@ -14,6 +14,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.beans.factory.ObjectProvider;
+import team.hotelchain.payment.TossPaymentEnvironment;
 import team.hotelchain.payment.TossRefundService;
 
 import team.hotelchain.reservationchange.ReservationChangeMutationGuard;
@@ -56,7 +57,7 @@ public class CancellationService {
     public CancellationPreview preview(UUID reservationId, String token) {
         CancellationReservation reservation = findReservation(reservationId, access.hashToken(token));
         var cutoff = cutoff(reservation);
-        boolean supported = PaymentProviderSafety.supportsSettlement(jdbc, reservationId, tossRefunds.getIfAvailable() == null ? "fake" : "toss-test");
+        boolean supported = PaymentProviderSafety.supportsSettlement(jdbc, reservationId, activePaymentMode());
         boolean confirmed = "CONFIRMED".equals(reservation.status());
         boolean beforeCutoff = clock.instant().isBefore(cutoff);
         String unavailableReason = !supported ? "이 결제 공급자의 취소·환불은 아직 지원하지 않습니다. 호텔에 문의해 주세요." : !confirmed
@@ -69,7 +70,7 @@ public class CancellationService {
     StaffCancellationPreview previewForStaff(UUID reservationId) {
         CancellationReservation reservation = findReservationForStaff(reservationId, false);
         var cutoff = cutoff(reservation);
-        boolean supported = PaymentProviderSafety.supportsSettlement(jdbc, reservationId, tossRefunds.getIfAvailable() == null ? "fake" : "toss-test");
+        boolean supported = PaymentProviderSafety.supportsSettlement(jdbc, reservationId, activePaymentMode());
         boolean confirmed = "CONFIRMED".equals(reservation.status());
         boolean beforeCutoff = clock.instant().isBefore(cutoff);
         String unavailableReason = !supported ? "이 결제 공급자의 취소·환불은 아직 지원하지 않습니다. 호텔에 문의해 주세요." : !confirmed
@@ -147,13 +148,16 @@ public class CancellationService {
             throw new CancellationNotAllowedException();
         }
         mutationGuard.assertCriticalMutationAllowed(reservationId);
-        boolean hasToss = Boolean.TRUE.equals(jdbc.queryForObject(
-                "select exists(select 1 from payment_transaction where reservation_id=? and provider='TOSS_TEST')",
-                Boolean.class, reservationId));
+        TossRefundService activeRefunds = tossRefunds.getIfAvailable();
+        String tossProvider = activeRefunds == null ? null
+                : TossPaymentEnvironment.from(activeRefunds.providerMode()).providerCode();
+        boolean hasToss = tossProvider != null && Boolean.TRUE.equals(jdbc.queryForObject(
+                "select exists(select 1 from payment_transaction where reservation_id=? and provider=?)",
+                Boolean.class, reservationId, tossProvider));
         if (hasToss) {
-            if (tossRefunds.getIfAvailable() == null || Boolean.TRUE.equals(jdbc.queryForObject(
-                    "select exists(select 1 from payment_transaction where reservation_id=? and provider<>'TOSS_TEST')",
-                    Boolean.class,reservationId))) {
+            if (Boolean.TRUE.equals(jdbc.queryForObject(
+                    "select exists(select 1 from payment_transaction where reservation_id=? and provider<>?)",
+                    Boolean.class,reservationId,tossProvider))) {
                 throw new BusinessConflictException("CANCELLATION_RECONCILIATION_REQUIRED", "혼합 거래 또는 비활성 토스 환불은 본사 조정이 필요합니다.");
             }
             var transactions=jdbc.queryForList("select id,captured_amount_krw-refunded_amount_krw as remaining from payment_transaction where reservation_id=? order by created_at,id for update",reservationId);
@@ -161,7 +165,7 @@ public class CancellationService {
             insertAttempt(reservationId,idempotencyKey,requestHash,total,"PENDING","CANCELLATION_PENDING",staffId);
             UUID cancellationId=jdbc.queryForObject("select id from cancellation_attempt where reservation_id=? and idempotency_key=?",UUID.class,reservationId,idempotencyKey);
             for(var payment:transactions) if((long)payment.get("remaining")>0)
-                tossRefunds.getObject().prepare((UUID)payment.get("id"),(long)payment.get("remaining"),null,cancellationId);
+                activeRefunds.prepare((UUID)payment.get("id"),(long)payment.get("remaining"),null,cancellationId);
             return new CancellationResult(reservationId,"CANCELLATION_PENDING",total,"KRW");
         }
         if (tossRefunds.getIfAvailable() != null) {
@@ -190,6 +194,11 @@ public class CancellationService {
         insertAttempt(reservationId, idempotencyKey, requestHash, reservation.total(), "SUCCEEDED", "CANCELLED", staffId);
         mutationGuard.incrementRevision(reservationId);
         return new CancellationResult(reservationId, "CANCELLED", reservation.total(), "KRW");
+    }
+
+    private String activePaymentMode() {
+        TossRefundService refunds = tossRefunds.getIfAvailable();
+        return refunds == null ? "fake" : refunds.providerMode();
     }
 
     private void validateIdempotencyKey(String idempotencyKey) {

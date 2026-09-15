@@ -2,7 +2,7 @@ package team.hotelchain.payment;
 
 import java.util.UUID;
 
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -17,7 +17,7 @@ import team.hotelchain.payment.TossReservationPaymentView.StatusView;
 
 @RestController
 @RequestMapping("/api/reservations/{id}")
-@ConditionalOnProperty(name = "payment.provider", havingValue = "toss-test")
+@ConditionalOnExpression("'${payment.provider:fake}' == 'toss-test' or '${payment.provider:fake}' == 'toss-live'")
 public class TossReservationPaymentController {
     private final TossReservationPaymentService payments;
 

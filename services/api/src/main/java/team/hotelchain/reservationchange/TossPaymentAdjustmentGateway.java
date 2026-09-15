@@ -6,7 +6,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.*;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -16,29 +16,30 @@ import team.hotelchain.payment.TossReservationPaymentView.*;
 import team.hotelchain.reservation.*;
 
 @Service
-@ConditionalOnProperty(name="reservation.change.gateway",havingValue="toss-test")
+@ConditionalOnExpression("'${reservation.change.gateway:disabled}' == 'toss-test' or '${reservation.change.gateway:disabled}' == 'toss-live'")
 public class TossPaymentAdjustmentGateway implements PaymentAdjustmentGateway {
     private final JdbcTemplate jdbc;
     private final TransactionTemplate tx;
     private final TossPaymentsClient client;
     private final TossPaymentsProperties properties;
+    private final TossPaymentEnvironment environment;
     private final TossRefundService refunds;
     private final ReservationAccess access;
     private final ReservationChangeSettlementService settlements;
     private final Clock clock;
     public TossPaymentAdjustmentGateway(JdbcTemplate jdbc,TransactionTemplate tx,TossPaymentsClient client,
-            TossPaymentsProperties properties,TossRefundService refunds,ReservationAccess access,
-            ReservationChangeSettlementService settlements,Clock clock,@Value("${payment.provider:disabled}") String provider) {
-        if(!"toss-test".equals(provider)) throw new IllegalStateException("토스 변경 결제는 toss-test provider가 필요합니다.");
-        properties.requireTestConfiguration();
+            TossPaymentsProperties properties,TossPaymentEnvironment environment,TossRefundService refunds,ReservationAccess access,
+            ReservationChangeSettlementService settlements,Clock clock,
+            @Value("${reservation.change.gateway:disabled}") String gatewayMode) {
+        if(!environment.mode().equals(gatewayMode)) throw new IllegalStateException("예약 변경과 결제의 Toss 환경이 일치해야 합니다.");
         this.jdbc=jdbc;this.tx=tx;this.client=client;this.properties=properties;this.refunds=refunds;
-        this.access=access;this.settlements=settlements;this.clock=clock;
+        this.environment=environment;this.access=access;this.settlements=settlements;this.clock=clock;
     }
 
     @Override public GatewayAdjustmentResult createCheckout(GatewayCheckoutCommand command) {
         return tx.execute(t -> {
             var attempt=jdbc.queryForMap("select a.*,r.reservation_id from payment_adjustment_attempt a join reservation_change_request r on r.id=a.request_id where a.id=?",command.attemptId());
-            if(!"TOSS_TEST".equals(attempt.get("provider")) || command.amountKrw()<=0 || !"KRW".equals(command.currency())) throw conflict();
+            if(!environment.providerCode().equals(attempt.get("provider")) || command.amountKrw()<=0 || !"KRW".equals(command.currency())) throw conflict();
             jdbc.update("""
                     insert into toss_adjustment_order(attempt_id,reservation_id,merchant_account,order_id,idempotency_key,amount_krw)
                     values (?,?,?,?,?,?) on conflict(attempt_id) do nothing
@@ -54,8 +55,9 @@ public class TossPaymentAdjustmentGateway implements PaymentAdjustmentGateway {
             var order=sessionOrder(sessionToken);
             if(!"NEW".equals(order.get("status")) || !"AWAITING_PAYMENT".equals(order.get("request_status"))) throw conflict();
             String base=properties.customerOrigin()+"/reservation-change-payment";
+            String label=environment==TossPaymentEnvironment.TEST?"토스 테스트 결제":"토스 결제";
             return new CheckoutView((String)order.get("order_id"),(long)order.get("amount_krw"),"KRW",properties.clientKey(),
-                    base+"?result=success",base+"?result=fail","토스 테스트 결제");
+                    base+"?result=success",base+"?result=fail",label);
         });
     }
 
@@ -78,9 +80,11 @@ public class TossPaymentAdjustmentGateway implements PaymentAdjustmentGateway {
             if("NEW".equals(state) && (!"AWAITING_PAYMENT".equals(order.get("request_status"))
                     || !((Timestamp)order.get("settlement_expires_at")).toInstant().isAfter(clock.instant())))throw conflict();
             boolean other=Boolean.TRUE.equals(jdbc.queryForObject("""
-                    select exists(select 1 from payment_provider_attempt where payment_key=?
-                      union all select 1 from toss_adjustment_order where payment_key=? and attempt_id<>?)
-                    """,Boolean.class,input.paymentKey(),input.paymentKey(),order.get("attempt_id")));
+                    select exists(select 1 from payment_provider_attempt where provider=? and payment_key=?
+                      union all select 1 from toss_adjustment_order o join payment_adjustment_attempt a on a.id=o.attempt_id
+                        where a.provider=? and o.payment_key=? and o.attempt_id<>?)
+                    """,Boolean.class,environment.providerCode(),input.paymentKey(),environment.providerCode(),
+                    input.paymentKey(),order.get("attempt_id")));
             if(other)throw conflict();
             jdbc.update("update toss_adjustment_order set payment_key=?,status='APPROVING',claimed_at=?,updated_at=? where attempt_id=?",
                     input.paymentKey(),Timestamp.from(clock.instant()),Timestamp.from(clock.instant()),order.get("attempt_id"));
@@ -121,7 +125,7 @@ public class TossPaymentAdjustmentGateway implements PaymentAdjustmentGateway {
     @Override public GatewayAdjustmentResult refund(GatewayRefundCommand command) {
         UUID refundId=tx.execute(t -> {
             var a=jdbc.queryForMap("select * from payment_adjustment_attempt where id=? for update",command.attemptId());
-            if(!"TOSS_TEST".equals(a.get("provider")))throw conflict();
+            if(!environment.providerCode().equals(a.get("provider")))throw conflict();
             List<UUID> existing=jdbc.queryForList("select id from toss_refund_command where adjustment_attempt_id=?",UUID.class,command.attemptId());
             return existing.isEmpty()?refunds.prepare((UUID)a.get("original_payment_transaction_id"),(long)a.get("amount_krw"),command.attemptId(),null):existing.getFirst();
         });

@@ -14,11 +14,16 @@ public final class PaymentProviderSafety {
     }
     public static boolean supportsSettlement(JdbcTemplate jdbc, UUID reservationId, String gatewayMode) {
         if ("fake".equals(gatewayMode)) return supportsFakeSettlement(jdbc, reservationId);
-        if (!"toss-test".equals(gatewayMode)) return false;
+        String provider = switch (gatewayMode) {
+            case "toss-test" -> "TOSS_TEST";
+            case "toss-live" -> "TOSS_LIVE";
+            default -> null;
+        };
+        if (provider == null) return false;
         return Boolean.TRUE.equals(jdbc.queryForObject("""
-                select exists(select 1 from payment_transaction where reservation_id=? and provider='TOSS_TEST')
-                   and not exists(select 1 from payment_transaction where reservation_id=? and provider<>'TOSS_TEST')
-                """, Boolean.class, reservationId, reservationId));
+                select exists(select 1 from payment_transaction where reservation_id=? and provider=?)
+                   and not exists(select 1 from payment_transaction where reservation_id=? and provider<>?)
+                """, Boolean.class, reservationId, provider, reservationId, provider));
     }
     public static void requireCompatibleSettlement(JdbcTemplate jdbc, UUID reservationId, String gatewayMode) {
         if (!supportsSettlement(jdbc, reservationId, gatewayMode)) {

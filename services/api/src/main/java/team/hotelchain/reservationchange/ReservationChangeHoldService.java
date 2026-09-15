@@ -155,7 +155,7 @@ public class ReservationChangeHoldService {
                 select exists(
                     select 1 from payment_adjustment_attempt a
                     where request_id = ? and status in ('PROCESSING', 'SUCCEEDED', 'UNKNOWN')
-                      and (provider <> 'TOSS_TEST' or adjustment_type <> 'CREATE_CHECKOUT'
+                      and (provider not in ('TOSS_TEST','TOSS_LIVE') or adjustment_type <> 'CREATE_CHECKOUT'
                         or exists(select 1 from toss_adjustment_order o where o.attempt_id=a.id
                           and o.status in ('APPROVING','SUCCEEDED','UNKNOWN'))))
                 """, Boolean.class, request.id()));

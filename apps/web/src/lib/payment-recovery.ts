@@ -1,10 +1,10 @@
 import type { ConfirmationInput, TossReturn, TossStatus } from './toss-payments'
 
-export type PaymentProvider = 'toss-test' | 'fake' | 'disabled'
+export type PaymentProvider = 'toss-test' | 'toss-live' | 'fake' | 'disabled'
 export type PaymentModes = { provider: PaymentProvider; changeProvider: PaymentProvider }
 
 export function paymentActions(provider: PaymentProvider | null) {
-  return { toss: provider === 'toss-test', fake: provider === 'fake' }
+  return { toss: provider === 'toss-test' || provider === 'toss-live', fake: provider === 'fake' }
 }
 
 export async function recoverTossPayment(

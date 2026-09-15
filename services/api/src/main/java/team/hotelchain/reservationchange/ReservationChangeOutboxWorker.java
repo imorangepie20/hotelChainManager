@@ -85,7 +85,8 @@ public class ReservationChangeOutboxWorker {
                         rs.getInt("attempt_count") + 1, UUID.randomUUID()) : null,
                 Timestamp.from(clock.instant()), Timestamp.from(clock.instant()));
         if (candidate == null) return null;
-        boolean toss="TOSS_TEST".equals(jdbc.queryForObject("select provider from payment_adjustment_attempt where id=?",String.class,candidate.attemptId()));
+        String provider=jdbc.queryForObject("select provider from payment_adjustment_attempt where id=?",String.class,candidate.attemptId());
+        boolean toss="TOSS_TEST".equals(provider)||"TOSS_LIVE".equals(provider);
         if(toss) {
             UUID reservationId=jdbc.queryForObject("select reservation_id from reservation_change_request where id=?",UUID.class,candidate.requestId());
             jdbc.query("select id from reservation where id=? for update",rs->{},reservationId);

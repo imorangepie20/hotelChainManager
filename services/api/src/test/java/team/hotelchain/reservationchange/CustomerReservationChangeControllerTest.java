@@ -7,6 +7,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import team.hotelchain.payment.PaymentCheckoutPolicy;
 import team.hotelchain.reservation.*;
 import team.hotelchain.web.ApiExceptionHandler;
 
@@ -14,6 +15,7 @@ class CustomerReservationChangeControllerTest {
     @Test void missingCookieOnCurrentAndCheckoutIsNotFoundWithoutDatabaseAccess() throws Exception {
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
         var service = new ReservationChangeSettlementService(jdbc, null, new ReservationAccess(), null, null,
+            new PaymentCheckoutPolicy("fake", false),
             Clock.systemUTC(), "http://127.0.0.1:4000", "fake", "");
         var mvc = MockMvcBuilders.standaloneSetup(new CustomerReservationChangePaymentController(service))
             .setControllerAdvice(new ApiExceptionHandler()).build();

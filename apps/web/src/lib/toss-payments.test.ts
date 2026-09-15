@@ -17,7 +17,8 @@ equal(result, { kind: 'success', input: { paymentKey: 'pk', orderId: 'o', amount
 equal(captureTossReturn({ pathname: '/reservation-change-payment', search: '?result=success&amount=invalid', hash: '' }, path => { replaced = path }), { kind: 'invalid' })
 const checkout = { orderId: 'order-1', amountKrw: 120000, currency: 'KRW', clientKey: 'test_ck_fixture', successUrl: 'http://localhost:4000/reservations/id/payment-result?result=success', failUrl: 'http://localhost:4000/reservations/id/payment-result?result=fail', environmentLabel: '테스트' }
 validateTossCheckout(checkout, 'http://localhost:4000')
-for (const patch of [{ clientKey: 'live_ck_forbidden' }, { amountKrw: 0 }, { currency: 'USD' }, { successUrl: 'https://evil.example/result' }, { failUrl: 'http://localhost:4000/?token=secret' }]) rejects(() => validateTossCheckout({ ...checkout, ...patch }, 'http://localhost:4000'))
+validateTossCheckout({ ...checkout, clientKey: 'live_gck_fixture', successUrl: 'https://hotel.example/reservations/id/payment-result?result=success', failUrl: 'https://hotel.example/reservations/id/payment-result?result=fail' }, 'https://hotel.example')
+for (const patch of [{ clientKey: 'secret_key_forbidden' }, { amountKrw: 0 }, { currency: 'USD' }, { successUrl: 'https://evil.example/result' }, { failUrl: 'http://localhost:4000/?token=secret' }]) rejects(() => validateTossCheckout({ ...checkout, ...patch }, 'http://localhost:4000'))
 equal(paymentMessage({ status: 'CONFIRMED', paymentStatus: 'UNKNOWN' }).completed, false)
 equal(paymentMessage({ status: 'PENDING_PAYMENT', paymentStatus: 'SUCCEEDED' }).completed, false)
 equal(paymentMessage({ status: 'CONFIRMED', paymentStatus: 'SUCCEEDED' }).completed, true)

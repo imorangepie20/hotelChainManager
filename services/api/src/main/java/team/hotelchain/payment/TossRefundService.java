@@ -4,7 +4,7 @@ import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.*;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -13,31 +13,36 @@ import team.hotelchain.reservation.BusinessConflictException;
 
 /** 저장 원 거래와 특정 취소 이벤트를 연결하는 공통 환불 원장. 외부 호출은 잠금 밖에서 수행한다. */
 @Service
-@ConditionalOnProperty(name="payment.provider", havingValue="toss-test")
+@ConditionalOnExpression("'${payment.provider:fake}' == 'toss-test' or '${payment.provider:fake}' == 'toss-live'")
 public class TossRefundService {
     private final JdbcTemplate jdbc;
     private final TransactionTemplate tx;
     private final TossPaymentsClient client;
     private final TossPaymentsProperties properties;
+    private final TossPaymentEnvironment environment;
     private final Clock clock;
     public TossRefundService(JdbcTemplate jdbc, TransactionTemplate tx, TossPaymentsClient client,
-            TossPaymentsProperties properties, Clock clock) {
-        this.jdbc=jdbc; this.tx=tx; this.client=client; this.properties=properties; this.clock=clock;
+            TossPaymentsProperties properties, TossPaymentEnvironment environment, Clock clock) {
+        this.jdbc=jdbc; this.tx=tx; this.client=client; this.properties=properties;
+        this.environment=environment; this.clock=clock;
     }
+
+    public String providerMode() { return environment.mode(); }
 
     public UUID prepare(UUID transactionId, long amount, UUID adjustmentId, UUID cancellationId) {
         return tx.execute(t -> {
             var payment=jdbc.queryForMap("select * from payment_transaction where id=? for update",transactionId);
             String key=(String)payment.get("gateway_transaction_id");
-            if (!"TOSS_TEST".equals(payment.get("provider")) || !properties.merchantAccount().equals(payment.get("merchant_account"))
+            if (!environment.providerCode().equals(payment.get("provider")) || !properties.merchantAccount().equals(payment.get("merchant_account"))
                     || !"KRW".equals(payment.get("currency")) || key == null || key.isBlank() || amount<=0
                     || (long)payment.get("captured_amount_krw")-(long)payment.get("refunded_amount_krw")<amount) throw conflict();
             List<String> orders=jdbc.queryForList("""
-                    select order_id from payment_provider_attempt where payment_key=? and provider='TOSS_TEST'
+                    select order_id from payment_provider_attempt where payment_key=? and provider=?
                       and merchant_account=? and status='SUCCEEDED' and reservation_id=?
                     union all select order_id from toss_adjustment_order where payment_key=? and merchant_account=?
                       and status='SUCCEEDED' and reservation_id=?
-                    """,String.class,key,properties.merchantAccount(),payment.get("reservation_id"),key,properties.merchantAccount(),payment.get("reservation_id"));
+                    """,String.class,key,environment.providerCode(),properties.merchantAccount(),payment.get("reservation_id"),
+                    key,properties.merchantAccount(),payment.get("reservation_id"));
             if(orders.size()!=1) throw conflict();
             UUID id=UUID.randomUUID();
             jdbc.update("""
@@ -88,7 +93,7 @@ public class TossRefundService {
             var payment=jdbc.queryForMap("select * from payment_transaction where id=? for update",row.get("transaction_id"));
             boolean duplicate=Boolean.TRUE.equals(jdbc.queryForObject("select exists(select 1 from toss_refund_command where merchant_account=? and provider_event_id=? and id<>?)",
                     Boolean.class,properties.merchantAccount(),result.transactionKey(),id));
-            if(!duplicate && "TOSS_TEST".equals(payment.get("provider")) && properties.merchantAccount().equals(payment.get("merchant_account"))) {
+            if(!duplicate && environment.providerCode().equals(payment.get("provider")) && properties.merchantAccount().equals(payment.get("merchant_account"))) {
                 int updated=jdbc.update("""
                         update payment_transaction set refunded_amount_krw=refunded_amount_krw+?,updated_at=CURRENT_TIMESTAMP
                         where id=? and captured_amount_krw-refunded_amount_krw>=?

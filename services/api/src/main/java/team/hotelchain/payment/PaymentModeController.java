@@ -18,7 +18,7 @@ public class PaymentModeController {
     public PaymentMode mode() { return view; }
 
     private static String mode(String value) {
-        return "fake".equals(value) || "toss-test".equals(value) ? value : "disabled";
+        return "fake".equals(value) || "toss-test".equals(value) || "toss-live".equals(value) ? value : "disabled";
     }
 
     public record PaymentMode(String provider, String changeProvider) { }

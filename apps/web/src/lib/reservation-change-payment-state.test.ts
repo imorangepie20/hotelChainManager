@@ -56,3 +56,4 @@ expectEqual(canRecoverChangePayment(false, 'fake', false, 'AWAITING_PAYMENT'), f
 expectEqual(canRecoverChangePayment(true, 'toss-test', true, 'COMPLETED'), false, '확인된 완료 화면은 결과 동선을 사용한다')
 
 expectEqual(canRecoverChangePayment(false, 'toss-test', false, undefined), true, '새로고침 후 최초 status 실패에도 알려진 Toss provider로 복구한다')
+expectEqual(canRecoverChangePayment(false, 'toss-live', false, undefined), true, '운영 Toss provider도 서버 상태 복구를 지원한다')

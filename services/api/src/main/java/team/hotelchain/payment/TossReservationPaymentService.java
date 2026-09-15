@@ -9,7 +9,7 @@ import java.time.LocalDate;
 import java.util.Objects;
 import java.util.UUID;
 
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -25,7 +25,7 @@ import team.hotelchain.reservation.ReservationAccess;
 import team.hotelchain.reservation.ReservationNotFoundException;
 
 @Service
-@ConditionalOnProperty(name = "payment.provider", havingValue = "toss-test")
+@ConditionalOnExpression("'${payment.provider:fake}' == 'toss-test' or '${payment.provider:fake}' == 'toss-live'")
 public class TossReservationPaymentService {
     private final JdbcTemplate jdbc;
     private final ReservationAccess access;
@@ -33,15 +33,20 @@ public class TossReservationPaymentService {
     private final Clock clock;
     private final TossPaymentsProperties properties;
     private final TossPaymentsClient provider;
+    private final TossPaymentEnvironment environment;
+    private final PaymentCheckoutPolicy checkoutPolicy;
 
     public TossReservationPaymentService(JdbcTemplate jdbc, ReservationAccess access, TransactionTemplate transactions,
-            Clock clock, TossPaymentsProperties properties, TossPaymentsClient provider) {
+            Clock clock, TossPaymentsProperties properties, TossPaymentsClient provider,
+            TossPaymentEnvironment environment, PaymentCheckoutPolicy checkoutPolicy) {
         this.jdbc = jdbc;
         this.access = access;
         this.transactions = transactions;
         this.clock = clock;
         this.properties = properties;
         this.provider = provider;
+        this.environment = environment;
+        this.checkoutPolicy = checkoutPolicy;
     }
 
     public CheckoutView checkout(UUID reservationId, String token, String idempotencyKey) {
@@ -58,18 +63,21 @@ public class TossReservationPaymentService {
             Attempt attempt = findAttempt(reservationId, "idempotency_key = ?", storedKey);
             if (attempt == null) attempt = findAttempt(reservationId, "status in ('NEW','APPROVING','UNKNOWN')", null);
             if (attempt == null) {
+                checkoutPolicy.requireEnabled();
                 UUID id = UUID.randomUUID();
                 String orderId = "hotel_" + id.toString().replace("-", "");
                 jdbc.update("""
                         INSERT INTO payment_provider_attempt
                             (id, reservation_id, provider, merchant_account, order_id, idempotency_key, amount_krw, currency, status)
-                        VALUES (?, ?, 'TOSS_TEST', ?, ?, ?, ?, 'KRW', 'NEW')
-                        """, id, reservationId, properties.merchantAccount(), orderId, storedKey, reservation.totalKrw());
+                        VALUES (?, ?, ?, ?, ?, ?, ?, 'KRW', 'NEW')
+                        """, id, reservationId, environment.providerCode(), properties.merchantAccount(), orderId,
+                        storedKey, reservation.totalKrw());
                 attempt = findAttempt(reservationId, "order_id = ?", orderId);
             }
             String resultUrl = properties.customerOrigin() + "/reservations/" + reservationId + "/payment-result";
+            String label = environment == TossPaymentEnvironment.TEST ? "토스 테스트 결제 · 실제 과금 없음" : "토스 결제";
             return new CheckoutView(attempt.orderId(), attempt.amountKrw(), "KRW", properties.clientKey(),
-                    resultUrl + "?result=success", resultUrl + "?result=fail", "토스 테스트 결제 · 실제 과금 없음");
+                    resultUrl + "?result=success", resultUrl + "?result=fail", label);
         });
     }
 
@@ -118,9 +126,9 @@ public class TossReservationPaymentService {
         var rows=jdbc.queryForList("""
                 select a.reservation_id,a.payment_key,r.management_token_hash
                 from payment_provider_attempt a join reservation r on r.id=a.reservation_id
-                where a.provider='TOSS_TEST' and a.order_id=? and a.payment_key is not null
+                where a.provider=? and a.order_id=? and a.payment_key is not null
                   and a.status in ('APPROVING','UNKNOWN')
-                """,orderId);
+                """,environment.providerCode(),orderId);
         if(rows.isEmpty())return;
         var row=rows.getFirst();
         UUID reservationId=(UUID)row.get("reservation_id");
@@ -153,8 +161,8 @@ public class TossReservationPaymentService {
         jdbc.query("select pg_advisory_xact_lock(hashtextextended(?, 0))", rs -> { }, "toss-payment-key:" + request.paymentKey());
         Boolean keyTaken = jdbc.queryForObject("""
                 select exists (select 1 from payment_provider_attempt
-                 where provider = 'TOSS_TEST' and payment_key = ? and id <> ?)
-                """, Boolean.class, request.paymentKey(), attempt.id());
+                 where provider = ? and payment_key = ? and id <> ?)
+                """, Boolean.class, environment.providerCode(), request.paymentKey(), attempt.id());
         if (Boolean.TRUE.equals(keyTaken)) throw conflict("PAYMENT_KEY_CONFLICT", "다른 주문에 사용된 결제 키입니다.");
         jdbc.update("update payment_provider_attempt set status = 'APPROVING', payment_key = ?, updated_at = CURRENT_TIMESTAMP where id = ?",
                 request.paymentKey(), attempt.id());
@@ -184,8 +192,9 @@ public class TossReservationPaymentService {
             jdbc.update("""
                     INSERT INTO payment_transaction (id, reservation_id, provider, merchant_account, gateway_transaction_id,
                         transaction_type, captured_amount_krw, refunded_amount_krw, currency)
-                    VALUES (?, ?, 'TOSS_TEST', ?, ?, 'ORIGINAL_CHARGE', ?, 0, 'KRW')
-                    """, UUID.randomUUID(), reservationId, attempt.merchant(), attempt.paymentKey(), attempt.amountKrw());
+                    VALUES (?, ?, ?, ?, ?, 'ORIGINAL_CHARGE', ?, 0, 'KRW')
+                    """, UUID.randomUUID(), reservationId, environment.providerCode(), attempt.merchant(),
+                    attempt.paymentKey(), attempt.amountKrw());
             jdbc.update("update reservation set status = 'CONFIRMED' where id = ?", reservationId);
             status = "SUCCEEDED";
         }
@@ -227,10 +236,12 @@ public class TossReservationPaymentService {
     }
 
     private Attempt findAttempt(UUID reservationId, String predicate, String value) {
-        String sql = "select * from payment_provider_attempt where reservation_id = ? and provider = 'TOSS_TEST' and "
+        String sql = "select * from payment_provider_attempt where reservation_id = ? and provider = ? and "
                 + predicate + " order by created_at desc, id desc limit 1";
-        return value == null ? jdbc.query(sql, rs -> rs.next() ? mapAttempt(rs) : null, reservationId)
-                : jdbc.query(sql, rs -> rs.next() ? mapAttempt(rs) : null, reservationId, value);
+        return value == null ? jdbc.query(sql, rs -> rs.next() ? mapAttempt(rs) : null,
+                reservationId, environment.providerCode())
+                : jdbc.query(sql, rs -> rs.next() ? mapAttempt(rs) : null,
+                        reservationId, environment.providerCode(), value);
     }
 
     private Attempt mapAttempt(ResultSet rs) throws SQLException {

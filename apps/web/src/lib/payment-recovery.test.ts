@@ -16,6 +16,7 @@ await recoverTossPayment(async () => ({ ...state, paymentStatus: 'NEW' }), confi
 await recoverTossPayment(async () => ({ ...state, paymentStatus: 'APPROVING' }), confirm, returned)
 equal(confirmations, 1)
 equal(paymentActions('toss-test'), { toss: true, fake: false })
+equal(paymentActions('toss-live'), { toss: true, fake: false })
 equal(paymentActions('fake'), { toss: false, fake: true })
 equal(paymentActions('disabled'), { toss: false, fake: false })
 equal(paymentActions(null), { toss: false, fake: false })
