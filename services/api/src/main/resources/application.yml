@@ -29,6 +29,7 @@ reservation:
 
 payment:
   provider: ${PAYMENT_PROVIDER:fake}
+  checkout-enabled: ${PAYMENT_CHECKOUT_ENABLED:false}
   toss:
     client-key: ${TOSS_PAYMENTS_CLIENT_KEY:}
     secret-key: ${TOSS_PAYMENTS_SECRET_KEY:}
