@@ -1,6 +1,6 @@
 # Toss Settlement Reconciliation Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Toss 라이브 정산 자료를 일자·페이지 단위로 안전하게 수집하고 내부 승인·환불 원장과 대사해 본사 관리자에게 읽기 전용 불일치 화면을 제공한다.
 
@@ -36,7 +36,7 @@
 - Produces: `SettlementRecord(String merchantAccount, String paymentKey, String transactionKey, String orderId, String currency, String method, long amountKrw, long feeKrw, long feeSupplyKrw, long feeVatKrw, long payoutKrw, Instant approvedAt, LocalDate soldDate, LocalDate paidOutDate, boolean cancellation)`
 - Produces: `SettlementPage(List<SettlementRecord> records, boolean hasNext)`
 
-- [ ] **Step 1: Write failing request and response-contract tests**
+- [x] **Step 1: Write failing request and response-contract tests**
 
 ```java
 @Test void requests_one_sold_date_page_with_live_basic_auth() {
@@ -57,27 +57,27 @@
 }
 ```
 
-- [ ] **Step 2: Run tests and confirm the missing client failure**
+- [x] **Step 2: Run tests and confirm the missing client failure**
 
 Run: `cd services/api; ./mvnw -Dtest=TossSettlementHttpClientTest test`
 
 Expected: FAIL because `TossSettlementClient` and `TossSettlementHttpClient` do not exist.
 
-- [ ] **Step 3: Implement the dedicated read-only client**
+- [x] **Step 3: Implement the dedicated read-only client**
 
 Use `GET https://api.tosspayments.com/v1/settlements` with Basic secret-key authentication, `Accept: application/json`, `dateType=soldDate`, `page>=1`, and `1<=size<=5000`. Set request timeout to 65 seconds and construct its `HttpClient` with a dedicated executor. Parse only the listed scalar fields, sum every integral non-negative `fees[].fee`, and treat `cancel != null` as a cancellation record. Require response `mId` to equal configured MID, `currency=KRW`, method in `카드|간편결제`, nonblank identifiers and response `soldDate` equal to the requested day. Preserve fee/payout arithmetic for Task 3 classification instead of rejecting a structurally valid record. Map 429, 5xx, I/O, interruption and malformed success bodies to typed exceptions without returning partial records.
 
-- [ ] **Step 4: Wire the client only for `toss-live`**
+- [x] **Step 4: Wire the client only for `toss-live`**
 
 Add a named daemon executor and `TossSettlementClient` bean under `@ConditionalOnProperty(name="payment.provider", havingValue="toss-live")`. Reuse `TossPaymentsProperties` and `TossPaymentEnvironment.LIVE.requireConfiguration(properties)`; do not expose the secret in exception text.
 
-- [ ] **Step 5: Run the focused HTTP contract**
+- [x] **Step 5: Run the focused HTTP contract**
 
 Run: `cd services/api; ./mvnw -Dtest=TossSettlementHttpClientTest,TossPaymentsConfigurationTest,TossPaymentsHttpClientTest test`
 
 Expected: PASS with paging, exact query encoding, 65-second timeout, fee sum, cancellation parsing, 4xx, 429, 5xx, interruption and malformed JSON covered.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add services/api/src/main/java/team/hotelchain/payment/settlement services/api/src/main/java/team/hotelchain/payment/TossPaymentsConfiguration.java services/api/src/test/java/team/hotelchain/payment/settlement
@@ -99,7 +99,7 @@ git commit -m "feat(settlement): add Toss settlement client"
 - Produces: `TossSettlementRunService.create(LocalDate from, LocalDate to, UUID requestedBy): UUID`
 - Produces: `TossSettlementWorker.processNext(): boolean`
 
-- [ ] **Step 1: Write failing migration and worker tests**
+- [x] **Step 1: Write failing migration and worker tests**
 
 ```java
 @Test void stores_each_provider_transaction_once_across_overlapping_runs() {
@@ -124,27 +124,27 @@ git commit -m "feat(settlement): add Toss settlement client"
 }
 ```
 
-- [ ] **Step 2: Run tests and confirm missing V44 tables**
+- [x] **Step 2: Run tests and confirm missing V44 tables**
 
 Run: `cd services/api; ./mvnw -Dtest=TossSettlementIntegrationTest test`
 
 Expected: FAIL because `toss_settlement_run` and `toss_settlement_snapshot` do not exist.
 
-- [ ] **Step 3: Add the additive V44 schema**
+- [x] **Step 3: Add the additive V44 schema**
 
 Create `toss_settlement_run` with provider, MID, inclusive sold-date range, `PENDING|PROCESSING|SUCCEEDED|FAILED`, current date/page cursor, counts, attempt count, next-attempt time, lease token/expiry, safe error code, requester, idempotency key, request hash and timestamps; make `(requested_by,idempotency_key)` unique. Create immutable `toss_settlement_snapshot` with every `SettlementRecord` field, `first_run_id`, and unique `(merchant_account,payment_key,transaction_key,sold_date)`. Create `toss_settlement_reconciliation` keyed by `(run_id,reconciliation_key)` with nullable snapshot/internal transaction/refund references, status, expected/provider amounts, fee fields and detail code. Add range/status indexes and CHECK constraints for KRW, nonnegative fees, page/range bounds and allowed statuses.
 
-- [ ] **Step 4: Implement claim, out-of-transaction fetch and page checkpoint**
+- [x] **Step 4: Implement claim, out-of-transaction fetch and page checkpoint**
 
 `create` accepts at most 31 inclusive days and rejects future dates. `processNext` claims one due run with `FOR UPDATE SKIP LOCKED`, a UUID token and 90-second lease; fetches exactly one page outside the transaction; then inserts snapshots with `ON CONFLICT DO NOTHING` and advances the cursor only when the claim token still matches. A short page advances to the next date, and the day after `to` completes ingestion. Retryable failures preserve rows, clear the lease and use capped backoff; terminal contract failures set `FAILED`. The scheduled drain is bounded to five pages and enabled only by `TOSS_SETTLEMENT_ENABLED=true` with `payment.provider=toss-live`.
 
-- [ ] **Step 5: Run persistence and restart tests**
+- [x] **Step 5: Run persistence and restart tests**
 
 Run: `cd services/api; ./mvnw -Dtest=TossSettlementIntegrationTest test`
 
 Expected: PASS for overlapping windows, duplicate natural keys, page resume, stale lease reclaim, 429/5xx retry, malformed terminal failure, and transaction-free provider calls.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add .env.example services/api/src/main/resources/application.yml services/api/src/main/resources/db/migration/V44__toss_settlement_reconciliation.sql services/api/src/main/java/team/hotelchain/payment/settlement/TossSettlementRunService.java services/api/src/main/java/team/hotelchain/payment/settlement/TossSettlementWorker.java services/api/src/test/java/team/hotelchain/payment/settlement/TossSettlementIntegrationTest.java
@@ -345,3 +345,4 @@ git push
 - [ ] **Step 5: Stop before external side effects**
 
 Do not enable `TOSS_SETTLEMENT_ENABLED`, inject live secrets, call the real Toss endpoint, or claim real fee/payout reconciliation. The user must provide and approve the deployment environment and the first live read-only run.
+

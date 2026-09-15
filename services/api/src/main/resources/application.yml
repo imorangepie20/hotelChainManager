@@ -36,6 +36,8 @@ payment:
     merchant-account: ${TOSS_PAYMENTS_MERCHANT_ACCOUNT:}
     customer-origin: ${PAYMENT_CUSTOMER_ORIGIN:http://127.0.0.1:4000}
     webhook-max-per-second: ${TOSS_WEBHOOK_MAX_PER_SECOND:120}
+    settlement-enabled: ${TOSS_SETTLEMENT_ENABLED:false}
+    settlement-page-size: ${TOSS_SETTLEMENT_PAGE_SIZE:500}
 
 website:
   media:
