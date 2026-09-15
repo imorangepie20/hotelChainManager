@@ -23,15 +23,27 @@ public final class TossPaymentsHttpClient implements TossPaymentsClient {
     private final TossPaymentsProperties properties;
     private final HttpClient http;
     private final ObjectMapper json;
+    private final TossPaymentEnvironment environment;
 
     public TossPaymentsHttpClient(TossPaymentsProperties properties, HttpClient http) {
-        this(properties, http, new ObjectMapper());
+        this(properties, http, new ObjectMapper(), TossPaymentEnvironment.TEST);
+    }
+
+    public TossPaymentsHttpClient(TossPaymentsProperties properties, HttpClient http,
+            TossPaymentEnvironment environment) {
+        this(properties, http, new ObjectMapper(), environment);
     }
 
     TossPaymentsHttpClient(TossPaymentsProperties properties, HttpClient http, ObjectMapper json) {
+        this(properties, http, json, TossPaymentEnvironment.TEST);
+    }
+
+    TossPaymentsHttpClient(TossPaymentsProperties properties, HttpClient http, ObjectMapper json,
+            TossPaymentEnvironment environment) {
         this.properties = properties;
         this.http = http;
         this.json = json;
+        this.environment = environment;
     }
 
     @Override
@@ -66,7 +78,7 @@ public final class TossPaymentsHttpClient implements TossPaymentsClient {
     }
 
     private ProviderPayment send(String path, String requestBody, String idempotencyKey, boolean lookup, CancelCommand cancel) {
-        properties.requireTestConfiguration();
+        environment.requireConfiguration(properties);
         HttpRequest.Builder request = HttpRequest.newBuilder(API_ORIGIN.resolve(path))
                 .timeout(REQUEST_TIMEOUT)
                 .header("Authorization", authorization())

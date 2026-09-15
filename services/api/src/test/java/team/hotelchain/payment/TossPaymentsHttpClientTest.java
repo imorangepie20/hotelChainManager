@@ -62,6 +62,20 @@ class TossPaymentsHttpClientTest {
     }
 
     @Test
+    void live_environment_accepts_live_keys_when_sending() {
+        CapturingHttpClient http = new CapturingHttpClient("""
+                {"paymentKey":"pay","orderId":"order","totalAmount":120000,
+                 "currency":"KRW","status":"DONE","transactionKey":"txn"}
+                """);
+        var live = new TossPaymentsProperties(
+                "live_gck_fixture", "live_gsk_fixture", "hotel-live", "https://hotel.example");
+        TossPaymentsHttpClient client = new TossPaymentsHttpClient(live, http, TossPaymentEnvironment.LIVE);
+
+        assertThat(client.lookup("pay").status()).isEqualTo(TossPaymentsClient.ProviderStatus.DONE);
+        assertThat(http.request.get().headers().firstValue("Authorization")).isPresent();
+    }
+
+    @Test
     void mapsIncompleteDoneResponseToUnknown() {
         CapturingHttpClient http = new CapturingHttpClient("""
                 {"paymentKey":"pay","orderId":"order","totalAmount":0,

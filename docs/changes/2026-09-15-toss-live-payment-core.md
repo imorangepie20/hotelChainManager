@@ -8,6 +8,7 @@
 
 - `payment.provider`는 `fake`, `toss-test`, `toss-live`를 명시적으로 구분한다. Toss 거래 원장의 provider snapshot은 기존 `TOSS_TEST`와 신규 `TOSS_LIVE`를 유지한다.
 - 테스트 키와 라이브 키 계열, MID, 고객 origin을 시작 시 검증한다. 라이브는 HTTPS origin만 허용한다.
+- HTTP client도 생성된 `TossPaymentEnvironment`를 요청 시 재검증해 라이브 설정을 테스트 전용 검증기로 되돌리지 않는다.
 - `PAYMENT_CHECKOUT_ENABLED`의 기본값은 `false`다. 라이브에서 꺼져 있으면 새로운 예약 결제와 예약 변경 추가 결제 시도만 거부한다.
 - 이미 생성된 checkout 재열기, 승인 확인, 조회, 환불, 취소와 변경 적용 worker는 kill switch와 무관하게 같은 provider에서 계속 처리한다.
 - 고객 웹은 라이브 client key와 결제위젯을 지원하고 테스트 배너·문구를 라이브에서 노출하지 않는다.
@@ -24,7 +25,7 @@
 
 ## 자동 검증
 
-- 백엔드 집중 게이트: 환경 설정, HTTP 계약, checkout 정책, provider 안전성, 라이브 차단, 신규 예약 결제, 예약 변경 결제·환불·webhook, 취소 회귀 등 13개 클래스 140건을 실행했다. 최종 통과 결과는 커밋 직전 재검증 결과를 따른다.
+- 백엔드 집중 게이트: 환경 설정, HTTP 계약, checkout 정책, provider 안전성, 라이브 차단, 신규 예약 결제, 예약 변경 결제·환불·webhook, 취소 회귀 등 13개 클래스 141건을 통과했다.
 - 고객 웹: Toss client, 결제위젯, 결제 복구, 예약 변경 결제 상태 계약 4개와 TypeScript/Vite production build를 통과했다.
 - Flyway: PostgreSQL 테스트 DB에서 V43을 포함한 43개 migration validation을 통과했다.
 - 추가 검사: API compile, `git diff --check`를 수행한다.

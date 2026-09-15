@@ -20,6 +20,6 @@ class TossPaymentsConfiguration {
     @ConditionalOnExpression("'${payment.provider:fake}' == 'toss-test' or '${payment.provider:fake}' == 'toss-live'")
     TossPaymentsClient tossPaymentsClient(TossPaymentsProperties properties, TossPaymentEnvironment environment) {
         environment.requireConfiguration(properties);
-        return new TossPaymentsHttpClient(properties, HttpClient.newBuilder().build());
+        return new TossPaymentsHttpClient(properties, HttpClient.newBuilder().build(), environment);
     }
 }
