@@ -67,9 +67,10 @@ function Test-LocalRuntimeProcess {
 function Get-ComposeContainerId {
     param([Parameter(Mandatory)][string]$Service)
 
-    $id = (& docker compose ps -q $Service).Trim()
+    $rawId = & docker compose ps -q $Service
     if ($LASTEXITCODE -ne 0) { throw "Docker Compose 상태를 확인하지 못했습니다: $Service" }
-    return $id
+    if ($null -eq $rawId) { return '' }
+    return ([string]$rawId).Trim()
 }
 
 Export-ModuleMember -Function Get-LocalRuntimeRoot, Get-LocalRuntimeStatePath, Get-LocalRuntimePlan, ConvertTo-LocalRuntimeState, Read-LocalRuntimeState, Write-LocalRuntimeState, Get-LocalRuntimePortOwner, Test-LocalRuntimeProcess, Get-ComposeContainerId
