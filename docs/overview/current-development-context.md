@@ -321,7 +321,7 @@
 
 
 
-1. 예약 변경 정산의 운영 결제 provider를 선정하고 secret·서명 webhook·sandbox transaction·수수료/회계 reconciliation·고객 링크 자동 전달을 검증한다.
+1. Toss `GET /v1/settlements` 기반 immutable snapshot·내부 거래 대사·본사 읽기 전용 운영 화면을 구현하고, 실제 라이브 거래가 자료에 나타난 뒤 외부 대사를 검증한다.
 
 
 
@@ -480,3 +480,5 @@
 - CMS 미디어 저장소를 provider 중립 계약으로 분리하고 `local`, `mirror`, `s3-primary` 모드를 구현했다. 모든 모드가 로컬 사본과 기존 공개 URL을 유지하며, `mirror`는 명시적 100개 단위 S3 backfill을 제공하고 `s3-primary`는 S3 오류 때 로컬 fallback을 계측한다. 격리 기반 영구 삭제의 commit·rollback도 양쪽 저장소에 적용한다. 격리된 Compose 환경에서 실제 업로드·WebP 생성, backfill, S3 우선 읽기·강제 fallback, local 롤백을 확인했고 서버 119건과 관리자 E2E 8건이 통과했다. 운영 provider·CDN 연동은 아직 검증하지 않았다. 상세 결과는 [S3 미디어 저장소 이관 기록](../changes/2026-09-13-s3-media-storage-migration.md)을 따른다.
 
 - 2026-09-15: 고객이 예약 상세에서 날짜·객실·요금제·성인·아동을 직접 재견적하고 차액 결제·환불·0원 변경을 시작하는 셀프서비스 흐름을 추가했다. 서버가 관리 토큰, 변경 가능 조건, 최신 재고와 가격을 잠금 상태에서 재검증하며 고객 actor와 변경 전후 인원을 감사한다. 설계는 [고객 직접 예약 변경 설계](../superpowers/specs/2026-09-15-customer-self-service-reservation-change-design.md), 실행 단계는 [구현 계획](../superpowers/plans/2026-09-15-customer-self-service-reservation-change.md), 자동 검증과 사용자 브라우저 체크리스트는 [변경 기록](../changes/2026-09-15-customer-self-service-reservation-change.md)을 따른다. 브라우저와 실제 Toss 운영 결제 검증은 사용자가 수행한다.
+
+- 2026-09-15: Toss 운영 결제 1단계로 test/live 키·provider snapshot을 분리하고 라이브 신규 checkout kill switch, 고객 웹 라이브 위젯 경로, provider별 webhook 수신·재조회·중복 제거와 애플리케이션 속도 제한을 추가했다. 실제 키·외부 webhook·과금은 열지 않았다. 구현·검증 범위와 배포 전 확인은 [변경 기록](../changes/2026-09-15-toss-live-payment-core.md)을 따른다. 다음 단계는 정산 snapshot·대사·본사 읽기 전용 화면이다.

@@ -34,7 +34,7 @@
 - Produces: `TossPaymentEnvironment.from(String provider)`, `providerCode()`, `requireConfiguration(TossPaymentsProperties)`
 - Produces: `payment.checkout-enabled` boolean; default `false` when provider is `toss-live`
 
-- [ ] **Step 1: Write failing environment tests**
+- [x] **Step 1: Write failing environment tests**
 
 ```java
 @Test void liveRejectsTestKeysAndHttpOrigin() {
@@ -49,13 +49,13 @@
 }
 ```
 
-- [ ] **Step 2: Run the test and confirm the missing type failure**
+- [x] **Step 2: Run the test and confirm the missing type failure**
 
 Run: `cd services/api; ./mvnw -Dtest=TossPaymentsConfigurationTest test`
 
 Expected: FAIL because `TossPaymentEnvironment` does not exist.
 
-- [ ] **Step 3: Implement explicit test/live validation**
+- [x] **Step 3: Implement explicit test/live validation**
 
 ```java
 public enum TossPaymentEnvironment {
@@ -70,7 +70,7 @@ public enum TossPaymentEnvironment {
 
 Use `URI` parsing; for live require `https`, a non-empty host, no user-info, query, or fragment. Validate that client and secret keys both start with the environment prefix and are not equal. Keep `requireTestConfiguration()` only as a delegating compatibility method until all callers move in Task 2.
 
-- [ ] **Step 4: Wire properties and document safe defaults**
+- [x] **Step 4: Wire properties and document safe defaults**
 
 ```yaml
 payment:
@@ -80,13 +80,13 @@ payment:
 
 Add `PAYMENT_CHECKOUT_ENABLED=false` and the accepted provider values to `.env.example`; leave all secret values empty.
 
-- [ ] **Step 5: Run configuration tests**
+- [x] **Step 5: Run configuration tests**
 
 Run: `cd services/api; ./mvnw -Dtest=TossPaymentsConfigurationTest,TossPaymentsHttpClientTest test`
 
 Expected: PASS with no live key value printed.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add .env.example services/api/src/main/resources/application.yml services/api/src/main/java/team/hotelchain/payment/TossPaymentsProperties.java services/api/src/main/java/team/hotelchain/payment/TossPaymentsConfiguration.java services/api/src/main/java/team/hotelchain/payment/TossPaymentEnvironment.java services/api/src/test/java/team/hotelchain/payment/TossPaymentsConfigurationTest.java
@@ -111,7 +111,7 @@ git commit -m "feat(payments): validate Toss live configuration"
 - Consumes: `TossPaymentEnvironment`
 - Produces: `PaymentCheckoutPolicy.requireEnabled()` throwing `BusinessConflictException("PAYMENT_CHECKOUT_DISABLED", ...)`
 
-- [ ] **Step 1: Add failing live-provider and kill-switch tests**
+- [x] **Step 1: Add failing live-provider and kill-switch tests**
 
 ```java
 @Test void disabledCheckoutCreatesNoAttemptOrHold() {
@@ -127,13 +127,13 @@ git commit -m "feat(payments): validate Toss live configuration"
 }
 ```
 
-- [ ] **Step 2: Run focused tests and verify current hard-coded `TOSS_TEST` failure**
+- [x] **Step 2: Run focused tests and verify current hard-coded `TOSS_TEST` failure**
 
 Run: `cd services/api; ./mvnw -Dtest=TossReservationPaymentIntegrationTest,TossPaymentAdjustmentIntegrationTest test`
 
 Expected: FAIL because checkout ignores the flag and rows are hard-coded to `TOSS_TEST`.
 
-- [ ] **Step 3: Inject environment and policy at the mutation boundary**
+- [x] **Step 3: Inject environment and policy at the mutation boundary**
 
 ```java
 public final class PaymentCheckoutPolicy {
@@ -147,17 +147,17 @@ public final class PaymentCheckoutPolicy {
 
 Call it before creating a new reservation checkout or a new `CREATE_CHECKOUT` adjustment. Do not call it from confirm, lookup, refund, cancellation, webhook reconciliation, or apply workers.
 
-- [ ] **Step 4: Replace provider literals with the environment snapshot**
+- [x] **Step 4: Replace provider literals with the environment snapshot**
 
 Use `environment.providerCode()` for inserts, lookups, compatibility checks, unique-key queries, and completed `payment_transaction` rows. Change Spring conditions so Toss services/controllers are enabled for exactly `toss-test` or `toss-live`; fake mode must still start without a Toss client.
 
-- [ ] **Step 5: Run payment and reservation-change regressions**
+- [x] **Step 5: Run payment and reservation-change regressions**
 
 Run: `cd services/api; ./mvnw -Dtest=TossPaymentsHttpClientTest,TossReservationPaymentIntegrationTest,TossPaymentAdjustmentIntegrationTest,ReservationChangeSettlementIntegrationTest,CustomerSelfServiceReservationChangeIntegrationTest test`
 
 Expected: PASS; fake tests store no Toss row and test mode still stores `TOSS_TEST`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add services/api/src/main/java/team/hotelchain/payment services/api/src/main/java/team/hotelchain/reservation/PaymentProviderSafety.java services/api/src/main/java/team/hotelchain/reservationchange services/api/src/test/java/team/hotelchain/payment/TossReservationPaymentIntegrationTest.java services/api/src/test/java/team/hotelchain/reservationchange/TossPaymentAdjustmentIntegrationTest.java
@@ -170,13 +170,15 @@ git commit -m "feat(payments): separate Toss live transactions"
 - Create: `services/api/src/main/resources/db/migration/V43__toss_live_webhook_ingress.sql`
 - Modify: `services/api/src/main/java/team/hotelchain/reservationchange/TossPaymentWebhookController.java`
 - Create: `services/api/src/main/java/team/hotelchain/payment/TossWebhookRequest.java`
-- Test: `services/api/src/test/java/team/hotelchain/payment/TossPaymentWebhookIntegrationTest.java`
+- Create: `services/api/src/main/java/team/hotelchain/payment/TossWebhookRateLimiter.java`
+- Test: `services/api/src/test/java/team/hotelchain/payment/TossWebhookRateLimiterTest.java`
+- Test: `services/api/src/test/java/team/hotelchain/reservationchange/TossPaymentAdjustmentIntegrationTest.java`
 
 **Interfaces:**
 - Produces: `POST /api/payments/toss/webhook`, max 64 KiB, accepted event `PAYMENT_STATUS_CHANGED`, response `202` for valid known/unknown orders without trusting body status
 - Produces: dedupe key `(provider, transmission_id)` and lookup key `(provider, order_id)`
 
-- [ ] **Step 1: Add failing webhook boundary tests**
+- [x] **Step 1: Add failing webhook boundary tests**
 
 ```java
 @Test void duplicateTransmissionEnqueuesOneLookup() { /* post same transmission id twice; assert one pending lookup */ }
@@ -185,40 +187,47 @@ git commit -m "feat(payments): separate Toss live transactions"
 @Test void oversizedOrUnsupportedEventIsRejected() { /* 64 KiB+1 and CANCEL_STATUS_CHANGED -> 413/400 */ }
 ```
 
-- [ ] **Step 2: Run and observe duplicate/event validation failures**
+- [x] **Step 2: Run and observe duplicate/event validation failures**
 
-Run: `cd services/api; ./mvnw -Dtest=TossPaymentWebhookIntegrationTest test`
+Run: `cd services/api; ./mvnw -Dtest=TossPaymentAdjustmentIntegrationTest test`
 
 Expected: FAIL because the current table has only `order_id` and the controller does not bind transmission metadata.
 
-- [ ] **Step 3: Add additive webhook schema**
+- [x] **Step 3: Add additive webhook schema**
 
 ```sql
 ALTER TABLE toss_webhook_lookup
-  ADD COLUMN provider VARCHAR(30) NOT NULL DEFAULT 'TOSS_TEST',
-  ADD COLUMN transmission_id VARCHAR(100),
-  ADD COLUMN event_type VARCHAR(60),
-  ADD COLUMN received_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP;
-CREATE UNIQUE INDEX toss_webhook_transmission_idx
-  ON toss_webhook_lookup(provider, transmission_id) WHERE transmission_id IS NOT NULL;
+  ADD COLUMN provider VARCHAR(30) NOT NULL DEFAULT 'TOSS_TEST';
+ALTER TABLE toss_webhook_lookup DROP CONSTRAINT toss_webhook_lookup_pkey;
+ALTER TABLE toss_webhook_lookup
+  ADD CONSTRAINT toss_webhook_lookup_pkey PRIMARY KEY (provider, order_id);
+CREATE TABLE toss_webhook_delivery (
+  id UUID PRIMARY KEY,
+  provider VARCHAR(30) NOT NULL,
+  transmission_id VARCHAR(100) NOT NULL,
+  event_type VARCHAR(60) NOT NULL,
+  order_id VARCHAR(64) NOT NULL,
+  received_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(provider, transmission_id)
+);
 ```
 
-Replace the old order-only primary-key assumption with an additive surrogate ID or a provider/order unique key without modifying V40.
+Keep deliveries immutable and separate from the coalescing lookup queue. Replace the lookup table's order-only primary key with `(provider, order_id)` without modifying V40.
 
-- [ ] **Step 4: Parse raw bytes before JSON and enqueue only authoritative lookup**
+- [x] **Step 4: Parse raw bytes before JSON and enqueue only authoritative lookup**
 
-Accept `byte[]`, reject bodies over 65,536 bytes, parse only `eventType` and `data.orderId`/`orderId`, validate `[A-Za-z0-9_-]{6,64}`, and read `tosspayments-webhook-transmission-id`. Never map `status`, amount, paymentKey, or cancellation data into reservation state.
+Accept raw bytes, reject bodies over 65,536 bytes, parse only `eventType` and `data.orderId`, validate `[A-Za-z0-9_-]{6,64}`, and read `tosspayments-webhook-transmission-id`. Add a configurable instance-wide per-second limiter and require a separate ingress limiter. Never map `status`, amount, paymentKey, or cancellation data into reservation state.
 
-- [ ] **Step 5: Run webhook and adjacent payment tests**
+- [x] **Step 5: Run webhook and adjacent payment tests**
 
-Run: `cd services/api; ./mvnw -Dtest=TossPaymentWebhookIntegrationTest,TossReservationPaymentIntegrationTest,TossPaymentAdjustmentIntegrationTest test`
+Run: `cd services/api; ./mvnw -Dtest=TossWebhookRateLimiterTest,TossReservationPaymentIntegrationTest,TossPaymentAdjustmentIntegrationTest test`
 
 Expected: PASS with one lookup for duplicate delivery and no state transition from webhook body.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
-git add services/api/src/main/resources/db/migration/V43__toss_live_webhook_ingress.sql services/api/src/main/java/team/hotelchain/payment/TossWebhookRequest.java services/api/src/main/java/team/hotelchain/reservationchange/TossPaymentWebhookController.java services/api/src/test/java/team/hotelchain/payment/TossPaymentWebhookIntegrationTest.java
+git add services/api/src/main/resources/db/migration/V43__toss_live_webhook_ingress.sql services/api/src/main/java/team/hotelchain/payment/TossWebhookRequest.java services/api/src/main/java/team/hotelchain/payment/TossWebhookRateLimiter.java services/api/src/main/java/team/hotelchain/reservationchange/TossPaymentWebhookController.java services/api/src/test/java/team/hotelchain/payment/TossWebhookRateLimiterTest.java services/api/src/test/java/team/hotelchain/reservationchange/TossPaymentAdjustmentIntegrationTest.java
 git commit -m "feat(payments): harden Toss webhook lookups"
 ```
 
@@ -228,29 +237,29 @@ git commit -m "feat(payments): harden Toss webhook lookups"
 - Create: `docs/changes/2026-09-15-toss-live-payment-core.md`
 - Modify: `docs/overview/current-development-context.md`
 
-- [ ] **Step 1: Run the focused backend gate**
+- [x] **Step 1: Run the focused backend gate**
 
-Run: `cd services/api; ./mvnw -Dtest=TossPaymentsConfigurationTest,TossPaymentsHttpClientTest,TossReservationPaymentIntegrationTest,TossPaymentWebhookIntegrationTest,TossPaymentAdjustmentIntegrationTest,ReservationChangeSettlementIntegrationTest,CustomerSelfServiceReservationChangeIntegrationTest,ReservationCancellationIntegrationTest test`
+Run: `cd services/api; ./mvnw -Dtest=TossPaymentsConfigurationTest,TossPaymentsPropertiesTest,TossPaymentsHttpClientTest,PaymentCheckoutPolicyTest,PaymentProviderSafetyTest,TossWebhookRateLimiterTest,TossLiveCheckoutDisabledIntegrationTest,TossReservationPaymentIntegrationTest,TossPaymentAdjustmentIntegrationTest,ReservationChangeSettlementIntegrationTest,CustomerSelfServiceReservationChangeIntegrationTest,CancellationIntegrationTest,CustomerReservationChangeControllerTest test`
 
 Expected: all selected tests PASS with zero failures/errors.
 
-- [ ] **Step 2: Compile and inspect migration/diff hygiene**
+- [x] **Step 2: Compile and inspect migration/diff hygiene**
 
 Run: `cd services/api; ./mvnw -DskipTests compile; cd ../..; git diff --check; git status --short`
 
 Expected: compile and diff check exit 0; `.tmp/` remains untouched.
 
-- [ ] **Step 3: Write the Korean change record**
+- [x] **Step 3: Write the Korean change record**
 
 Record exact commands/counts, provider separation, kill-switch semantics, webhook non-authority, migrations, rollback, and unverified live credentials/HTTPS delivery. Do not claim live payment or signed general-payment webhook verification.
 
-- [ ] **Step 4: Commit documentation**
+- [x] **Step 4: Commit documentation**
 
 ```bash
 git add docs/changes/2026-09-15-toss-live-payment-core.md docs/overview/current-development-context.md
 git commit -m "docs(payments): record Toss live core verification"
 ```
 
-- [ ] **Step 5: Stop before external side effects**
+- [x] **Step 5: Stop before external side effects**
 
 Do not insert live keys, enable live checkout, register a public webhook, charge a card, or issue a refund. Report the exact environment prerequisites requiring user action.
