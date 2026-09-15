@@ -74,6 +74,8 @@ class TossPaymentAdjustmentIntegrationTest {
 
     @AfterEach void clean() {
         // This database is exclusively the project's regression database.
+        jdbc.execute("delete from toss_webhook_delivery");
+        jdbc.execute("delete from toss_webhook_lookup");
         jdbc.execute("truncate table hotel, staff_member cascade");
     }
 
@@ -220,14 +222,31 @@ class TossPaymentAdjustmentIntegrationTest {
         Change change = change(100000);
         var checkout = gateway.checkout(change.session());
         var mvc = MockMvcBuilders.webAppContextSetup(context).build();
-        String body = "{\"data\":{\"orderId\":\"" + checkout.orderId() + "\",\"status\":\"DONE\"}}";
+        String body = "{\"eventType\":\"PAYMENT_STATUS_CHANGED\",\"data\":{\"orderId\":\"" + checkout.orderId() + "\",\"status\":\"DONE\"}}";
         for (int i = 0; i < 2; i++) mvc.perform(post("/api/payments/toss/webhook").contentType(MediaType.APPLICATION_JSON)
-                .header("Toss-Signature", "fake").content(body)).andExpect(status().isAccepted());
+                .header("tosspayments-webhook-transmission-id", "delivery-1").content(body)).andExpect(status().isAccepted());
         mvc.perform(post("/api/payments/toss/webhook").contentType(MediaType.APPLICATION_JSON)
-                .content("{\"data\":{\"orderId\":\"unknown\"}}")).andExpect(status().isAccepted());
+                .header("tosspayments-webhook-transmission-id", "delivery-unknown")
+                .content("{\"eventType\":\"PAYMENT_STATUS_CHANGED\",\"data\":{\"orderId\":\"unknown\"}}"))
+                .andExpect(status().isAccepted());
         assertThat(jdbc.queryForObject("select count(*) from reservation_change_outbox where command_type='QUERY'", Integer.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select count(*) from toss_webhook_delivery", Integer.class)).isEqualTo(1);
         assertThat(countCharges()).isZero();
         assertThat(statusOf(change.id())).isEqualTo("AWAITING_PAYMENT");
+    }
+
+    @Test void webhookRejectsMissingTransmissionUnsupportedEventAndOversizedBody() throws Exception {
+        var mvc = MockMvcBuilders.webAppContextSetup(context).build();
+        String valid = "{\"eventType\":\"PAYMENT_STATUS_CHANGED\",\"data\":{\"orderId\":\"unknown\"}}";
+        mvc.perform(post("/api/payments/toss/webhook").contentType(MediaType.APPLICATION_JSON).content(valid))
+                .andExpect(status().isBadRequest());
+        mvc.perform(post("/api/payments/toss/webhook").contentType(MediaType.APPLICATION_JSON)
+                .header("tosspayments-webhook-transmission-id", "delivery-event")
+                .content("{\"eventType\":\"CANCEL_STATUS_CHANGED\",\"data\":{\"orderId\":\"unknown\"}}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(post("/api/payments/toss/webhook").contentType(MediaType.APPLICATION_JSON)
+                .header("tosspayments-webhook-transmission-id", "delivery-large")
+                .content(new byte[65_537])).andExpect(status().isPayloadTooLarge());
     }
 
     @Test void webhookLookupRecoversKnownNewReservationWithoutCustomerSession() throws Exception {
@@ -237,7 +256,8 @@ class TossPaymentAdjustmentIntegrationTest {
         payments.confirm(r.id(),TOKEN,new ConfirmPaymentRequest(checkout.orderId(),"new-key",200000L));
         provider.lookupResult=key -> new ProviderPayment(key,checkout.orderId(),200000,"KRW",ProviderStatus.DONE,"new-event",null);
         MockMvcBuilders.webAppContextSetup(context).build().perform(post("/api/payments/toss/webhook").contentType(MediaType.APPLICATION_JSON)
-                .content("{\"data\":{\"orderId\":\""+checkout.orderId()+"\",\"status\":\"FAILED\"}}")).andExpect(status().isAccepted());
+                .header("tosspayments-webhook-transmission-id", "delivery-recovery")
+                .content("{\"eventType\":\"PAYMENT_STATUS_CHANGED\",\"data\":{\"orderId\":\""+checkout.orderId()+"\",\"status\":\"FAILED\"}}")).andExpect(status().isAccepted());
         context.getBean(TossPaymentWebhookController.class).processLookups();
         assertThat(payments.status(r.id(),TOKEN).status()).isEqualTo("CONFIRMED");
         assertThat(provider.confirmCalls).isEqualTo(1);

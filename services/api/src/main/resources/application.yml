@@ -35,6 +35,7 @@ payment:
     secret-key: ${TOSS_PAYMENTS_SECRET_KEY:}
     merchant-account: ${TOSS_PAYMENTS_MERCHANT_ACCOUNT:}
     customer-origin: ${PAYMENT_CUSTOMER_ORIGIN:http://127.0.0.1:4000}
+    webhook-max-per-second: ${TOSS_WEBHOOK_MAX_PER_SECOND:120}
 
 website:
   media:
