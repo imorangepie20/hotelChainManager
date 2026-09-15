@@ -38,6 +38,7 @@ payment:
     webhook-max-per-second: ${TOSS_WEBHOOK_MAX_PER_SECOND:120}
     settlement-enabled: ${TOSS_SETTLEMENT_ENABLED:false}
     settlement-page-size: ${TOSS_SETTLEMENT_PAGE_SIZE:500}
+    settlement-delay-days: ${TOSS_SETTLEMENT_DELAY_DAYS:2}
 
 website:
   media:

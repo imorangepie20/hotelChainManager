@@ -153,8 +153,9 @@ public class TossPaymentAdjustmentGateway implements PaymentAdjustmentGateway {
             if(result!=null && result.status()==ProviderStatus.FAILED)state=GatewayResultStatus.FAILED;
             if(result!=null && result.status()==ProviderStatus.DONE && Objects.equals(row.get("payment_key"),result.paymentKey())
                     && Objects.equals(row.get("order_id"),result.orderId()) && (long)row.get("amount_krw")==result.amountKrw()
-                    && "KRW".equals(result.currency()) && properties.merchantAccount().equals(row.get("merchant_account")))state=GatewayResultStatus.SUCCEEDED;
-            String event=state==GatewayResultStatus.SUCCEEDED?"toss-charge:"+row.get("payment_key"):null;
+                    && "KRW".equals(result.currency()) && properties.merchantAccount().equals(row.get("merchant_account"))
+                    && result.transactionKey()!=null && !result.transactionKey().isBlank())state=GatewayResultStatus.SUCCEEDED;
+            String event=state==GatewayResultStatus.SUCCEEDED?result.transactionKey():null;
             jdbc.update("update toss_adjustment_order set status=?,provider_event_id=?,updated_at=? where attempt_id=?",state.name(),event,Timestamp.from(clock.instant()),attempt);
             jdbc.update("update payment_adjustment_attempt set gateway_transaction_id=? where id=?",row.get("payment_key"),attempt);
             return new GatewayAdjustmentResult(event,(String)row.get("payment_key"),state,null,null);

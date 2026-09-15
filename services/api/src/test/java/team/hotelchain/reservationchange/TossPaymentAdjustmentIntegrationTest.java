@@ -73,10 +73,16 @@ class TossPaymentAdjustmentIntegrationTest {
     }
 
     @AfterEach void clean() {
-        // This database is exclusively the project's regression database.
         jdbc.execute("delete from toss_webhook_delivery");
         jdbc.execute("delete from toss_webhook_lookup");
-        jdbc.execute("truncate table hotel, staff_member cascade");
+        jdbc.execute("truncate table reservation cascade");
+        jdbc.execute("truncate table staff_session");
+        jdbc.update("delete from inventory_day where room_type_id=?", ROOM);
+        jdbc.update("delete from rate_day where rate_plan_id=?", RATE);
+        jdbc.update("delete from rate_plan where id=?", RATE);
+        jdbc.update("delete from room_type where id=?", ROOM);
+        jdbc.update("delete from hotel where id=?", HOTEL);
+        jdbc.update("delete from staff_member where id=?", STAFF);
     }
 
     @Test void checkoutDoesNotCompleteChangeAndConfirmationUsesStoredAmountOnce() {
@@ -93,6 +99,8 @@ class TossPaymentAdjustmentIntegrationTest {
         assertThat(provider.confirmCalls - before).isEqualTo(1);
         assertThat(statusOf(change.id())).isEqualTo("READY_TO_APPLY");
         assertThat(countCharges()).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select provider_event_id from toss_adjustment_order where attempt_id=?",
+                String.class, change.attempt())).isEqualTo("event-change-key");
         assertThat(jdbc.queryForMap("select provider, merchant_account, gateway_transaction_id from payment_transaction where transaction_type='CHANGE_CHARGE'"))
                 .containsEntry("provider", "TOSS_TEST").containsEntry("merchant_account", "hotel-test")
                 .containsEntry("gateway_transaction_id", "change-key");

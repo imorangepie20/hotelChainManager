@@ -22,13 +22,15 @@ public class TossSettlementWorker {
     private final TossSettlementClient client;
     private final Clock clock;
     private final int maxAttempts;
+    private final TossSettlementReconciliationService reconciliation;
 
     public TossSettlementWorker(JdbcTemplate jdbc, TransactionTemplate transactions,
-            TossSettlementClient client, Clock clock,
+            TossSettlementClient client, TossSettlementReconciliationService reconciliation, Clock clock,
             @Value("${payment.toss.settlement-max-attempts:5}") int maxAttempts) {
         this.jdbc = jdbc;
         this.transactions = transactions;
         this.client = client;
+        this.reconciliation = reconciliation;
         this.clock = clock;
         this.maxAttempts = maxAttempts;
     }
@@ -44,7 +46,11 @@ public class TossSettlementWorker {
         if (claim == null) return false;
         try {
             SettlementPage page = client.fetch(claim.soldDate(), claim.page(), claim.pageSize());
-            transactions.executeWithoutResult(status -> complete(claim, page));
+            boolean finalPage = Boolean.TRUE.equals(transactions.execute(status -> complete(claim, page)));
+            if (finalPage) {
+                reconciliation.reconcile(claim.id(), claim.token());
+                transactions.executeWithoutResult(status -> succeed(claim, page.records().size()));
+            }
         } catch (SettlementException exception) {
             transactions.executeWithoutResult(status -> fail(claim, exception.code(), exception.retryable()));
         } catch (RuntimeException exception) {
@@ -73,8 +79,8 @@ public class TossSettlementWorker {
         return candidate;
     }
 
-    private void complete(Claim claim, SettlementPage page) {
-        if (!owns(claim)) return;
+    private boolean complete(Claim claim, SettlementPage page) {
+        if (!owns(claim)) return false;
         for (SettlementRecord record : page.records()) insert(claim.id(), record);
         if (page.hasNext()) {
             jdbc.update("""
@@ -83,17 +89,12 @@ public class TossSettlementWorker {
                         attempt_count=0,next_attempt_at=?,updated_at=? where id=? and claim_token=?
                     """, page.records().size(), Timestamp.from(clock.instant()), Timestamp.from(clock.instant()),
                     claim.id(), claim.token());
-            return;
+            return false;
         }
         LocalDate to = jdbc.queryForObject("select sold_date_to from toss_settlement_run where id=?", LocalDate.class, claim.id());
         LocalDate next = claim.soldDate().plusDays(1);
         if (next.isAfter(to)) {
-            jdbc.update("""
-                    update toss_settlement_run set status='SUCCEEDED',snapshot_count=snapshot_count+?,
-                        attempt_count=0,claim_token=null,lease_expires_at=null,completed_at=?,updated_at=?
-                    where id=? and claim_token=?
-                    """, page.records().size(), Timestamp.from(clock.instant()), Timestamp.from(clock.instant()),
-                    claim.id(), claim.token());
+            return true;
         } else {
             jdbc.update("""
                     update toss_settlement_run set status='PENDING',current_sold_date=?,current_page=1,
@@ -101,7 +102,17 @@ public class TossSettlementWorker {
                         attempt_count=0,next_attempt_at=?,updated_at=? where id=? and claim_token=?
                     """, next, page.records().size(), Timestamp.from(clock.instant()), Timestamp.from(clock.instant()),
                     claim.id(), claim.token());
+            return false;
         }
+    }
+
+    private void succeed(Claim claim, int snapshotCount) {
+        jdbc.update("""
+                update toss_settlement_run set status='SUCCEEDED',snapshot_count=snapshot_count+?,
+                    attempt_count=0,claim_token=null,lease_expires_at=null,completed_at=?,updated_at=?
+                where id=? and claim_token=? and status='PROCESSING'
+                """, snapshotCount, Timestamp.from(clock.instant()), Timestamp.from(clock.instant()),
+                claim.id(), claim.token());
     }
 
     private void insert(UUID runId, SettlementRecord record) {

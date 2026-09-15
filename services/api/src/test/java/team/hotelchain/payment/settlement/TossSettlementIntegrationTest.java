@@ -61,6 +61,7 @@ class TossSettlementIntegrationTest {
         assertThat(count("toss_settlement_snapshot")).isEqualTo(2);
         assertThat(status(first)).isEqualTo("SUCCEEDED");
         assertThat(status(second)).isEqualTo("SUCCEEDED");
+        assertThat(count("toss_settlement_reconciliation")).isEqualTo(4);
     }
 
     @Test

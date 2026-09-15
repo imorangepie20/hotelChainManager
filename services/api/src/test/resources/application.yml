@@ -3,6 +3,9 @@ spring:
     url: ${TEST_DATABASE_URL:jdbc:postgresql://localhost:55433/hotel_chain_test}
     username: ${TEST_DATABASE_USER:hotel_test}
     password: ${TEST_DATABASE_PASSWORD:hotel_test}
+    hikari:
+      maximum-pool-size: 4
+      minimum-idle: 0
 
 test-payment:
   enabled: true

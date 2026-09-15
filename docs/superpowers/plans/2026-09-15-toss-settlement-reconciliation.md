@@ -159,10 +159,10 @@ git commit -m "feat(settlement): persist resumable Toss snapshots"
 - Test: `services/api/src/test/java/team/hotelchain/payment/settlement/TossSettlementReconciliationIntegrationTest.java`
 
 **Interfaces:**
-- Produces: `TossSettlementReconciliationService.reconcile(UUID runId): ReconciliationSummary`
+- Produces: `TossSettlementReconciliationService.reconcile(UUID runId, UUID claimToken): ReconciliationSummary`
 - Produces statuses: `MATCHED`, `AMOUNT_MISMATCH`, `FEE_MISMATCH`, `MISSING_INTERNAL`, `MISSING_PROVIDER`, `PENDING`
 
-- [ ] **Step 1: Write one failing test per classification**
+- [x] **Step 1: Write one failing test per classification**
 
 ```java
 @ParameterizedTest
@@ -178,27 +178,27 @@ void classifies_without_mutating_financial_ledgers(Fixture fixture, String expec
 
 Cases must cover: matching approval by `payment_provider_attempt.provider_event_id`; matching reservation-change approval by `toss_adjustment_order.provider_event_id`; matching refund by `toss_refund_command.provider_event_id`; provider amount mismatch; `sum(fees[].fee) != supplyAmount + vat` or payout identity mismatch as `FEE_MISMATCH`; provider-only row; finalized internal-only row; and a row inside the configured delay window as `PENDING`.
 
-- [ ] **Step 2: Run and confirm no reconciliation rows are produced**
+- [x] **Step 2: Run and confirm no reconciliation rows are produced**
 
 Run: `cd services/api; ./mvnw -Dtest=TossSettlementReconciliationIntegrationTest test`
 
 Expected: FAIL because `TossSettlementReconciliationService` does not exist.
 
-- [ ] **Step 3: Implement deterministic reconciliation**
+- [x] **Step 3: Implement deterministic reconciliation**
 
 Match approvals by provider `TOSS_LIVE`, MID, paymentKey and approval transactionKey. Match refunds by MID, paymentKey and refund transactionKey; compare the absolute provider cancellation amount to command amount. `MISSING_PROVIDER` applies only to succeeded internal events older than `payment.toss.settlement-delay-days` and within the run range; newer candidates are `PENDING`. Store a new immutable result set per run using stable keys, aggregate counts on the run, and never update reservations, inventory, payment transactions, attempts or refund commands.
 
-- [ ] **Step 4: Invoke reconciliation only after full ingestion**
+- [x] **Step 4: Invoke reconciliation only after full ingestion**
 
-After the final date/page is durably stored, call `reconcile(runId)` in a new transaction and set the run to `SUCCEEDED` only after results and summary counts commit. Retrying the final step must replace only the incomplete current run's derived rows, never provider snapshots or prior successful run history.
+After the final date/page is durably stored, call `reconcile(runId, claimToken)` in a new transaction and set the run to `SUCCEEDED` only after results and summary counts commit. Retrying the final step must replace only the incomplete current run's derived rows, never provider snapshots or prior successful run history.
 
-- [ ] **Step 5: Run reconciliation and payment regressions**
+- [x] **Step 5: Run reconciliation and payment regressions**
 
 Run: `cd services/api; ./mvnw -Dtest=TossSettlementReconciliationIntegrationTest,TossSettlementIntegrationTest,TossReservationPaymentIntegrationTest,TossPaymentAdjustmentIntegrationTest,CancellationIntegrationTest test`
 
 Expected: PASS with every status classification and unchanged financial ledgers.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add services/api/src/main/java/team/hotelchain/payment/settlement services/api/src/test/java/team/hotelchain/payment/settlement

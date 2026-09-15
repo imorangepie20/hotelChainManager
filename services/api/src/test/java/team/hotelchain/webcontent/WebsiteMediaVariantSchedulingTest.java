@@ -23,6 +23,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import team.hotelchain.config.TimeConfiguration;
 import team.hotelchain.payment.ReservationExpiryJob;
 import team.hotelchain.payment.ReservationExpiryService;
+import team.hotelchain.webcontent.storage.WebsiteMediaStorageGateway;
 
 class WebsiteMediaVariantSchedulingTest {
     @TempDir Path storage;
@@ -37,10 +38,13 @@ class WebsiteMediaVariantSchedulingTest {
         AtomicReference<Thread> expiryThread = new AtomicReference<>();
         WebsiteMediaVariantService variants = mock(WebsiteMediaVariantService.class);
         WebsiteMediaVariantEncoder encoder = mock(WebsiteMediaVariantEncoder.class);
+        WebsiteMediaStorageGateway mediaStorage = mock(WebsiteMediaStorageGateway.class);
         ReservationExpiryService expiry = mock(ReservationExpiryService.class);
         var claim = new WebsiteMediaVariantService.VariantClaim(
                 UUID.randomUUID(), UUID.randomUUID(), 640, "source.png", 1, UUID.randomUUID());
         when(variants.claimNext()).thenReturn(Optional.of(claim)).thenReturn(Optional.empty());
+        when(mediaStorage.materialize(any(String.class), any(Path.class)))
+                .thenReturn(storage.resolve("source.png"));
         when(encoder.encode(any(Path.class), any(Path.class), anyInt())).thenAnswer(invocation -> {
             encodingThread.set(Thread.currentThread());
             encodingStarted.countDown();
@@ -60,6 +64,7 @@ class WebsiteMediaVariantSchedulingTest {
                 .withUserConfiguration(TimeConfiguration.class, WebsiteMediaVariantJob.class, ReservationExpiryJob.class)
                 .withBean(WebsiteMediaVariantService.class, () -> variants)
                 .withBean(WebsiteMediaVariantEncoder.class, () -> encoder)
+                .withBean(WebsiteMediaStorageGateway.class, () -> mediaStorage)
                 .withBean(ReservationExpiryService.class, () -> expiry)
                 .withPropertyValues("reservation.expiry-job-enabled=true", "reservation.expiry-scan-delay=10ms",
                         "website.media.variant-scan-delay=10ms", "website.media.storage-dir=" + storage)
