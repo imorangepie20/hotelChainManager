@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import team.hotelchain.payment.settlement.TossSettlementClient;
 
 class TossPaymentsConfigurationTest {
     private final ApplicationContextRunner context = new ApplicationContextRunner()
@@ -20,6 +21,7 @@ class TossPaymentsConfigurationTest {
                 .run(result -> {
                     assertThat(result).hasNotFailed();
                     assertThat(result).hasSingleBean(TossPaymentsClient.class);
+                    assertThat(result).hasSingleBean(TossSettlementClient.class);
                     assertThat(result.getBean(TossPaymentEnvironment.class)).isEqualTo(TossPaymentEnvironment.LIVE);
                 });
     }
@@ -31,6 +33,7 @@ class TossPaymentsConfigurationTest {
                     assertThat(result).hasNotFailed();
                     assertThat(result).doesNotHaveBean(TossPaymentsClient.class);
                     assertThat(result).doesNotHaveBean(TossPaymentEnvironment.class);
+                    assertThat(result).doesNotHaveBean(TossSettlementClient.class);
                 });
     }
 }
