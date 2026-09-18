@@ -4,7 +4,7 @@ import { ApiFailure, api, type CustomerChangeQuote, type Offer, type Reservation
 import { BookingSessionStore } from '../lib/booking-session'
 import { StayDatePicker } from './stay-date-picker'
 import { GuestSelector } from './guest-selector'
-import { changeAction } from '../lib/reservation-change-state'
+import { changeSettlementDestination } from '../lib/reservation-change-state'
 import { changeText } from '../lib/reservation-change-copy'
 
 type Props = { reservationId: string; locale?: 'ko' | 'en' }
@@ -41,8 +41,17 @@ export function ReservationChangePage({ reservationId, locale = 'ko' }: Props) {
   }, [reservationId])
 
   function message(reason: unknown) {
-    if (reason instanceof ApiFailure && reason.code === 'PRICE_CHANGED') return changeText(locale, 'priceChanged')
-    return reason instanceof ApiFailure ? reason.message : (locale === 'ko' ? '요청을 처리하지 못했습니다.' : 'We could not process the request.')
+    if (!(reason instanceof ApiFailure)) return locale === 'ko' ? '요청을 처리하지 못했습니다.' : 'We could not process the request.'
+    switch (reason.code) {
+      case 'PRICE_CHANGED': return changeText(locale, 'priceChanged')
+      case 'RESERVATION_REVISION_CONFLICT': return changeText(locale, 'reservationChanged')
+      case 'SOLD_OUT': return changeText(locale, 'soldOut')
+      case 'RESERVATION_CHANGE_ACTIVE': return changeText(locale, 'changeActive')
+      case 'CHANGE_SETTLEMENT_DISABLED': return changeText(locale, 'settlementDisabled')
+      case 'PAYMENT_PROVIDER_ACTION_UNSUPPORTED': return changeText(locale, 'providerUnsupported')
+      case 'PAYMENT_TRANSACTION_NOT_SETTLEABLE': return changeText(locale, 'refundUnavailable')
+      default: return reason.message
+    }
   }
   function showError(reason: unknown) { setError(message(reason)); requestAnimationFrame(() => alert.current?.focus()) }
 
@@ -65,7 +74,7 @@ export function ReservationChangePage({ reservationId, locale = 'ko' }: Props) {
         quoteId: quote.quoteId, roomTypeId: offer.roomTypeId, ratePlanId: offer.ratePlanId, expectedTotal: offer.total,
       })
       sessionStorage.removeItem(storageKey)
-      if (changeAction(result.status) === 'PAY') {
+      if (changeSettlementDestination(result.status) === 'PAYMENT') {
         sessionStorage.removeItem('tossChangeStarted')
         window.location.assign(locale === 'en' ? '/en/reservation-change-payment' : '/reservation-change-payment')
       }

@@ -597,6 +597,7 @@ public class ReservationChangeSettlementService {
         return transaction;
     }
 
+
     private boolean replaceableAttempt(UUID requestId) {
         return Boolean.TRUE.equals(jdbc.queryForObject("""
                 select exists(

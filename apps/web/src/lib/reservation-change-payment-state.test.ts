@@ -25,6 +25,12 @@ expectEqual(expired.kind, 'EXPIRED', '만료 상태를 화면에 남긴다')
 expectEqual(expired.canCheckout, false, '만료 링크는 결제를 차단한다')
 expectEqual(shouldPollReservationChangePayment(expired.kind), false, '만료 뒤 timer를 멈춘다')
 
+const refundPending = describeReservationChangePayment({ ...change, status: 'REFUND_PENDING', differenceKrw: -100000 })
+expectEqual(refundPending.kind, 'REFUND_PENDING', '서버 환불 처리 중 상태를 유지한다')
+expectEqual(refundPending.canCheckout, false, '환불 처리 중에는 결제를 시작하지 않는다')
+expectEqual(refundPending.direction, 'REFUND', '음수 차액의 환불 방향을 의미값으로 유지한다')
+expectEqual(shouldPollReservationChangePayment(refundPending.kind), true, '환불 처리 중에는 완료 상태를 다시 확인한다')
+
 const unknown = describeReservationChangePayment({ ...change, status: 'RECONCILIATION_REQUIRED' })
 expectEqual(unknown.kind, 'RECONCILIATION_REQUIRED', '불명확 결과를 성공으로 바꾸지 않는다')
 expectEqual(unknown.canCheckout, false, '조정 필요 상태는 결제를 차단한다')
@@ -54,6 +60,7 @@ expectEqual(canRecoverChangePayment(true, null, false, undefined), true, '초기
 expectEqual(canRecoverChangePayment(false, 'toss-test', true, undefined), true, '이전 Toss 조회 상태가 있으면 상세 로딩 실패 후에도 복구한다')
 expectEqual(canRecoverChangePayment(false, 'fake', false, 'AWAITING_PAYMENT'), false, 'fake 결제에 Toss 복구를 표시하지 않는다')
 expectEqual(canRecoverChangePayment(true, 'toss-test', true, 'COMPLETED'), false, '확인된 완료 화면은 결과 동선을 사용한다')
+expectEqual(canRecoverChangePayment(true, 'toss-test', false, 'REFUND_PENDING'), false, '환불 처리 중에는 결제 창 복구를 표시하지 않는다')
 
 expectEqual(canRecoverChangePayment(false, 'toss-test', false, undefined), true, '새로고침 후 최초 status 실패에도 알려진 Toss provider로 복구한다')
 expectEqual(canRecoverChangePayment(false, 'toss-live', false, undefined), true, '운영 Toss provider도 서버 상태 복구를 지원한다')

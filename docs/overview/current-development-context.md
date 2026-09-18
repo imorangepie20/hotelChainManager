@@ -10,7 +10,28 @@
 
 
 
-최종 갱신: 2026-09-15
+최종 갱신: 2026-09-18
+
+## origin/main 병합 및 고객 예약 변경 작업 통합 (2026-09-18)
+
+- 로컬 `main`이 `origin/main`보다 13개 커밋 뒤처져 있었다. Toss 라이브 결제·정산 조정(`V43`, `V44`, `TossSettlementWorker`)과 고객 변경 결제 복구 강화를 받았다.
+- 진행 중이던 고객 예약 변경 변경 3종과 같은 파일·같은 줄이 충돌해 작업 트리를 stash로 보관한 뒤 fast-forward 병령하고 stash를 복원해 3개 충돌을 수동으로 해결했다. 업스트림의 `toss-live` provider 지원과 내 `REFUND_PENDING` 동선을 모두 유지했다.
+- 복원 과정의 손상 2건을 수정했다. `ReservationChangeSettlementService.java`의 중복 `lockRefundableTransaction` 정의를 제거하고, `reservation-change-payment-page.tsx`의 잘못된 토큰을 제거했다.
+- `.gitignore`에 `.tmp/`를 추가하고 참조하지 않는 2.6MB 임시 이미지를 삭제했으며 `README.md`를 UTF-16에서 UTF-8로 교체해 git이 바이너리로 취급하던 문제를 풀었다.
+- API compile·test-compile, `CustomerSelfServiceReservationChangeIntegrationTest` 6건, `ReservationChangeSettlementIntegrationTest` 10건, 웹 계약 테스트 25종·TypeScript·production build가 종료 코드 0이다. 작업 트리에만 있고 커밋하지 않았다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-18-origin-main-merge-integration.md)을 따른다.
+
+## 고객 예약 변경 0원·환불 동선 안내 (2026-09-18)
+
+- 고객이 직접 예약을 변경할 때 차액이 없거나 환불이 발생하면 추가 결제 화면이 아닌 예약 상세로 보내도록 수정했다. 해당 화면의 세션과 결제 버튼은 추가 결제 시도에만 발급되므로 0원·환불 변경은 진행 상태를 알기 어려웠다.
+- `changeSettlementDestination`이 `AWAITING_PAYMENT`만 결제 화면으로 구분하고, `REFUND_PENDING`·`READY_TO_APPLY`는 예약 상세에서 폴링한다. 결제 화면은 `REFUND_PENDING` 상태를 표시하고 폴링하며, 환불 중에는 결제 창 복구 버튼을 숨기고 예약 상세 링크를 제공한다.
+- 고객 변경 시작 거부 코드 6종(매진·가격 변경·진행 중 변경·정산 비활성화·결제 수단 미지원·환불 내역 부족)을 한국어·영어 행동 안내로 매핑했다.
+- 웹 계약 테스트 25종·TypeScript·production build, API compile과 `CustomerSelfServiceReservationChangeIntegrationTest` 6건이 종료 코드 0이다. 작업 트리에만 있고 커밋하지 않았다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-18-customer-change-zero-refund-destination.md)을 따른다. 브라우저와 실제 Toss 운영 결제 검증은 사용자가 수행한다.
+
+## 고객 예약 변경 환불 대상 거래 선택 (2026-09-18)
+
+- 고객이 직접 예약을 변경해 차액 환불이 발생할 때 환불 대상을 항상 원결제로 고정하던 문제를 수정했다. 원결제가 이미 부분 환불돼 잔액이 부족하고 뒤이은 변경 추가 결제에 잔액이 있으면, 해당 추가 결제 거래를 환불 대상으로 선택한다.
+- `ReservationChangeSettlementService`의 `lockRefundableTransaction`이 `ORIGINAL_CHARGE`·`CHANGE_CHARGE` 후보 중 잔액이 충분한 최신 거래를 `for update`로 선택한다. 공급자·통화·상점·게이트웨이 일치 검증과 활성 공급자 호환 확인은 유지한다.
+- `CustomerSelfServiceReservationChangeIntegrationTest` 6건, 웹 계약 테스트 25종, TypeScript 검사와 production build가 종료 코드 0이다. 작업 트리에만 있고 커밋하지 않았다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-18-customer-change-refund-target-selection.md)을 따른다. 브라우저와 실제 Toss 운영 결제 검증은 사용자가 수행한다.
 
 ## 고객 예약 최종 리뷰 보완 (2026-09-15)
 

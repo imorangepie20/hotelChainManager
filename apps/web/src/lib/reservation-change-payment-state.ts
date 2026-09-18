@@ -6,6 +6,7 @@ export type ReservationChangePaymentStatus =
   | 'CANCELLED'
   | 'EXPIRED'
   | 'RECONCILIATION_REQUIRED'
+  | 'REFUND_PENDING'
 
 export type ReservationChangePaymentState = {
   status: string
@@ -28,7 +29,7 @@ export function describeReservationChangePayment(payment: ReservationChangePayme
 }
 
 export function shouldPollReservationChangePayment(status: string) {
-  return status === 'AWAITING_PAYMENT' || status === 'READY_TO_APPLY' || status === 'APPLYING'
+  return status === 'AWAITING_PAYMENT' || status === 'READY_TO_APPLY' || status === 'APPLYING' || status === 'REFUND_PENDING'
 }
 
 export function customerPaymentFailureStatus(status: number) {
@@ -42,7 +43,7 @@ export function customerPaymentFailureMessage(locale: 'ko' | 'en') {
 }
 
 function isCustomerPaymentStatus(status: string): status is ReservationChangePaymentStatus {
-  return ['AWAITING_PAYMENT', 'READY_TO_APPLY', 'APPLYING', 'COMPLETED', 'CANCELLED', 'EXPIRED', 'RECONCILIATION_REQUIRED'].includes(status)
+  return ['AWAITING_PAYMENT', 'READY_TO_APPLY', 'APPLYING', 'COMPLETED', 'CANCELLED', 'EXPIRED', 'RECONCILIATION_REQUIRED', 'REFUND_PENDING'].includes(status)
 }
 
 export function changePaymentStatusForDisplay(changeStatus: string, paymentStatus?: string): string {
@@ -53,5 +54,8 @@ export function changePaymentStatusForDisplay(changeStatus: string, paymentStatu
 }
 
 export function canRecoverChangePayment(returnedFromToss: boolean, provider: string | null, hasTossState: boolean, changeStatus?: string): boolean {
-  return changeStatus !== 'COMPLETED' && (returnedFromToss || ((provider === 'toss-test' || provider === 'toss-live') && (hasTossState || changeStatus === undefined)))
+  // 결제 창을 떠난 뒤거나 Toss provider가 설정된 경우에만 서버 상태 재조회를 허용한다.
+  // 0원·환불 변경은 결제 창이 없으므로 이 화면의 복구 동선에서 제외한다.
+  if (changeStatus === 'REFUND_PENDING' || changeStatus === 'COMPLETED') return false
+  return returnedFromToss || ((provider === 'toss-test' || provider === 'toss-live') && (hasTossState || changeStatus === undefined))
 }
