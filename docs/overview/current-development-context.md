@@ -10,7 +10,14 @@
 
 
 
-최종 갱신: 2026-09-18
+최종 갱신: 2026-09-19
+
+## 중단 작업 복구 확인 (2026-09-19)
+
+- 이전 세션의 작업은 `0d5df51` 커밋으로 이미 완료돼 있었다. 남아 있던 `wip-customer-change-zero-refund-and-docs` 스태시는 병합 이전 상태 기반이라 내용이 커밋에 포함됐는지 파일별로 대조한 뒤 삭제했다.
+- 3개 변경 기록 문서의 상태 줄을 `작업 트리에만 있고 커밋하지 않은 상태`에서 `0d5df51`로 커밋됨`으로 바로잡았다.
+- 중단 전 검증을 현재 HEAD에서 다시 실행해 종료 코드 0을 확인했다. 웹 계약 테스트 25종·`tsc -b`, API `mvnw compile`·`CustomerSelfServiceReservationChangeIntegrationTest` 6건(오류 0). Vite production build, `ReservationChangeSettlementIntegrationTest`, Playwright 브라우저 회귀, 라이브 PostgreSQL 개발 DB는 실행하지 않았다.
+- `.gitattributes` 한글 주석이 드라이브에 깨진 UTF-8로 내려와 있어 올바른 UTF-8로 다시 썼다. git blob은 정상 UTF-8이므로 작업 트리만 교체했다.
 
 ## origin/main 병합 및 고객 예약 변경 작업 통합 (2026-09-18)
 
@@ -334,27 +341,15 @@
 
 
 
-
-
 ## 다음 작업
 
-
-
-
-
-1. Toss `GET /v1/settlements` 기반 immutable snapshot·내부 거래 대사·본사 읽기 전용 운영 화면을 구현하고, 실제 라이브 거래가 자료에 나타난 뒤 외부 대사를 검증한다.
-
-
-
+1. Toss `GET /v1/settlements` 기반 본사 읽기 전용 정산·대사 운영 화면을 구현한다. 서버 snapshot·내부 거래 대사(`TossSettlementWorker`, `TossSettlementReconciliationService`)는 구현됐으므로, 본사가 대사 결과와 불일치 항목을 읽기 전용으로 확인하는 관리자 화면을 연결한다. 실제 라이브 거래가 자료에 나타난 뒤 외부 대사를 검증한다.
 
 2. 저장 초안 미리보기의 실제 10분 만료 시간 경과 검증을 추가한다.
 
-- 2026-09-11: 사용자는 롯데리조트 속초 수준의 객실·다이닝·부대시설·프로모션 운영을 CMS 목표로 재확인했다. 구현을 추가하기 전에 콘텐츠 유형·트리·블록·도메인 연결·번역·검토·발행·SEO를 다시 정의했고, [설계 문서](../architecture/lotte-resort-level-cms-functional-design.md)와 [목표 구조도](../architecture/lotte-resort-cms-target.html)를 작성했다. 이후 구현은 이 설계를 기준으로 기능 단위 계획을 작성한 뒤 진행한다.
-
-
-
-
 3. AI 도우미의 LLM·정책 임베딩과 고객 대화의 영구 E2E suite를 추가한다.
+
+- 2026-09-11: 사용자는 롯데리조트 속초 수준의 객실·다이닝·부대시설·프로모션 운영을 CMS 목표로 재확인했다. 구현을 추가하기 전에 콘텐츠 유형·트리·블록·도메인 연결·번역·검토·발행·SEO를 다시 정의했고, [설계 문서](../architecture/lotte-resort-level-cms-functional-design.md)와 [목표 구조도](../architecture/lotte-resort-cms-target.html)를 작성했다. 이후 구현은 이 설계를 기준으로 기능 단위 계획을 작성한 뒤 진행한다.
 
 
 
