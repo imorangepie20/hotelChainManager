@@ -1221,3 +1221,91 @@ export function getWebsitePageVersionComparison(token: string, pageId: string, b
   const query = new URLSearchParams({ baseVersion: String(baseVersion), compareVersion: String(compareVersion) });
   return contentRequest<WebsitePageVersionComparison>(`/api/staff/website/pages/${pageId}/versions/compare?${query}`, token);
 }
+
+export type SettlementRunStatus = "PENDING" | "PROCESSING" | "SUCCEEDED" | "FAILED";
+
+export type SettlementRunSummary = {
+  id: string;
+  provider: string;
+  merchantAccount: string;
+  soldDateFrom: string;
+  soldDateTo: string;
+  status: SettlementRunStatus;
+  currentSoldDate: string;
+  currentPage: number;
+  pageSize: number;
+  snapshotCount: number;
+  matchedCount: number;
+  mismatchCount: number;
+  pendingCount: number;
+  attemptCount: number;
+  nextAttemptAt: string | null;
+  errorCode: string | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+};
+
+export type SettlementRunsView = {
+  runs: SettlementRunSummary[];
+  serverAt: string;
+};
+
+export type ReconciliationRow = {
+  id: string;
+  runId: string;
+  reconciliationKey: string;
+  snapshotId: string | null;
+  paymentTransactionId: string | null;
+  refundCommandId: string | null;
+  status: string;
+  expectedAmountKrw: number | null;
+  providerAmountKrw: number | null;
+  feeKrw: number | null;
+  feeSupplyKrw: number | null;
+  feeVatKrw: number | null;
+  payoutKrw: number | null;
+  detailCode: string | null;
+  snapshotOrderId: string | null;
+  snapshotPaymentKey: string | null;
+  snapshotTransactionKey: string | null;
+  snapshotMethod: string | null;
+  snapshotCancellation: boolean | null;
+  snapshotSoldDate: string | null;
+  createdAt: string;
+};
+
+export type SettlementRunDetailView = {
+  run: SettlementRunSummary | null;
+  rows: ReconciliationRow[];
+  serverAt: string;
+};
+
+export async function getSettlementRuns(token: string, limit = 20): Promise<SettlementRunsView> {
+  const response = await fetch(`/api/staff/settlements/runs?limit=${limit}`, {
+    headers: { "X-Staff-Session": token },
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(error.message ?? "정산 실행 목록을 불러오지 못했습니다.", response.status, error.code);
+  }
+  return response.json() as Promise<SettlementRunsView>;
+}
+
+export async function getSettlementRun(
+  token: string,
+  runId: string,
+  filters: { status?: string; limit?: number } = {},
+): Promise<SettlementRunDetailView> {
+  const searchParams = new URLSearchParams();
+  if (filters.status?.trim()) searchParams.set("status", filters.status.trim());
+  if (filters.limit) searchParams.set("limit", String(filters.limit));
+  const response = await fetch(`/api/staff/settlements/runs/${runId}?${searchParams}`, {
+    headers: { "X-Staff-Session": token },
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(error.message ?? "정산 대사 내역을 불러오지 못했습니다.", response.status, error.code);
+  }
+  return response.json() as Promise<SettlementRunDetailView>;
+}

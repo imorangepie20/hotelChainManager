@@ -12,6 +12,13 @@
 
 최종 갱신: 2026-09-19
 
+## 본사 읽기 전용 정산·대사 조회 (2026-09-19)
+
+- 토스 정산 snapshot·내부 거래 대사 결과를 본사 관리자가 읽기 전용으로 확인하는 API와 관리자 화면을 추가했다. 서버의 정산·결제·재고 변경 동작은 그대로 두고 조회만 연결했다.
+- `TossSettlementQueryService`·`TossSettlementController`가 `GET /api/staff/settlements/runs`·`GET /api/staff/settlements/runs/{runId}`를 제공한다. SELECT만 사용하고, `limit`은 runs 1~100·rows 1~500으로 고정하며, `status` 필터는 허용된 6개 대사 상태만 받는다. 본사 관리자 세션만 `requireHeadquarters`로 통과한다.
+- 관리자 `/dashboard/settlements`에 실행 목록 카드, 실행 상세의 요약·상태 필터·대사 표, 새로고침을 구현했다. `nav.ts`의 "재무" 그룹은 `HQ_ADMIN` 메뉴에만 노출된다.
+- `TossSettlementQueryIntegrationTest` 7건, 같은 실행에서 기존 settlement 4건·변경 정산 16건이 종료 코드 0이다. API `compile`·`test-compile`, 관리자 `tsc --noEmit`과 `eslint`(에러 0·경고 3건), 웹 `tsc -b`도 종료 코드 0이다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-19-hq-settlement-reconciliation-view.md)을 따른다. 라이브 정산 환경에서의 브라우저 확인은 사용자가 수행한다.
+
 ## 중단 작업 복구 확인 (2026-09-19)
 
 - 이전 세션의 작업은 `0d5df51` 커밋으로 이미 완료돼 있었다. 남아 있던 `wip-customer-change-zero-refund-and-docs` 스태시는 병합 이전 상태 기반이라 내용이 커밋에 포함됐는지 파일별로 대조한 뒤 삭제했다.
@@ -343,7 +350,7 @@
 
 ## 다음 작업
 
-1. Toss `GET /v1/settlements` 기반 본사 읽기 전용 정산·대사 운영 화면을 구현한다. 서버 snapshot·내부 거래 대사(`TossSettlementWorker`, `TossSettlementReconciliationService`)는 구현됐으므로, 본사가 대사 결과와 불일치 항목을 읽기 전용으로 확인하는 관리자 화면을 연결한다. 실제 라이브 거래가 자료에 나타난 뒤 외부 대사를 검증한다.
+1. Toss `GET /v1/settlements` 기반 정산·대사의 본사 읽기 전용 화면을 완료했다. 다음은 정산 실행 생성·재시도를 본사가 직접 요청할 수 있는 동작과, 실제 라이브 거래가 자료에 나타난 뒤 외부 대사를 검증하는 것이다.
 
 2. 저장 초안 미리보기의 실제 10분 만료 시간 경과 검증을 추가한다.
 

@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { CalendarDays, ClipboardCheck, Globe, LayoutDashboard } from "lucide-react";
+import { CalendarDays, ClipboardCheck, Globe, LayoutDashboard, Wallet } from "lucide-react";
 
 export type NavItem = { title: string; href: string; icon?: LucideIcon };
 export type NavGroup = { label: string; items: NavItem[] };
@@ -14,6 +14,13 @@ const operationsGroup: NavGroup = {
   ],
 };
 
+const financeGroup: NavGroup = {
+  label: "재무",
+  items: [
+    { title: "정산·대사", href: "/dashboard/settlements", icon: Wallet },
+  ],
+};
+
 const contentGroup: NavGroup = {
   label: "콘텐츠",
   items: [
@@ -22,7 +29,7 @@ const contentGroup: NavGroup = {
 };
 
 export function getNavGroupsForRole(role: StaffRole | null): NavGroup[] {
-  if (role === "HQ_ADMIN") return [operationsGroup, contentGroup];
+  if (role === "HQ_ADMIN") return [operationsGroup, financeGroup, contentGroup];
   if (role === "HQ_EDITOR" || role === "HQ_PUBLISHER") return [contentGroup];
   return [operationsGroup];
 }
