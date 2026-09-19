@@ -1287,7 +1287,7 @@ export async function getSettlementRuns(token: string, limit = 20): Promise<Sett
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({})) as ApiErrorPayload;
-    throw new StaffApiError(error.message ?? "정산 실행 목록을 불러오지 못했습니다.", response.status, error.code);
+    throw new StaffApiError(error.message ?? settlementFailureMessage(response.status, "정산 실행 목록을 불러오지 못했습니다."), response.status, error.code);
   }
   return response.json() as Promise<SettlementRunsView>;
 }
@@ -1305,7 +1305,15 @@ export async function getSettlementRun(
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({})) as ApiErrorPayload;
-    throw new StaffApiError(error.message ?? "정산 대사 내역을 불러오지 못했습니다.", response.status, error.code);
+    throw new StaffApiError(error.message ?? settlementFailureMessage(response.status, "정산 대사 내역을 불러오지 못했습니다."), response.status, error.code);
   }
   return response.json() as Promise<SettlementRunDetailView>;
+}
+
+// 정산 worker가 비활성화된 환경에서는 엔드포인트 자체가 노출되지 않는다.
+// 404는 기능이 꺼져 있음을 뜻하므로 조회 실패과 구분해 안내한다.
+function settlementFailureMessage(status: number, fallback: string) {
+  return status === 404
+    ? "정산·대사 기능이 비활성화되어 있습니다. 토스 라이브 결제와 정산 worker를 활성화한 환경에서만 사용할 수 있습니다."
+    : fallback;
 }
