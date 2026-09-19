@@ -27,6 +27,11 @@ reservation:
     approval-ttl: 24h
     hold-ttl: 15m
 
+policy:
+  cancellation:
+    refund-cutoff-days-before: ${POLICY_CANCELLATION_CUTOFF_DAYS:1}
+    refund-cutoff-local-time: ${POLICY_CANCELLATION_CUTOFF_TIME:18:00}
+
 payment:
   provider: ${PAYMENT_PROVIDER:fake}
   checkout-enabled: ${PAYMENT_CHECKOUT_ENABLED:false}

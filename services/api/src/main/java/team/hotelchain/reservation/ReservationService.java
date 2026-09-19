@@ -26,16 +26,19 @@ public class ReservationService {
     private final ReservationAccess access;
     private final Clock clock;
     private final Duration holdTtl;
+    private final team.hotelchain.policy.CurrentPolicy current;
 
     public ReservationService(
             JdbcTemplate jdbc,
             ReservationAccess access,
             Clock clock,
-            @Value("${reservation.hold-ttl:10m}") Duration holdTtl) {
+            @Value("${reservation.hold-ttl:10m}") Duration holdTtl,
+            team.hotelchain.policy.CurrentPolicy current) {
         this.jdbc = jdbc;
         this.access = access;
         this.clock = clock;
         this.holdTtl = holdTtl;
+        this.current = current;
     }
 
     @Transactional
@@ -88,9 +91,11 @@ public class ReservationService {
 
         UUID reservationId = UUID.randomUUID();
         Instant expiresAt = clock.instant().plus(holdTtl);
+        var cancellation = current.cancellation();
         String policySnapshot = "{\"version\":\"" + plan.policyVersion().replace("\"", "")
-                + "\",\"timezone\":\"Asia/Seoul\",\"refundCutoffDaysBefore\":1,"
-                + "\"refundCutoffLocalTime\":\"18:00\"}";
+                + "\",\"timezone\":\"" + cancellation.timezone() + "\","
+                + "\"refundCutoffDaysBefore\":" + cancellation.refundCutoffDaysBefore() + ","
+                + "\"refundCutoffLocalTime\":\"" + cancellation.refundCutoffLocalTime() + "\"}";
         jdbc.update("""
                 INSERT INTO reservation
                     (id, room_type_id, rate_plan_id, check_in, check_out, adults, children, rooms,
