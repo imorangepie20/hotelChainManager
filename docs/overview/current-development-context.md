@@ -10,7 +10,151 @@
 
 
 
-최종 갱신: 2026-09-19
+최종 갱신: 2026-09-20
+
+## 본사 공통 정책 - 예약 변경 승인 한도 변경·이력 조회 (2026-09-20)
+
+- `admin-menu-roadmap.md` 5번 `공통 정책 관리`의 둘째 단계를 구현했다. `ReservationChangePolicy.directLimitKrw()`가 `application.yml` 고정값을 쓰고 있어 본사가 한도를 바꿀 수단이 없었다.
+- `PUT /api/staff/policies/change-limit`가 지점 직접 승인 한도를 변경한다. 0원 이상 10,000,000원 이하이고 위반은 400, 멱원 키 누락도 400이다. `HQ_ADMIN`만 호출 가능하고 지점 직원은 403, 잘못된 세션은 401이다.
+- 멱원은 취소 정책과 같은 두 갈래로 동작한다. 같은 `Idempotency-Key` 재호출은 200에 `created=false`로 같은 revision을 돌려주고, 응답 유실 뒤 새 키로 같은 내용을 보내도 같은 결과를 돌려준다.
+- `GET /api/staff/policies/revisions`가 정책 변경 이력을 최신순으로 반환한다. SELECT만 사용하고 `limit` 1~100, `offset` 0 이상이며 위반은 400이다. 진행 중인 예약 변경 요청은 이미 저장된 `approval_limit_krw`를 그대로 쓴다.
+- 관리자 `/dashboard/policies`의 예약 변경 승인 카드에 현재값·변경 대화상자·변경 이력 표·페이징을 추가했다.
+- 한도 입력이 `type="number" required min max`였다. 브라우저가 `max` 초과로 폼 제출을 막아 서버 검증 응답이 도달하지 않았으므로 `type="text"` + `inputMode="numeric"`으로 바꾸고 정수 파싱만 클라이언트가 확인한다. 범위 판단은 서버에 뒀다.
+- API `mvnw -Dtest=PolicyIntegrationTest,StaffAccountIntegrationTest` **43건**, 관리자 `tsc --noEmit`·`eslint`(경고 6건)·Playwright 21건 + 인접 suite 33건이 종료 코드 0이다. 라이브에서 본사 세션으로 변경 201·같은 키 재호출 200 `created=false`·새 키 같은 내용 200·10,000,001원 400·이력 200 `totalCount=1`을 확인했다. 검증용 revision 2건은 삭제해 기본값으로 복원했다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-20-hq-policy-change-limit.md)을 따른다.
+
+## 본사 직원 계정 - 비밀번호 재발급 (2026-09-20)
+
+- `admin-menu-roadmap.md` 3번 `직원 계정 관리`의 둘째 단계를 구현했다. 직원이 16자 임시 비밀번호를 분실하면 `StaffDevAccountInitializer`의 환경 변수 비밀번호에 의존해야만 했다.
+- `POST /api/staff/staff/{staffId}/password`가 새 임시 비밀번호를 발급한다. `HQ_ADMIN`만 호출 가능하고 지점 직원은 403, 잘못된 세션은 401, 없는 직원은 404, 멱원 키 누락은 400이다.
+- 멱원은 두 갈래로 동작한다. 같은 `Idempotency-Key` 재호출은 200에 `created=false`를 돌려주고, 새 키로 쿨다운(기본 300초) 내 재발급을 시도하면 409 `STAFF_PASSWORD_RESET_COOLDOWN`로 거부한다. 비밀번호가 두 번 바뀌지 않는다.
+- 임시 비밀번호 원문은 DB에 보관하지 않는다. BCrypt 해시만 저장하고 재호출은 `temporaryPassword: null`을 내려주므로 UI가 "이미 발급된 임시 비밀번호는 다시 볼 수 없다"고 안내한다. 세션은 `token_hash` 기반이라 재발급이 기존 세션을 끊지 않는다.
+- 관리자 `/dashboard/staff`의 직원 표에 재발급 버튼과 결과 대화상자를 추가했고, 재발급마다 새 멱원 키를 발급한다.
+- API `mvnw -Dtest=StaffAccountIntegrationTest,PolicyIntegrationTest` **43건**, 관리자 `tsc --noEmit`·`eslint`(경고 6건)·Playwright 21건 + 인접 suite 33건이 종료 코드 0이다. 라이브에서 재발급 201·같은 키 재호출 200 `created=false temporaryPassword=null`·쿨다운 내 새 키 409·발급된 임시 비밀번호로 로그인 201을 확인했다. 검증용 재발급 기록은 삭제했고, 바뀐 `sokcho@hotel-chain.local` 비밀번호는 `StaffDevAccountInitializer`의 `ON CONFLICT DO UPDATE`로 복원해 환경 변수 비밀번호 로그인 201을 확인했다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-20-hq-staff-password-reset.md)을 따른다.
+
+
+## 하네스·스킬·플러그인 현황 (2026-09-20)
+
+프로젝트 하네스와 Impeccable 로컬 구성, 사용자 전역 스킬, 플러그인 활성화·세션 제공·캐시 상태를 [현황 문서](../harness/installed-harness-skills-plugins.md)에 정리했다. `harness/`의 B2B-STM 이식 원문과 현재 설치·사용 근거를 구분한다. 이번 작업은 문서화이며 스킬·플러그인 실행이나 외부 연결 검증은 포함하지 않는다.
+
+## 본사 운영 통계·리포트 조회 (2026-09-20)
+
+- `admin-menu-roadmap.md` 4번 `운영 통계·리포트`의 첫 단계를 구현했다. `reservation`·`reservation_change_request`·`inventory_day`에 데이터가 쌓이고 있었으나 집계 쿼리와 본사 화면이 없었다.
+- `GET /api/staff/reports/operations`가 지점별로 예약 건수·취소·노쇼·만료·매출·점유율과 예약 변경 승인 대기·완료 건수를 반환한다. 3개 집계 쿼리 모두 SELECT이므로 가격·재고·예약 상태를 변경하지 않는다.
+- 매출은 실제 숙박으로 이어진 예약만 인정한다. 취소뿐 아니라 노쇼 예약의 금액도 합계에서 뺐다. `from`·`to`·`hotelId` 필터를 지원하고 기본값은 현지 시간대 기준 최근 7일이다. 기간은 최대 92일이고 위반은 400, 없는 지점은 404, 역순 기간은 400이다. `HQ_ADMIN`만 호출 가능하고 지점 직원은 403, 잘못된 세션은 401이다.
+- 관리자 `/dashboard/reports`에 기간 프리셋(7일·14일·30일)·시작일·종료일, 전체 합계 카드 4종, 지점별 표를 추가했다. `nav.ts`의 `본사 관리` 그룹은 `HQ_ADMIN`에만 노출되고, 다른 역할은 본사 전용 안내를 본다.
+- API `mvnw -Dtest=OperationsReportIntegrationTest` 10건, 관리자 `tsc --noEmit`·`eslint`(경고 2건)·Playwright 46건(운영 통계 6 + 인접 suite 40)이 종료 코드 0이다. 라이브에서 compose `api` 재빌드 뒤 본사 세션으로 `GET /api/staff/reports/operations` 200으로 속초 `reservations=21, revenueKrw=6,100,000, changeRequestsPending=2, changeRequestsCompleted=5, occupancyRate=16.1%`가 내려왔고, 역순 기간 400·112일 400·없는 지점 404·지점 직원 403·세션 없음 401을 확인했다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-20-hq-reports.md)을 따른다.
+
+## 본사 감사 이력 통합 조회 (2026-09-20)
+
+- `admin-menu-roadmap.md` 7번 `감사·이력 조회`의 첫 단계를 구현했다. V29~V37 감사 표와 `reservation_change_event`는 데이터가 쌓이고 있었으나 본사가 읽는 API와 화면이 없었다.
+- `GET /api/staff/audit`가 8종 감사 이력(`GUEST_UPDATE`·`PARTY_UPDATE`·`ROOM_REASSIGNMENT`·`STAY_CHANGE`·`CANCELLATION`·`ROOM_OPERATIONAL_TRANSITION`·`CHECKED_IN_ROOM_MOVE`·`CHANGE_REQUEST_EVENT`)을 `UNION ALL`로 묶어 발생 시각 내림차순으로 반환한다. SELECT만 사용하고 상태를 변경하지 않는다.
+- `reservationId`·`hotelId`·`from`·`to`·`limit`·`offset` 필터를 지원한다. `limit`은 1~200, `offset`은 0 이상, 기간 끝날짜는 시작 날짜 이후, 위반은 400이고 없는 지점은 404다. `HQ_ADMIN`만 호출 가능하고 지점 직원은 403, 잘못된 세션은 401이다.
+- 직원 취소만 감사에 노출하고 고객 취소(`actor_type = 'CUSTOMER'`)는 제외한다. `reservation_change_event`는 `actor_staff_id`가 있는 전환만 노출한다. 각 이력에는 처리 직원 이메일·이름·역할, 지점 이름, 예약 id·고객 이름(있을 때), 객실 번호(있을 때), 이전·이후 요약이 포함되고 원본 `payload` JSON은 노출하지 않는다.
+- 관리자 `/dashboard/audit`에 유형별 표와 더 보기 페이지 이동을 추가했다. `nav.ts`의 `본사 관리` 그룹은 `HQ_ADMIN`에만 노출되고, 다른 역할은 본사 전용 안내를 본다.
+- API `mvnw -Dtest=AuditIntegrationTest` 13건, 관리자 `tsc --noEmit`·`eslint`(경고 2건)·Playwright 40건이 종료 코드 0이다. 라이브에서 본사 세션으로 `GET /api/staff/audit?limit=5` 200으로 예약 변경 요청 2건·직원 취소 1건이 내려왔고, 지점 직원 403·세션 없음 401·limit 0·201 400·offset -1 400·없는 지점 404·다른 지점 필터 0건을 확인했으며, 관리자 4001 브라우저에서 `감사 이력` 메뉴와 `예약 변경 요청`·`속초 오션 호텔` 표시를 확인했다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-20-hq-audit.md)을 따른다.
+
+## 본사 공통 정책 조회·취소 정책 변경 (2026-09-20)
+
+- `admin-menu-roadmap.md` 5번 `공통 정책 관리`의 첫 단계를 구현했다. 취소 정책과 예약 변경 승인 한도가 코드와 `application.yml`에 고정돼 있어 본사가 현재 값을 볼 수단이 없었다.
+- `GET /api/staff/policies`가 취소 정책(마감 일수·마감 시각·시간대)·예약 변경 승인 한도·정산 활성 여부·revision 수를 반환한다. SELECT만 쓴다. `PUT /api/staff/policies/cancellation`이 취소 마감 일수(1~30)와 마감 시각(`HH:MM`)을 변경한다. `HQ_ADMIN`만 호출 가능하고 지점 직원은 403, 잘못된 세션은 401이다.
+- 멱원은 두 갈래로 동작한다. 같은 `Idempotency-Key` 재호출은 200에 `created=false`로 같은 revision을 돌려준다. 응답 유실 뒤 새 키로 같은 내용을 보내도 `staff_id`·정책 키·본문 SHA-256 지문이 같아 같은 결과를 돌려준다. 정책 키 단위 `pg_advisory_xact_lock`으로 동시 변경을 직렬화한다.
+- V48 additive 마이그레이션으로 `policy_revision` 테이블을 만든다. 현재값은 항상 가장 최근 revision에서 읽고, 없으면 `application.yml`의 `policy.cancellation.*` 기본값을 쓴다. 기존 `reservation.policy_snapshot`을 변경하지 않는다.
+- 변경은 항상 새 revision을 append 한다. 기존 revision을 덮어쓰지 않으므로 이미 확정된 예약의 취소 조건은 그대로 남고, `ReservationService`가 `CurrentPolicy`에서 읽은 값으로 신규 예약의 `policy_snapshot`을 만든다.
+- 관리자 `/dashboard/policies`에 취소 정책 카드·예약 변경 승인 카드·변경 대화상자를 추가했다. `nav.ts`의 `본사 관리` 그룹은 `HQ_ADMIN`에만 노출되고, 다른 역할은 본사 전용 안내를 본다. 서버 검증 실패 시 대화상자를 닫지 않고 안내를 보여준다.
+- API `mvnw` 178건(정책 11 + 예약·변경·직원·카탈로그·재고 167), 관리자 `tsc --noEmit`·`eslint`(경고 2건)·Playwright 33건이 종료 코드 0이다. 라이브에서 본사 세션으로 조회 200·변경 201·멱원 재호출 200 `created=false`·새 키 같은 내용 200·일수 31 400·시각 `25:00` 400·키 누락 400·지점 직원 403·세션 없음 401을 확인했고, 관리자 4001 브라우저에서 `체크인 1일 전` → 변경 → `체크인 3일 전` 전환과 새로고침 후 유지를 확인했다. 검증용 revision 2건은 모두 삭제해 기본값으로 복원했다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-20-hq-policies.md)을 따른다.
+
+## 본사 직원 계정 조회·생성 (2026-09-19)
+
+- `admin-menu-roadmap.md` 3번 `직원 계정 관리`의 첫 단계를 구현했다. `StaffDevAccountInitializer`가 환경 변수 비밀번호로 개발 계정을 초기화할 뿐, 애플리케이션에서 직원을 만들거나 조회할 수단이 없었다.
+- `GET /api/staff/staff`가 전 직원 목록(이메일·이름·역할·소속 지점)을 반환하고 `POST /api/staff/staff`가 새 직원을 만든다. `HQ_ADMIN`만 호출 가능하고 지점 직원은 403, 잘못된 세션은 401이다.
+- 이메일은 형식·254자, 이름은 1~100자, 역할은 4종 중 하나, `BRANCH_STAFF`는 지점 필수·본사 역할은 지점 없음이다. 위반은 400, 같은 이메일은 409, 없는 지점은 404다.
+- 임시 비밀번호는 서버가 16자 무작지로 만들어 응답에 한 번만 내보내고, 저장은 BCrypt 해시만 한다. 멱원 키 재호출은 200에 `created=false`로 같은 직원을 돌려준다.
+- V47 `staff_account_command` 테이블이 멱원 키를 보관한다. additive이고 기존 `staff_member`를 변경하지 않는다.
+- 관리자 `/dashboard/staff`에 직원 표와 추가 대화상자를 추가했다. `nav.ts`의 `본사 관리` 그룹은 `HQ_ADMIN`에만 노출되고, 역할이 `BRANCH_STAFF`일 때만 소속 지점 선택이 나타난다.
+- API `mvnw` 41건(직원 14 + 객실 유형 11 + 카탈로그 7 + 재고 9), 관리자 `tsc --noEmit`·`eslint`(경고 2건)·Playwright 23건이 종료 코드 0이다. 라이브에서 본사 세션으로 목록 200·생성 201·멱원 재호출 200 같은 ID·이메일 중복 409·형식·역할·지점 위반 400·없는 지점 404·지점 직원 403·세션 없음 401을 확인했고, 발급된 임시 비밀번호로 실제 로그인 201을 확인했다. 관리자 4001 브라우저에서 `직원 6명` → 추가 → `7명` 전환과 임시 비밀번호 표시를 확인했다. 검증용 직원과 멱원 기록·세션은 모두 삭제해 원래 6명으로 복원했다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-19-hq-staff-accounts.md)을 따른다.
+
+## 본사 객실 유형 추가 (2026-09-19)
+
+- `admin-menu-roadmap.md` 1번 `지점·객실 유형`의 첫 쓰기 동작을 구현했다. 읽기 전용 카탈로그만 있어서 본사가 객실 유형을 만들 수단이 없었다.
+- `POST /api/staff/hotels/{hotelId}/room-types`가 이름·최대 인원을 받아 객실 유형을 만든다. `HQ_ADMIN`만 호출 가능하고 지점 직원은 403, 잘못된 세션은 401, 없는 지점은 404다. 이름은 1~100자, 최대 인원은 1~20이고 위반은 400이다.
+- 멱원은 두 갈래로 동작한다. 같은 `Idempotency-Key` 재호출은 200에 `created=false`로 같은 객실 유형을 돌려준다. 응답 유실 뒤 새 키로 같은 내용을 보내도 `staff_id`·`hotel_id`·본문 SHA-256 지문이 같아 같은 결과를 돌려준다. 지점 행을 `for update`로 잡아 동시 쓰기를 직렬화한다.
+- V46 `room_type_command` 테이블이 멱원 키와 요청 지문을 보관한다. additive이고 기존 `room_type`·`staff_member`를 변경하지 않는다.
+- 관리자 `/dashboard/hotels`에 객실 유형 추가 버튼과 대화상자를 추가했다. `HQ_ADMIN`만 버튼이 보이고, 성공하면 카탈로그를 새로고침한다. 서버 검증 실패 시 대화상자를 닫지 않고 안내를 보여준다.
+- API `mvnw` 27건(객실 유형 쓰기 11 + 카탈로그 7 + 재고 9), 관리자 `tsc --noEmit`·`eslint`(경고 2건)·Playwright 8건이 종료 코드 0이다. 라이브에서 본사 세션으로 생성 201·같은 키 재호출 200 같은 ID·새 키 같은 내용 200 같은 ID·공백·0인·21인·키 누락 400·없는 지점 404·지점 직원 403·세션 없음 401을 확인했고, 관리자 4001 브라우저에서 `객실 유형 3종` → 추가 → `4종` 전환을 확인했다. 검증용 객실 유형과 멱원 기록은 모두 삭제해 원래 3종으로 복원했다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-19-hq-room-type-create.md)을 따른다.
+
+## 본사 재고·가격 읽기 전용 조회 (2026-09-19)
+
+- `admin-menu-roadmap.md` 2번 `재고·가격`의 읽기 전용 1차를 구현했다. `inventory_day`는 예약·만료·변경 작업이 내부적으로만 변경하고 본사가 일자 재고를 볼 수단이 없었다.
+- `GET /api/staff/hotels/{hotelId}/inventory`가 객실 유형별 일자 재고(`capacity`·`held`·`confirmed`·`remaining`)를 반환한다. SELECT만 쓰고 재고를 변경하지 않는다.
+- 관리자 `/dashboard/inventory`가 지점·기간·7일·14일·30일 프리셋을 선택해 객실 유형(행) × 숙박일(열) 그리드를 보여주고 잔여가 0이면 매진으로 표시한다. `nav.ts`의 `카탈로그` 그룹은 `HQ_ADMIN`에만 노출된다.
+- 첫 버전은 객실 유형을 select로 하나씩만 볼 수 있었고 14일이 세로로 쌓여 흐름이 보이지 않았다. 사용자가 이 점을 불편하다고 해서 모든 유형을 한 화면에 비교하는 그리드로 바꿨다.
+- API 통합 테스트 16건(재고 9 + 카탈로그 7), 관리자 `tsc --noEmit`·`eslint`(경고 2건)·Playwright 18건이 종료 코드 0이다. 390×844에서 가로 넘침이 없음을 확인했다. 라이브에서 본사 세션으로 속초 재고가 `capacity=12, confirmed=2, remaining=10`으로 내려왔고, 지점 타 지점 403·없는 지점 404·역순 기간 400·세션 없음 401을 확인했다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-19-hq-inventory-read-only.md)을 따른다.
+
+## 본사 지점·객실 유형 카탈로그 읽기 전용 조회 (2026-09-19)
+
+- `admin-menu-roadmap.md` 1번 `지점·객실 유형 관리`의 읽기 전용 1차를 구현했다. `hotel`·`room_type`·`rate_plan`·`rate_day` 테이블은 있었으나 본사가 카탈로그를 보는 API와 화면이 없었다.
+- `GET /api/staff/hotels/{hotelId}/room-types`가 객실 유형별로 요금제와 일자별 요금의 `pricedDays`·`min`·`max`·`avg` 금액을 반환한다. SELECT만 쓰고 가격·재고·예약 상태를 변경하지 않는다.
+- 관리자 `/dashboard/hotels`가 지점 선택기와 객실 유형 표를 보여준다. `nav.ts`의 `카탈로그` 그룹은 `HQ_ADMIN`에만 노출되고, 다른 역할은 본사 전용 안내를 본다.
+- API 통합 테스트 7건, 관리자 `tsc --noEmit`·`eslint`(경고 2건)·카탈로그 Playwright 5건이 종료 코드 0이다. 라이브에서 본사 세션으로 속초 카탈로그가 `totalCount=3`·`pricedDays=90`으로 내려왔고, 지점 타 지점 403·없는 지점 404·세션 없음 401을 확인했다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-19-hq-hotel-room-type-catalog.md)을 따른다.
+
+## 관리자 AI 운영 메뉴와 LLM 측정 노출 (2026-09-19)
+
+- `admin-menu-roadmap.md` 8번 `AI 운영`의 첫 단계를 구현했다. 이전 작업이 `llm.outcome`을 INFO 로그로 남기게 했지만 로그를 grep하지 않으면 호출 수·실패율·평균 지연을 볼 수단이 없었다.
+- concierge `GET /metrics/llm`이 프로세스 단위 카운터(`count`·`totalElapsedMs`·`avgElapsedMs`)를 노출한다. `extract_with_llm`이 매 호출마다 카운터에 더한다. 정규식 폴백 동작은 그대로다.
+- 관리자 `/dashboard/ai-operations`가 모델·전체 호출·성공 외 호출 카드와 결과별 집계 표를 읽기 전용으로 보여준다. `nav.ts`의 `AI` 그룹은 `HQ_ADMIN`에만 노출되고, 다른 역할은 본사 전용 안내를 본다.
+- `next.config.ts`의 rewrite가 `/concierge/:path*`를 `127.0.0.1:9000`으로 보낸다. concierge에 세션 검증이 없으므로 노출 범위는 compose의 루프백 포트 바인딩으로 제한한다.
+- Python `pytest` 27건, 관리자 `tsc --noEmit`·`eslint`(경고 1건)·AI 운영 Playwright 4건이 종료 코드 0이다. concierge 재빌드 뒤 라이브 `/chat` 200으로 `success count=1 avgElapsedMs=3392.3`이 쌓이고 `/metrics/llm` 200으로 같은 값이 내려왔다. 관리자 4001의 `/concierge/metrics/llm`도 200이다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-19-concierge-llm-metrics-and-admin-menu.md)을 따른다.
+
+## 관리자 메뉴 로드맵 (2026-09-19)
+
+- 구현된 관리자 메뉴 5종(운영 대시보드·예약 관리·오늘의 운영·정산·대사·웹사이트 CMS)과 설계서의 본사 범위를 비교해 8개 메뉴를 [로드맵](../plans/admin-menu-roadmap.md)으로 정리했다. 지점·객실 유형, 재고·가격, 직원 계정, 통계·리포트, 공통 정책, 고객 요청, 감사 이력, AI 운영이다.
+- 그중 지점·객실 유형, 재고·가격, 직원 계정, 공통 정책은 API가 전혀 없다. 통계·감사는 데이터는 있으나 조회 API와 화면이 없다. AI 운영은 측정 분기만 있고 수집·노출이 없다.
+
+
+
+- 고객 웹이 `/chat` 400(정책 위반)과 502(연결 장애)를 같은 "도우미에 연결하지 못했습니다"로 처리했다. 도우미가 "결제해 줘" 같은 요청을 정책상 거절한 건을 연결 장애로 오해했으므로 안내를 나눴다.
+- `concierge-panel.tsx`의 `submit`이 응답 상태를 검사해 400이면 `도우미가 처리할 수 없는 조건입니다. 객실 검색에서 직접 선택해 주세요.`를 보여준다. 서버 `detail` 원문을 노출하지 않고 상태 코드만으로 안내를 고른다. `.concierge-error`에 `line-height`·`overflow-wrap`을 넣어 390px에서 안내문이 넘치지 않게 했다.
+- `app/llm.py`에 LLM 한 번 호출의 결과(`success`·`schema_rejected`·`unparsable`·`empty_response`·`api_error`·`no_key`)와 소요 시간을 측정하는 분기를 추가했다. `extract_with_llm`과 `measure_llm_outcome`이 같은 `_run_llm`을 써서 Gemini 호출을 두 번 수행하지 않는다. message 원문은 로그에 남기지 않는다.
+- 측정을 `logger.debug`에서 `logger.info`로 올려 운영 로그에서 지속 수집되게 했다. 처음엔 실패할 때만 `debug`로 남겼으나 성공률·지연이 안 보이고, uvicorn의 root 로거가 기본 WARNING이라 실패마저 숨었다. `app/main.py`가 `logging.basicConfig(level=logging.INFO, ...)`와 `logging.getLogger("app").setLevel(logging.INFO)`로 로거를 구성한다.
+- Python `pytest` 25건, 고객 웹 `tsc --noEmit`·concierge Playwright 4건이 종료 코드 0이다. concierge 이미지를 재빌드한 뒤 라이브 `/chat` 200과 `docker logs`의 `INFO app.llm llm.outcome model=gemini-3.6-flash outcome=success elapsed_ms=3392.39`를 확인했고, 조건에 `payment`를 넣었을 때 400을 확인했다. "결제해 줘"만으로는 LLM이 결제로 해석하지 않아 200이 되는데, `assert_no_forbidden_fields`가 `criteria`의 금지 필드만 거절하고 자연어 암시까지 차단하지 않기 때문이다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-19-concierge-policy-notice-and-llm-telemetry.md)을 따른다.
+
+## AI 도우미 Gemini LLM 연결 (2026-09-19)
+
+- 루트 `.env`의 `GOOGLE_API_KEY`로 Gemini를 연결했다. LLM은 조건 해석만 담당하고 가격·빈 객실·예약 확정은 여전히 Spring Boot에 있다. `app/llm.py`가 `gemini-3.6-flash`에 JSON 스키마·시스템 지시문을 전달해 조건을 추출하고 `merge`가 LLM 우선·정규식 폴백 순서로 동작한다.
+- 스키마는 단일 타입만 쓴다. union 타입을 쓰면 빈 응답이 내려오고, `additionalProperties: false`를 넣으면 모델이 키를 `destination`·`check_in`처럼 임의로 바꿔서 내려온다. 빈 문자열·0·`False`를 `_coerce`가 "추출하지 못함"으로 해석한다.
+- 도우미가 "어른 넷이랑 아이 둘"·"3박 할건데" 같은 정규식 불가 표현을 해석하게 됐다. 누락된 값은 LLM이 비워두므로 `check_missing`이 "체크인 날짜, 체크아웃 날짜를 알려주세요."로 이어진다.
+- `compose.yaml`의 `concierge` 서비스가 `GOOGLE_API_KEY`를 컨테이너로 넘긴다. 키가 없으면 빈 문자열로 둬 폴백 동작을 유지한다. `gemini-2.5-flash`는 API가 404로 거부해서 `gemini-3.6-flash`를 쓴다.
+- Python `pytest` 17건(그래프 3 + 정책 6 + LLM 8)이 종료 코드 0이다. Docker 재빌드 뒤 `POST /chat` 200으로 LLM 추출 결과가 내려오고, 같은 조건의 Spring `GET /api/availability`와 금액·잔여 수가 `MATCH true`로 일치했다. 조건에 `payment`를 넣으면 LLM 경로라도 400으로 거부됐다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-19-concierge-gemini-llm.md)을 따른다.
+
+## AI 도우미 정책 임베딩과 고객 대화 E2E suite (2026-09-19)
+
+- 도우미가 지키는 경계를 주석·설계 문서에서 `app/policy.py`의 검증 가능한 코드로 옮겼다. `POLICY_TEXT`를 추천 응답의 `policy` 필드로 내보내고, `missing_fields`가 빈 문자열·0·None을 모두 누락으로 계산한다. `assert_no_forbidden_fields`가 `payment`·`confirm`·`reservationId`·`roomId`가 조건에 들어가면 조회 전에 거부하고, `assert_offers_from_api`가 금액·잔여 필드가 없는 후보를 거부한다.
+- `app/main.py`는 정책 위반(`ValueError`)을 400으로, 나머지를 기존 502로 매핑한다. 정책 위반을 502로 감싸면 도우미가 조회 실패로 회피하는 것과 같으므로 코드를 나눴다.
+- `apps/web/test/concierge-panel.spec.ts` 3건을 영구 suite로 추가했다. 추천 적용 시 AI 후보를 예약 카드에 복사하지 않고 `GET /api/availability`가 새로 발생하는지, ASK 응답과 390px 가로 넘침, `/chat` 502의 직접 검색 안내를 확인한다.
+- Python `pytest` 9건(기존 3 + 정책 6), 고객 웹 `tsc --noEmit`·concierge Playwright 3건이 종료 코드 0이다. Docker 재빌드 뒤 `POST /chat` 200으로 `policy` 전문이 내려가고 추천 1건이 Spring `GET /api/availability`와 정확히 일치했다. 조건에 `payment`를 넣으면 400 `AI는 payment 조건을 처리할 수 없습니다.`로 거부했다.
+- 전체 Playwright 회귀는 28 passed / 5 failed다. 실패 5건은 toss SDK 로딩·세션 타이밍 영역이며 이번 변경을 작업 트리에서 제외해도 동일하게 실패해 무관함을 확인했다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-19-concierge-policy-embedding.md)을 따른다.
+
+## 저장 초안 미리보기 만료 시간 설정 (2026-09-19)
+
+- 저장 초안 미리보기 grant의 만료 시간이 10분으로 고정돼 있었다. `WebsitePreviewGrantService`의 상수 TTL을 `website.preview.ttl-minutes`(기본 10, 1~60) 생성자 주입으로 바꿔 환경에서 조정할 수 있게 했다. 1~60분 밖의 값은 시작을 거부한다.
+- `WebsitePreviewExpiryIntegrationTest`를 새로 작성해 클럭을 조작하지 않고 TTL 1분 + 여유 5초를 실제 시간으로 기다린 뒤 200이 410 `WEBSITE_PREVIEW_UNAVAILABLE`로 바뀌는지 검증했다.
+- API `mvnw test-compile`과 해당 테스트 1건이 종료 코드 0이다. 라이브로 본사 세션으로 홈 초안 저장(200, draftVersion 6) → grant 발급(200, `expiresAt` 명시) → 고객 4000에서 200 → 만료 시각 12초 후 410 `WEBSITE_PREVIEW_UNAVAILABLE` 전환을 확인했다. 검증용 grant는 폐기(204)했고 초안도 원래 제목으로 복원(200, draftVersion 7)했다.
+- 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-19-website-preview-ttl.md)을 따른다.
+
+## 본사 정산 실행 생성·재시도 (2026-09-19)
+
+- 본사가 원하는 기간의 정산 실행을 직접 만들고, 실패한 실행을 다시 대기 상태로 옮길 수 있게 했다. 실행 제어만 추가하고 결제·재고 상태를 직접 바꾸는 동작은 두지 않았다.
+- `POST /api/staff/settlements/runs`가 기간을 받아 `PENDING` run을 만들고 `POST /api/staff/settlements/runs/{runId}/retry`가 `FAILED` run을 다시 대기로 옮긴다. `TossSettlementRunService.retry`가 실행 존재 여부와 상태를 먼저 확인해 404·409를 구분한다.
+- 관리자 4001에 기간 입력 폼과 `FAILED` 카드의 재실행 버튼을 추가했고, 빈 목록 안내를 실행 요청 폼으로 바꿨다.
+- API `mvnw compile`·`test-compile`, 정산·변경 정산 집중 영역 42건, 관리자 `tsc --noEmit`·`eslint`(에러 0·경고 3건)이 종료 코드 0이다. 브라우저에서 본사 로그인 뒤 실행 생성과 409·404 응답까지 1개 Playwright 시나리오로 확인하고 스크립트·데이터는 삭제했다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-19-hq-settlement-run-control.md)을 따른다.
+
+## 정산·대사를 토스 test 환경까지 허용 (2026-09-19)
+
+- 이전 세션이 정산 스택을 `toss-live` 전용에서 토스 환경 전용(`fake` 이외)으로 확장하다가 중단됐다. `TossPaymentEnvironment` import가 빠져 `mvnw compile`·`test-compile`이 실패하는 상태였고, 테스트는 여전히 3-arg 생성자를 호출했다.
+- 5개 서버 파일의 import와 로드 조건을 마저 맞추고 대사 SQL·run insert의 provider를 상수에서 `TossPaymentEnvironment.from(providerMode).providerCode()` 바인딩으로 바꿨다. `TossSettlementController`·`TossSettlementQueryService`도 worker와 같은 조건으로 따라간다.
+- V45 additive migration으로 `toss_settlement_run.provider` CHECK를 `TOSS_LIVE`에서 `IN ('TOSS_TEST','TOSS_LIVE')`로 확장했고, `compose.yaml`이 `TOSS_SETTLEMENT_*` 변수를 컨테이너로 전달하게 했다. 로컬 `.env`는 `PAYMENT_PROVIDER=toss-test`이므로 정산이 로드되지 않던 원인이 해소됐다.
+- API `mvnw compile`·`test-compile`과 정산·결제 집중 영역 77건이 종료 코드 0이다. test DB·개발 DB 모두 V45 `success=t`, API 재빌드 뒤 health `UP`를 확인했다.
+- 루트 `.env`에서 `TOSS_SETTLEMENT_ENABLED=true`로 켜고 라이브로 확인했다. 엔드포인트가 404에서 401로 바뀌었고, 본사 세션으로 `GET /api/staff/settlements/runs`가 200을 반환했다. 관리자 4001에서 본사 로그인 뒤 `/dashboard/settlements`의 실행 카드·상세·상태 필터, 지점 직원의 본사 전용 안내까지 3개 Playwright 시나리오로 확인했다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-19-settlement-toss-test-mode.md)을 따른다.
 
 ## 본사 읽기 전용 정산·대사 조회 (2026-09-19)
 
@@ -350,11 +494,15 @@
 
 ## 다음 작업
 
-1. Toss `GET /v1/settlements` 기반 정산·대사의 본사 읽기 전용 화면을 완료했다. 다음은 정산 실행 생성·재시도를 본사가 직접 요청할 수 있는 동작과, 실제 라이브 거래가 자료에 나타난 뒤 외부 대사를 검증하는 것이다.
+1. Toss `GET /v1/settlements` 기반 정산·대사의 본사 읽기 전용 화면과 정산·대사의 토스 test 환경 지원, 본사 정산 실행 생성·재시도를 완료했다. 다음은 실제 라이브 거래가 자료에 나타난 뒤 외부 대사를 검증하는 것이다.
 
-2. 저장 초안 미리보기의 실제 10분 만료 시간 경과 검증을 추가한다.
+2. 저장 초안 미리보기의 만료 시간 경과 검증을 완료했다. 만료 시간을 `website.preview.ttl-minutes`로 조정 가능하게 하고 실제 시간 경과로 410 전환을 확인했다. 다음은 영구 E2E suite와 관리자 UI에서 만료 시간 노출 여부를 정하는 것이다.
 
-3. AI 도우미의 LLM·정책 임베딩과 고객 대화의 영구 E2E suite를 추가한다.
+3. AI 도우미의 정책 임베딩을 코드로 두고 고객 대화 E2E suite를 추가했으며, Gemini LLM을 연결해 정규식 불가 표현을 해석하게 했다. 정책 위반 400을 고객 웹에 구분해 안내하고 LLM 결과·소요 시간을 INFO 로그로 올려 운영 로그에서 지속 수집되게 했다. `/metrics/llm`과 본사 `AI 운영` 메뉴로 결과별 호출 수·평균 지연을 읽기 전용으로 확인하게 했다. 다음은 측정을 영구 보관·시계열 집계하고 정책 위반 건수도 노출하는 것이다.
+
+4. Playwright 전체 회귀의 실패 5건(toss SDK 로딩·세션 타이밍) 원인을 제거한다.
+
+5. `admin-menu-roadmap.md` 8번 `AI 운영` 1차, 1번 `지점·객실 유형 관리` 읽기 전용, 2번 `재고·가격` 읽기 전용을 완료했다. 다음은 1·2번의 쓰기 동작(지점 생성·수정·판매 중지, 요금제·일자별 요금 변경, 재고 조정·판매 중지 구간)이다.
 
 - 2026-09-11: 사용자는 롯데리조트 속초 수준의 객실·다이닝·부대시설·프로모션 운영을 CMS 목표로 재확인했다. 구현을 추가하기 전에 콘텐츠 유형·트리·블록·도메인 연결·번역·검토·발행·SEO를 다시 정의했고, [설계 문서](../architecture/lotte-resort-level-cms-functional-design.md)와 [목표 구조도](../architecture/lotte-resort-cms-target.html)를 작성했다. 이후 구현은 이 설계를 기준으로 기능 단위 계획을 작성한 뒤 진행한다.
 

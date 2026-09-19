@@ -30,7 +30,7 @@ docker compose up -d concierge
 ## 링크
 
 - 고객 웹 http://127.0.0.1:4000
-- 관리자 http://127.0.0.1:4001 (`hq@stayhaneul.test` / `HotelAdmin!2026`)
+- 관리자 http://127.0.0.1:4001 (루트 `.env`의 `STAFF_HQ_PASSWORD` 계정)
 - API http://127.0.0.1:4080/actuator/health
 - AI http://127.0.0.1:9000
 

@@ -1317,3 +1317,584 @@ function settlementFailureMessage(status: number, fallback: string) {
     ? "정산·대사 기능이 비활성화되어 있습니다. 토스 라이브 결제와 정산 worker를 활성화한 환경에서만 사용할 수 있습니다."
     : fallback;
 }
+
+export type CreateSettlementRunInput = {
+  from: string;
+  to: string;
+};
+
+export type CreatedSettlementRun = {
+  runId: string;
+};
+
+// 본사가 정산 실행을 직접 만든다. worker가 처리할 PENDING 실행을 준비만 하고
+// 결제·재고·대사 상태를 바꾸지 않는다.
+export async function createSettlementRun(token: string, input: CreateSettlementRunInput): Promise<CreatedSettlementRun> {
+  const response = await fetch("/api/staff/settlements/runs", {
+    method: "POST",
+    headers: { "X-Staff-Session": token, "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(
+      error.message ?? settlementFailureMessage(response.status, "정산 실행 생성에 실패했습니다."),
+      response.status,
+      error.code,
+    );
+  }
+  return (await response.json()) as CreatedSettlementRun;
+}
+
+// 실패한 정산 실행을 worker가 다시 집을 수 있도록 대기 상태로 되돌린다.
+export async function retrySettlementRun(token: string, runId: string): Promise<void> {
+  const response = await fetch(`/api/staff/settlements/runs/${runId}/retry`, {
+    method: "POST",
+    headers: { "X-Staff-Session": token },
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(
+      error.message ?? settlementFailureMessage(response.status, "정산 실행 재시도에 실패했습니다."),
+      response.status,
+      error.code,
+    );
+  }
+}
+
+// AI 도우미의 LLM 호출 결과를 본사가 읽기 전용으로 확인한다.
+// concierge에는 세션 검증이 없으므로 next.config의 rewrite가 127.0.0.1:9000으로만 보낸다.
+export type ConciergeLlmOutcome = "success" | "schema_rejected" | "unparsable" | "empty_response" | "api_error" | "no_key";
+
+export type ConciergeLlmMetrics = {
+  model: string;
+  outcomes: Record<ConciergeLlmOutcome, { count: number; totalElapsedMs: number; avgElapsedMs: number }>;
+};
+
+export async function getConciergeLlmMetrics(): Promise<ConciergeLlmMetrics> {
+  const response = await fetch("/concierge/metrics/llm");
+  if (!response.ok) {
+    throw new StaffApiError(
+      "AI 도우미 측정을 불러오지 못했습니다. 도우미가 실행 중인지 확인해 주세요.",
+      response.status,
+    );
+  }
+  return (await response.json()) as ConciergeLlmMetrics;
+}
+
+// 본사가 객실 유형과 요금제 카탈로그를 읽기 전용으로 확인한다.
+export type RoomTypeRatePlanSummary = {
+  ratePlanId: string;
+  name: string;
+  breakfastIncluded: boolean;
+  policyVersion: string;
+  pricedDays: number;
+  minAmountKrw: number | null;
+  maxAmountKrw: number | null;
+  avgAmountKrw: number | null;
+};
+
+export type RoomTypeCatalogEntry = {
+  roomTypeId: string;
+  name: string;
+  maxOccupancy: number;
+  ratePlans: RoomTypeRatePlanSummary[];
+};
+
+export type RoomTypeCatalogView = {
+  hotelId: string;
+  totalCount: number;
+  roomTypes: RoomTypeCatalogEntry[];
+};
+
+export async function getRoomTypeCatalog(
+  token: string,
+  hotelId: string,
+  filters: { limit?: number; offset?: number } = {},
+): Promise<RoomTypeCatalogView> {
+  const searchParams = new URLSearchParams();
+  if (filters.limit) searchParams.set("limit", String(filters.limit));
+  if (filters.offset) searchParams.set("offset", String(filters.offset));
+  const query = searchParams.size ? `?${searchParams}` : "";
+  const response = await fetch(`/api/staff/hotels/${hotelId}/room-types${query}`, {
+    headers: { "X-Staff-Session": token },
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(
+      error.message ?? "객실 유형 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.",
+      response.status,
+      error.code,
+    );
+  }
+  return response.json() as Promise<RoomTypeCatalogView>;
+}
+
+// 본사가 새 객실 유형을 만든다. 서버가 멱원 키로 같은 요청의 중복 생성을 막는다.
+export type CreateRoomTypeRequest = {
+  name: string;
+  maxOccupancy: number;
+};
+
+export type CreatedRoomType = {
+  roomTypeId: string;
+  hotelId: string;
+  name: string;
+  maxOccupancy: number;
+  created: boolean;
+};
+
+export async function createRoomType(
+  token: string,
+  hotelId: string,
+  idempotencyKey: string,
+  input: CreateRoomTypeRequest,
+): Promise<CreatedRoomType> {
+  const response = await fetch(`/api/staff/hotels/${hotelId}/room-types`, {
+    method: "POST",
+    headers: {
+      "X-Staff-Session": token,
+      "Content-Type": "application/json",
+      "Idempotency-Key": idempotencyKey,
+    },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(
+      error.message ?? roomTypeCreateFailureMessage(response.status),
+      response.status,
+      error.code,
+    );
+  }
+  return (await response.json()) as CreatedRoomType;
+}
+
+// 멱원 재호출은 200으로 같은 객실 유형을 돌려준다. 201과 200 모두 성공이다.
+function roomTypeCreateFailureMessage(status: number) {
+  if (status === 403) return "객실 유형 추가는 본사 관리자만 할 수 있습니다.";
+  if (status === 409) return "이미 처리된 요청입니다. 목록을 새로고침해 주세요.";
+  return "객실 유형을 추가하지 못했습니다. 입력값을 확인한 뒤 다시 시도해 주세요.";
+}
+
+// 본사가 직원 목록을 읽기 전용으로 확인한다.
+export type StaffAccountView = {
+  id: string;
+  email: string;
+  displayName: string;
+  role: "HQ_ADMIN" | "HQ_EDITOR" | "HQ_PUBLISHER" | "BRANCH_STAFF";
+  hotelId: string | null;
+  hotelName: string | null;
+  active: boolean;
+};
+
+export async function getStaffAccounts(
+  token: string,
+  filters: { limit?: number } = {},
+): Promise<StaffAccountView[]> {
+  const searchParams = new URLSearchParams();
+  if (filters.limit) searchParams.set("limit", String(filters.limit));
+  const query = searchParams.size ? `?${searchParams}` : "";
+  const response = await fetch(`/api/staff/staff${query}`, {
+    headers: { "X-Staff-Session": token },
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(
+      error.message ?? staffAccountFailureMessage(response.status, "직원 목록을 불러오지 못했습니다."),
+      response.status,
+      error.code,
+    );
+  }
+  return (await response.json()) as StaffAccountView[];
+}
+
+// 본사가 새 직원을 만든다. 임시 비밀번호는 생성 시 한 번만 내려온다.
+export type CreateStaffAccountInput = {
+  email: string;
+  displayName: string;
+  role: "HQ_ADMIN" | "HQ_EDITOR" | "HQ_PUBLISHER" | "BRANCH_STAFF";
+  hotelId: string | null;
+};
+
+export type CreatedStaffAccount = {
+  staffId: string;
+  email: string;
+  displayName: string;
+  role: string;
+  hotelId: string | null;
+  hotelName: string | null;
+  temporaryPassword: string | null;
+  created: boolean;
+};
+
+export async function createStaffAccount(
+  token: string,
+  idempotencyKey: string,
+  input: CreateStaffAccountInput,
+): Promise<CreatedStaffAccount> {
+  const response = await fetch("/api/staff/staff", {
+    method: "POST",
+    headers: {
+      "X-Staff-Session": token,
+      "Content-Type": "application/json",
+      "Idempotency-Key": idempotencyKey,
+    },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(
+      error.message ?? staffAccountFailureMessage(response.status, "직원을 추가하지 못했습니다."),
+      response.status,
+      error.code,
+    );
+  }
+  return (await response.json()) as CreatedStaffAccount;
+}
+
+function staffAccountFailureMessage(status: number, fallback: string) {
+  if (status === 403) return "직원 관리는 본사 관리자만 할 수 있습니다.";
+  if (status === 409) return "이미 등록된 이메일입니다. 다른 이메일을 사용해 주세요.";
+  return fallback;
+}
+
+// 본사가 직원의 임시 비밀번호를 재발급한다. 비밀번호는 첫 발급에만 내려온다.
+export type StaffPasswordReset = {
+  staffId: string;
+  email: string;
+  displayName: string;
+  role: string;
+  hotelId: string | null;
+  hotelName: string | null;
+  temporaryPassword: string | null;
+  created: boolean;
+  cooldownSeconds: number;
+};
+
+export async function resetStaffPassword(
+  token: string,
+  staffId: string,
+  idempotencyKey: string,
+): Promise<StaffPasswordReset> {
+  const response = await fetch(`/api/staff/staff/${staffId}/password`, {
+    method: "POST",
+    headers: { "X-Staff-Session": token, "Idempotency-Key": idempotencyKey },
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(
+      error.message ?? passwordResetFailureMessage(response.status),
+      response.status,
+      error.code,
+    );
+  }
+  return (await response.json()) as StaffPasswordReset;
+}
+
+function passwordResetFailureMessage(status: number) {
+  if (status === 403) return "비밀번호 재발급은 본사 관리자만 할 수 있습니다.";
+  if (status === 404) return "직원을 찾을 수 없습니다. 목록을 새로고침해 주세요.";
+  if (status === 409) {
+    return "방금 재발급된 직원입니다. 잠시 후 다시 시도해 주세요.";
+  }
+  return "비밀번호를 재발급하지 못했습니다. 잠시 후 다시 시도해 주세요.";
+}
+
+// 본사가 객실 유형별 일자 재고를 읽기 전용으로 확인한다.
+export type InventoryDay = {
+  stayDate: string;
+  capacity: number;
+  held: number;
+  confirmed: number;
+  remaining: number;
+};
+
+export type RoomTypeInventory = {
+  roomTypeId: string;
+  name: string;
+  maxOccupancy: number;
+  days: InventoryDay[];
+};
+
+export type InventoryView = {
+  hotelId: string;
+  roomTypes: RoomTypeInventory[];
+};
+
+export async function getStaffInventory(
+  token: string,
+  hotelId: string,
+  filters: { from?: string; to?: string } = {},
+): Promise<InventoryView> {
+  const searchParams = new URLSearchParams();
+  if (filters.from) searchParams.set("from", filters.from);
+  if (filters.to) searchParams.set("to", filters.to);
+  const query = searchParams.size ? `?${searchParams}` : "";
+  const response = await fetch(`/api/staff/hotels/${hotelId}/inventory${query}`, {
+    headers: { "X-Staff-Session": token },
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(
+      error.message ?? "재고를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.",
+      response.status,
+      error.code,
+    );
+  }
+  return response.json() as Promise<InventoryView>;
+}
+
+// 본사가 체인 공통 정책의 현재값을 읽기 전용으로 확인한다.
+export type CancellationPolicy = {
+  refundCutoffDaysBefore: number;
+  refundCutoffLocalTime: string;
+  timezone: string;
+};
+
+export type ChainPolicy = {
+  cancellation: CancellationPolicy;
+  changeApprovalDirectLimitKrw: number;
+  changeSettlementEnabled: boolean;
+  revision: number;
+};
+
+async function policyRequest<T>(path: string, token: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(path, {
+    ...init,
+    headers: { "X-Staff-Session": token, ...(init?.body ? { "Content-Type": "application/json" } : {}), ...init?.headers },
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(error.message ?? policyFailureMessage(response.status), response.status, error.code);
+  }
+  return (await response.json()) as T;
+}
+
+function policyFailureMessage(status: number) {
+  if (status === 403) return "공통 정책은 본사 관리자만 확인할 수 있습니다.";
+  return "공통 정책을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.";
+}
+
+export function getChainPolicies(token: string) {
+  return policyRequest<ChainPolicy>("/api/staff/policies", token);
+}
+
+// 본사가 취소 정책을 변경한다. 멱원 재호출은 200으로 같은 revision을 돌려준다.
+export type UpdateCancellationPolicyInput = {
+  refundCutoffDaysBefore: number;
+  refundCutoffLocalTime: string;
+};
+
+export type UpdatedCancellationPolicy = {
+  refundCutoffDaysBefore: number;
+  refundCutoffLocalTime: string;
+  timezone: string;
+  revision: number;
+  created: boolean;
+};
+
+export function updateCancellationPolicy(
+  token: string,
+  idempotencyKey: string,
+  input: UpdateCancellationPolicyInput,
+) {
+  return policyRequest<UpdatedCancellationPolicy>("/api/staff/policies/cancellation", token, {
+    method: "PUT",
+    headers: { "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify(input),
+  });
+}
+
+// 본사가 지점 직접 승인 한도를 변경한다. 진행 중인 변경 요청은 저장된 한도를 유지한다.
+export type UpdateChangeApprovalLimitInput = {
+  directLimitKrw: number;
+};
+
+export type UpdatedChangeApprovalLimit = {
+  directLimitKrw: number;
+  revision: number;
+  created: boolean;
+};
+
+export function updateChangeApprovalLimit(
+  token: string,
+  idempotencyKey: string,
+  input: UpdateChangeApprovalLimitInput,
+) {
+  return policyRequest<UpdatedChangeApprovalLimit>("/api/staff/policies/change-limit", token, {
+    method: "PUT",
+    headers: { "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify(input),
+  });
+}
+
+// 본사가 정책 변경 이력을 최신순으로 읽는다. SELECT만 노출한다.
+export type PolicyRevision = {
+  key: string;
+  summary: string;
+  staffEmail: string;
+  staffDisplayName: string;
+  staffRole: string;
+  createdAt: string;
+};
+
+export type PolicyRevisions = {
+  revisions: PolicyRevision[];
+  totalCount: number;
+  limit: number;
+  offset: number;
+};
+
+export async function getPolicyRevisions(
+  token: string,
+  filters: { limit?: number; offset?: number } = {},
+): Promise<PolicyRevisions> {
+  const searchParams = new URLSearchParams();
+  if (filters.limit) searchParams.set("limit", String(filters.limit));
+  if (filters.offset) searchParams.set("offset", String(filters.offset));
+  const query = searchParams.size ? `?${searchParams}` : "";
+  return policyRequest<PolicyRevisions>(`/api/staff/policies/revisions${query}`, token);
+}
+
+// 본사가 V29~V37 감사 표와 예약 변경 이력을 통합해 읽는다. SELECT만 노출한다.
+export type AuditEventType =
+  | "GUEST_UPDATE"
+  | "PARTY_UPDATE"
+  | "ROOM_REASSIGNMENT"
+  | "STAY_CHANGE"
+  | "CANCELLATION"
+  | "ROOM_OPERATIONAL_TRANSITION"
+  | "CHECKED_IN_ROOM_MOVE"
+  | "CHANGE_REQUEST_EVENT";
+
+export const auditEventLabels: Record<AuditEventType, string> = {
+  GUEST_UPDATE: "예약자 정정",
+  PARTY_UPDATE: "투숙 인원 변경",
+  ROOM_REASSIGNMENT: "배정 객실 변경",
+  STAY_CHANGE: "숙박 조건 변경",
+  CANCELLATION: "예약 취소",
+  ROOM_OPERATIONAL_TRANSITION: "객실 운영 상태",
+  CHECKED_IN_ROOM_MOVE: "투숙 중 객실 이동",
+  CHANGE_REQUEST_EVENT: "예약 변경 요청",
+};
+
+export type AuditEvent = {
+  eventType: AuditEventType;
+  createdAt: string;
+  staffEmail: string;
+  staffDisplayName: string;
+  staffRole: string;
+  hotelId: string;
+  hotelName: string;
+  reservationId: string | null;
+  guestName: string | null;
+  roomNumber: string | null;
+  summary: string;
+};
+
+export type AuditEvents = {
+  events: AuditEvent[];
+  totalCount: number;
+  limit: number;
+  offset: number;
+};
+
+export async function getAuditEvents(
+  token: string,
+  filters: {
+    reservationId?: string;
+    hotelId?: string;
+    from?: string;
+    to?: string;
+    limit?: number;
+    offset?: number;
+  } = {},
+): Promise<AuditEvents> {
+  const searchParams = new URLSearchParams();
+  if (filters.reservationId) searchParams.set("reservationId", filters.reservationId);
+  if (filters.hotelId) searchParams.set("hotelId", filters.hotelId);
+  if (filters.from) searchParams.set("from", filters.from);
+  if (filters.to) searchParams.set("to", filters.to);
+  if (filters.limit) searchParams.set("limit", String(filters.limit));
+  if (filters.offset) searchParams.set("offset", String(filters.offset));
+  const query = searchParams.size ? `?${searchParams}` : "";
+  const response = await fetch(`/api/staff/audit${query}`, {
+    headers: { "X-Staff-Session": token },
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(
+      error.message ?? auditFailureMessage(response.status),
+      response.status,
+      error.code,
+    );
+  }
+  return (await response.json()) as AuditEvents;
+}
+
+function auditFailureMessage(status: number) {
+  if (status === 403) return "감사 이력은 본사 관리자만 확인할 수 있습니다.";
+  return "감사 이력을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.";
+}
+
+// 본사가 지점별 운영 통계를 읽기 전용으로 확인한다. 매출은 취소·노쇼를 제외한다.
+export type HotelOperationsMetrics = {
+  hotelId: string;
+  hotelName: string;
+  region: string;
+  reservations: number;
+  cancelled: number;
+  noShow: number;
+  expired: number;
+  revenueKrw: number;
+  changeRequestsPending: number;
+  changeRequestsCompleted: number;
+  occupancyRate: number;
+};
+
+export type OperationsReportTotals = {
+  reservations: number;
+  cancelled: number;
+  noShow: number;
+  expired: number;
+  revenueKrw: number;
+  changeRequestsPending: number;
+  changeRequestsCompleted: number;
+};
+
+export type OperationsReport = {
+  from: string;
+  to: string;
+  days: number;
+  hotels: HotelOperationsMetrics[];
+  totals: OperationsReportTotals;
+};
+
+export async function getOperationsReport(
+  token: string,
+  filters: { from?: string; to?: string; hotelId?: string } = {},
+): Promise<OperationsReport> {
+  const searchParams = new URLSearchParams();
+  if (filters.from) searchParams.set("from", filters.from);
+  if (filters.to) searchParams.set("to", filters.to);
+  if (filters.hotelId) searchParams.set("hotelId", filters.hotelId);
+  const query = searchParams.size ? `?${searchParams}` : "";
+  const response = await fetch(`/api/staff/reports/operations${query}`, {
+    headers: { "X-Staff-Session": token },
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(
+      error.message ?? reportFailureMessage(response.status),
+      response.status,
+      error.code,
+    );
+  }
+  return response.json() as Promise<OperationsReport>;
+}
+
+function reportFailureMessage(status: number) {
+  if (status === 403) return "운영 통계는 본사 관리자만 확인할 수 있습니다.";
+  return "운영 통계를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.";
+}
