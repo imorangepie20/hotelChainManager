@@ -1,5 +1,8 @@
 package team.hotelchain.web;
 
+import team.hotelchain.hotel.HotelNotFoundException;
+import team.hotelchain.payment.settlement.SettlementNotRetryableException;
+import team.hotelchain.payment.settlement.SettlementRunNotFoundException;
 import team.hotelchain.reservation.BusinessConflictException;
 import team.hotelchain.reservation.ReservationNotFoundException;
 import team.hotelchain.operations.RoomHasActiveAssignmentsException;
@@ -88,6 +91,24 @@ public class ApiExceptionHandler {
     @ResponseStatus(HttpStatus.FORBIDDEN)
     public ApiError staffAccessDenied(StaffAccessDeniedException exception) {
         return new ApiError("STAFF_HOTEL_ACCESS_DENIED", exception.getMessage());
+    }
+
+    @ExceptionHandler(HotelNotFoundException.class)
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    public ApiError hotelNotFound(HotelNotFoundException exception) {
+        return new ApiError("HOTEL_NOT_FOUND", exception.getMessage());
+    }
+
+    @ExceptionHandler(SettlementRunNotFoundException.class)
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    public ApiError settlementRunNotFound(SettlementRunNotFoundException exception) {
+        return new ApiError("SETTLEMENT_RUN_NOT_FOUND", exception.getMessage());
+    }
+
+    @ExceptionHandler(SettlementNotRetryableException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public ApiError settlementNotRetryable(SettlementNotRetryableException exception) {
+        return new ApiError("SETTLEMENT_RUN_NOT_RETRYABLE", exception.getMessage());
     }
 
     public record RoomOperationalConflictError(

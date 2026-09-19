@@ -23,6 +23,7 @@ import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLSession;
 import org.junit.jupiter.api.Test;
+import team.hotelchain.payment.TossPaymentEnvironment;
 import team.hotelchain.payment.TossPaymentsProperties;
 
 class TossSettlementHttpClientTest {
@@ -38,7 +39,7 @@ class TossSettlementHttpClientTest {
                   "approvedAt":"2026-09-14T10:00:00+09:00","soldDate":"2026-09-14",
                   "paidOutDate":"2026-09-21","cancel":{"cancelAmount":97000}}]
                 """);
-        var client = new TossSettlementHttpClient(liveProperties(), http, new ObjectMapper());
+        var client = new TossSettlementHttpClient(liveProperties(), TossPaymentEnvironment.LIVE, http, new ObjectMapper());
 
         var page = client.fetch(DAY, 2, 1);
 
@@ -63,11 +64,33 @@ class TossSettlementHttpClientTest {
 
     @Test
     void preserves_structural_fee_mismatch_for_reconciliation() {
-        var client = new TossSettlementHttpClient(liveProperties(),
+        var client = new TossSettlementHttpClient(liveProperties(), TossPaymentEnvironment.LIVE,
                 new CapturingHttpClient(200, single("hotel-live", "간편결제", 999)), new ObjectMapper());
 
         assertThat(client.fetch(DAY, 1, 500).records()).singleElement()
                 .satisfies(record -> assertThat(record.payoutKrw()).isEqualTo(999));
+    }
+
+    @Test
+    void accepts_test_environment_configuration_and_reports_environment() {
+        var properties = new TossPaymentsProperties(
+                "test_gck_fixture", "test_gsk_fixture", "hotel-test", "http://127.0.0.1:4000");
+
+        var client = new TossSettlementHttpClient(properties, TossPaymentEnvironment.TEST,
+                new CapturingHttpClient(200, single("hotel-test", "카드", 999)), new ObjectMapper());
+
+        assertThat(client.environment()).isEqualTo(TossPaymentEnvironment.TEST);
+        assertThat(client.fetch(DAY, 1, 500).records()).isNotEmpty();
+    }
+
+    @Test
+    void rejects_keys_that_do_not_match_the_chosen_environment() {
+        var properties = new TossPaymentsProperties(
+                "test_gck_fixture", "test_gsk_fixture", "hotel-test", "http://127.0.0.1:4000");
+
+        assertThatThrownBy(() -> new TossSettlementHttpClient(properties, TossPaymentEnvironment.LIVE,
+                new CapturingHttpClient(200, single("hotel-test", "카드", 999)), new ObjectMapper()))
+                .isInstanceOf(IllegalStateException.class);
     }
 
     @Test
@@ -87,7 +110,8 @@ class TossSettlementHttpClientTest {
     }
 
     private TossSettlementHttpClient client(int status, String body) {
-        return new TossSettlementHttpClient(liveProperties(), new CapturingHttpClient(status, body), new ObjectMapper());
+        return new TossSettlementHttpClient(liveProperties(), TossPaymentEnvironment.LIVE,
+                new CapturingHttpClient(status, body), new ObjectMapper());
     }
 
     private TossPaymentsProperties liveProperties() {

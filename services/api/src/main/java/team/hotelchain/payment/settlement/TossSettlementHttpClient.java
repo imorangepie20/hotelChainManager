@@ -15,22 +15,29 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Set;
-import team.hotelchain.payment.TossPaymentEnvironment;
 import team.hotelchain.payment.TossPaymentsProperties;
+import team.hotelchain.payment.TossPaymentEnvironment;
 
 public final class TossSettlementHttpClient implements TossSettlementClient {
     private static final URI API = URI.create("https://api.tosspayments.com/v1/settlements");
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(65);
     private static final Set<String> METHODS = Set.of("카드", "간편결제");
     private final TossPaymentsProperties properties;
+    private final TossPaymentEnvironment environment;
     private final HttpClient http;
     private final ObjectMapper json;
 
-    public TossSettlementHttpClient(TossPaymentsProperties properties, HttpClient http, ObjectMapper json) {
-        TossPaymentEnvironment.LIVE.requireConfiguration(properties);
+    public TossSettlementHttpClient(TossPaymentsProperties properties, TossPaymentEnvironment environment,
+            HttpClient http, ObjectMapper json) {
+        environment.requireConfiguration(properties);
         this.properties = properties;
+        this.environment = environment;
         this.http = http;
         this.json = json;
+    }
+
+    public TossPaymentEnvironment environment() {
+        return environment;
     }
 
     @Override

@@ -1,15 +1,17 @@
 "use client";
 
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import { ArrowLeft, RefreshCw } from "lucide-react";
+import { ArrowLeft, RefreshCw, RotateCw } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
+  createSettlementRun,
   getSettlementRun,
   getSettlementRuns,
+  retrySettlementRun,
   type ReconciliationRow,
   type SettlementRunDetailView,
   type SettlementRunSummary,
@@ -82,7 +84,9 @@ export function SettlementReconciliation() {
   const [detail, setDetail] = useState<SettlementRunDetailView | null>(null);
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const alertRef = useRef<HTMLParagraphElement>(null);
 
@@ -129,6 +133,46 @@ export function SettlementReconciliation() {
   function refresh() {
     setDetail(null);
     setRefreshVersion((version) => version + 1);
+  }
+
+  // 오늘부터 31일 이내만 서버가 허용한다. 폼의 기본값은 최근 7일이다.
+  function iso(daysAgo: number) {
+    const value = new Date();
+    value.setDate(value.getDate() - daysAgo);
+    return value.toISOString().slice(0, 10);
+  }
+
+  const [range, setRange] = useState({ from: iso(7), to: iso(1) });
+
+  function submitRange(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const token = window.localStorage.getItem("hotel-chain-staff-session");
+    if (!token) return;
+    setSubmitting(true);
+    setError(null);
+    setNotice(null);
+    void createSettlementRun(token, { from: range.from, to: range.to })
+      .then(() => {
+        setNotice(`${range.from} – ${range.to} 정산 실행을 요청했습니다. worker가 순차적으로 처리합니다.`);
+        refresh();
+      })
+      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "정산 실행 생성에 실패했습니다."))
+      .finally(() => setSubmitting(false));
+  }
+
+  function retryRun(run: SettlementRunSummary) {
+    const token = window.localStorage.getItem("hotel-chain-staff-session");
+    if (!token) return;
+    setSubmitting(true);
+    setError(null);
+    setNotice(null);
+    void retrySettlementRun(token, run.id)
+      .then(() => {
+        setNotice(`${displayDate(run.soldDateFrom)} – ${displayDate(run.soldDateTo)} 실행을 다시 대기 상태로 옮겼습니다.`);
+        refresh();
+      })
+      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "정산 실행 재시도에 실패했습니다."))
+      .finally(() => setSubmitting(false));
   }
 
   function selectRun(run: SettlementRunSummary) {
@@ -224,12 +268,54 @@ export function SettlementReconciliation() {
         </p>
       )}
 
+      {notice && (
+        <p role="status" className="rounded-lg border border-primary/30 bg-primary/10 p-3 text-sm text-primary">
+          {notice}
+        </p>
+      )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">정산 실행 요청</CardTitle>
+          <CardDescription>과거 31일 이내의 판매일 기간을 지정해 worker가 처리할 실행을 만듭니다.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={submitRange} className="flex flex-wrap items-end gap-2">
+            <label className="grid gap-1 text-xs">
+              시작 판매일
+              <input
+                aria-label="시작 판매일"
+                type="date"
+                required
+                max={iso(1)}
+                className="h-8 rounded-lg border bg-background px-2"
+                value={range.from}
+                onChange={(event) => setRange((previous) => ({ ...previous, from: event.target.value }))}
+              />
+            </label>
+            <label className="grid gap-1 text-xs">
+              종료 판매일
+              <input
+                aria-label="종료 판매일"
+                type="date"
+                required
+                max={iso(1)}
+                className="h-8 rounded-lg border bg-background px-2"
+                value={range.to}
+                onChange={(event) => setRange((previous) => ({ ...previous, to: event.target.value }))}
+              />
+            </label>
+            <Button type="submit" size="sm" disabled={submitting || loading}>실행 요청</Button>
+          </form>
+        </CardContent>
+      </Card>
+
       {loading && <p className="text-sm text-muted-foreground">정산 실행 목록을 불러오는 중입니다.</p>}
 
       {!loading && runs && runs.runs.length === 0 && (
         <Card>
           <CardHeader><CardTitle>정산 실행 내역이 없습니다</CardTitle>
-            <CardDescription>정산 worker가 실행된 뒤 snapshot과 대사 결과가 채워집니다.</CardDescription></CardHeader>
+            <CardDescription>위 폼으로 실행을 요청하면 worker가 snapshot과 대사 결과를 채웁니다.</CardDescription></CardHeader>
         </Card>
       )}
 
@@ -260,9 +346,22 @@ export function SettlementReconciliation() {
                 {run.errorCode && (
                   <p className="mt-3 text-sm text-destructive">오류 코드: {run.errorCode}</p>
                 )}
-                <Button size="sm" variant="outline" className="mt-4" onClick={() => selectRun(run)}>
-                  대사 내역 보기
-                </Button>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <Button size="sm" variant="outline" onClick={() => selectRun(run)}>
+                    대사 내역 보기
+                  </Button>
+                  {run.status === "FAILED" && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={submitting}
+                      onClick={() => retryRun(run)}
+                    >
+                      <RotateCw className="mr-2 h-4 w-4" />
+                      재실행
+                    </Button>
+                  )}
+                </div>
               </CardContent>
             </Card>
           ))}

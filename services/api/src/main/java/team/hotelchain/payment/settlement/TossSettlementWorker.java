@@ -15,7 +15,7 @@ import team.hotelchain.payment.settlement.TossSettlementClient.SettlementPage;
 import team.hotelchain.payment.settlement.TossSettlementClient.SettlementRecord;
 
 @Component
-@ConditionalOnExpression("${payment.toss.settlement-enabled:false} and '${payment.provider:fake}' == 'toss-live'")
+@ConditionalOnExpression("${payment.toss.settlement-enabled:false} and '${payment.provider:fake}' != 'fake'")
 public class TossSettlementWorker {
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transactions;

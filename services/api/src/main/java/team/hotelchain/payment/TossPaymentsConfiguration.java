@@ -10,7 +10,6 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.beans.factory.annotation.Qualifier;
 import team.hotelchain.payment.settlement.TossSettlementClient;
 import team.hotelchain.payment.settlement.TossSettlementHttpClient;
@@ -32,17 +31,17 @@ class TossPaymentsConfiguration {
     }
 
     @Bean(destroyMethod = "shutdown")
-    @ConditionalOnProperty(name = "payment.provider", havingValue = "toss-live")
+    @ConditionalOnExpression("'${payment.provider:fake}' == 'toss-test' or '${payment.provider:fake}' == 'toss-live'")
     ExecutorService tossSettlementExecutor() {
         return Executors.newFixedThreadPool(2, Thread.ofPlatform().daemon().name("toss-settlement-", 0).factory());
     }
 
     @Bean
-    @ConditionalOnProperty(name = "payment.provider", havingValue = "toss-live")
-    TossSettlementClient tossSettlementClient(TossPaymentsProperties properties,
+    @ConditionalOnExpression("'${payment.provider:fake}' == 'toss-test' or '${payment.provider:fake}' == 'toss-live'")
+    TossSettlementClient tossSettlementClient(TossPaymentsProperties properties, TossPaymentEnvironment environment,
             @Qualifier("tossSettlementExecutor") ExecutorService executor) {
-        TossPaymentEnvironment.LIVE.requireConfiguration(properties);
+        environment.requireConfiguration(properties);
         HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).executor(executor).build();
-        return new TossSettlementHttpClient(properties, http, new ObjectMapper());
+        return new TossSettlementHttpClient(properties, environment, http, new ObjectMapper());
     }
 }

@@ -12,9 +12,10 @@ import org.springframework.stereotype.Service;
 /**
  * 본사 읽기 전용 정산·대사 조회. 테이블을 변경하지 않고 이미 저장된 snapshot·대사 결과만 제공한다.
  * 결제·정산·재고에 영향을 주는 동작은 이 클래스에 없다.
+ * worker·대사 서비스와 같은 조건으로 토스 결제 환경(fake 이외)에서만 로드된다.
  */
 @Service
-@ConditionalOnExpression("${payment.toss.settlement-enabled:false} and '${payment.provider:fake}' == 'toss-live'")
+@ConditionalOnExpression("${payment.toss.settlement-enabled:false} and '${payment.provider:fake}' != 'fake'")
 public class TossSettlementQueryService {
     private final JdbcTemplate jdbc;
     private final Clock clock;

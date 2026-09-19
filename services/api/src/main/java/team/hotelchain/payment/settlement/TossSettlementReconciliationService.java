@@ -13,20 +13,25 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import team.hotelchain.payment.TossPaymentEnvironment;
+
 @Service
-@ConditionalOnExpression("${payment.toss.settlement-enabled:false} and '${payment.provider:fake}' == 'toss-live'")
+@ConditionalOnExpression("${payment.toss.settlement-enabled:false} and '${payment.provider:fake}' != 'fake'")
 public class TossSettlementReconciliationService {
     private static final ZoneId SETTLEMENT_ZONE = ZoneId.of("Asia/Seoul");
     private final JdbcTemplate jdbc;
     private final Clock clock;
     private final int delayDays;
+    private final String providerCode;
 
     public TossSettlementReconciliationService(JdbcTemplate jdbc, Clock clock,
+            @Value("${payment.provider:fake}") String providerMode,
             @Value("${payment.toss.settlement-delay-days:2}") int delayDays) {
         if (delayDays < 0 || delayDays > 30) throw new IllegalArgumentException("정산 지연 일수가 올바르지 않습니다.");
         this.jdbc = jdbc;
         this.clock = clock;
         this.delayDays = delayDays;
+        this.providerCode = TossPaymentEnvironment.from(providerMode).providerCode();
     }
 
     @Transactional
@@ -90,25 +95,25 @@ public class TossSettlementReconciliationService {
                 from payment_provider_attempt pa join payment_transaction pt
                   on pt.reservation_id=pa.reservation_id and pt.provider=pa.provider
                  and pt.merchant_account=pa.merchant_account and pt.gateway_transaction_id=pa.payment_key
-                where pa.provider='TOSS_LIVE' and pa.status='SUCCEEDED' and pa.merchant_account=?
+                where pa.provider=? and pa.status='SUCCEEDED' and pa.merchant_account=?
                   and pa.payment_key=? and pa.provider_event_id=?
                 union all
                 select pt.id,null::uuid,pt.captured_amount_krw
                 from toss_adjustment_order o join payment_adjustment_attempt a on a.id=o.attempt_id
                 join payment_transaction pt on pt.change_request_id=a.request_id and pt.provider=a.provider
-                where a.provider='TOSS_LIVE' and a.status='SUCCEEDED' and o.merchant_account=?
+                where a.provider=? and a.status='SUCCEEDED' and o.merchant_account=?
                   and o.payment_key=? and o.provider_event_id=?
-                """, snapshot.get("merchant_account"), snapshot.get("payment_key"), snapshot.get("transaction_key"),
-                snapshot.get("merchant_account"), snapshot.get("payment_key"), snapshot.get("transaction_key"));
+                """, providerCode, snapshot.get("merchant_account"), snapshot.get("payment_key"), snapshot.get("transaction_key"),
+                providerCode, snapshot.get("merchant_account"), snapshot.get("payment_key"), snapshot.get("transaction_key"));
     }
 
     private List<Map<String, Object>> refund(Map<String, Object> snapshot) {
         return jdbc.queryForList("""
                 select c.transaction_id,c.id refund_id,c.amount_krw expected_amount
                 from toss_refund_command c join payment_transaction pt on pt.id=c.transaction_id
-                where pt.provider='TOSS_LIVE' and c.status='SUCCEEDED' and c.merchant_account=?
+                where pt.provider=? and c.status='SUCCEEDED' and c.merchant_account=?
                   and c.payment_key=? and c.provider_event_id=?
-                """, snapshot.get("merchant_account"), snapshot.get("payment_key"), snapshot.get("transaction_key"));
+                """, providerCode, snapshot.get("merchant_account"), snapshot.get("payment_key"), snapshot.get("transaction_key"));
     }
 
     private void reconcileMissingProvider(UUID runId, String merchant, LocalDate from, LocalDate to) {
@@ -119,24 +124,24 @@ public class TossSettlementReconciliationService {
                   from payment_provider_attempt pa join payment_transaction pt
                     on pt.reservation_id=pa.reservation_id and pt.provider=pa.provider
                    and pt.merchant_account=pa.merchant_account and pt.gateway_transaction_id=pa.payment_key
-                  where pa.provider='TOSS_LIVE' and pa.status='SUCCEEDED' and pa.merchant_account=?
+                  where pa.provider=? and pa.status='SUCCEEDED' and pa.merchant_account=?
                   union all
                   select 'adjustment:'||o.attempt_id,pt.id,null::uuid,o.amount_krw,
                     o.payment_key,o.provider_event_id,o.updated_at
                   from toss_adjustment_order o join payment_adjustment_attempt a on a.id=o.attempt_id
                   join payment_transaction pt on pt.change_request_id=a.request_id and pt.provider=a.provider
-                  where a.provider='TOSS_LIVE' and a.status='SUCCEEDED' and o.status='SUCCEEDED'
+                  where a.provider=? and a.status='SUCCEEDED' and o.status='SUCCEEDED'
                     and o.merchant_account=?
                   union all
                   select 'refund:'||c.id,c.transaction_id,c.id,c.amount_krw,c.payment_key,c.provider_event_id,c.updated_at
                   from toss_refund_command c join payment_transaction pt on pt.id=c.transaction_id
-                  where pt.provider='TOSS_LIVE' and c.status='SUCCEEDED' and c.merchant_account=?
+                  where pt.provider=? and c.status='SUCCEEDED' and c.merchant_account=?
                 ) internal
                 where internal.event_at>=? and internal.event_at<?
                   and not exists(select 1 from toss_settlement_snapshot s where s.merchant_account=?
                     and s.payment_key=internal.payment_key and s.transaction_key=internal.transaction_key
                     and s.sold_date between ? and ?)
-                """, merchant, merchant, merchant,
+                """, providerCode, merchant, providerCode, merchant, providerCode, merchant,
                 Timestamp.from(from.atStartOfDay(SETTLEMENT_ZONE).toInstant()),
                 Timestamp.from(to.plusDays(1).atStartOfDay(SETTLEMENT_ZONE).toInstant()),
                 merchant, from, to);
