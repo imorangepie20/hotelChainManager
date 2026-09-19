@@ -13,6 +13,7 @@ import java.util.HexFormat;
 import java.util.Set;
 import java.util.UUID;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,7 +26,7 @@ import team.hotelchain.staff.StaffPrincipal;
 
 @Service
 public class WebsitePreviewGrantService {
-    private static final Duration TTL = Duration.ofMinutes(10);
+    private static final Duration DEFAULT_TTL = Duration.ofMinutes(10);
     private static final Duration CLEANUP_RETENTION = Duration.ofHours(24);
     private static final Set<String> PREVIEWABLE_TYPES = Set.of("HOME_PAGE", "HOTEL_LANDING", "CONTENT_PAGE");
 
@@ -34,15 +35,21 @@ public class WebsitePreviewGrantService {
     private final Clock clock;
     private final WebsitePageService pages;
     private final WebsiteTranslationService translations;
+    private final Duration ttl;
     private final SecureRandom random = new SecureRandom();
 
     public WebsitePreviewGrantService(JdbcTemplate jdbc, StaffAccessService access, Clock clock,
-            WebsitePageService pages, WebsiteTranslationService translations) {
+            WebsitePageService pages, WebsiteTranslationService translations,
+            @Value("${website.preview.ttl-minutes:10}") int ttlMinutes) {
+        if (ttlMinutes < 1 || ttlMinutes > 60) {
+            throw new IllegalArgumentException("저장 초안 미리보기 만료 시간은 1~60분이어야 합니다.");
+        }
         this.jdbc = jdbc;
         this.access = access;
         this.clock = clock;
         this.pages = pages;
         this.translations = translations;
+        this.ttl = Duration.ofMinutes(ttlMinutes);
     }
 
     @Transactional
@@ -74,7 +81,7 @@ public class WebsitePreviewGrantService {
 
         UUID grantId = UUID.randomUUID();
         String rawToken = newToken();
-        Instant expiresAt = now.plus(TTL);
+        Instant expiresAt = now.plus(ttl);
         jdbc.update("""
                 insert into website_preview_grant
                     (id, token_hash, page_id, locale, draft_version, preview_path,
