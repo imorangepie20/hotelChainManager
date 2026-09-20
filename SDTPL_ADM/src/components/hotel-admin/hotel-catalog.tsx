@@ -43,6 +43,7 @@ export function HotelCatalog() {
   const [createOccupancy, setCreateOccupancy] = useState("2");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState("");
+  const [createNotice, setCreateNotice] = useState("");
   const [createKey, setCreateKey] = useState(0);
   const requestGeneration = useRef(0);
   const mounted = useRef(false);
@@ -106,13 +107,21 @@ export function HotelCatalog() {
     setCreating(true);
     setCreateError("");
     try {
-      // 멱원 재호출이 200으로 돌아와도 같은 객실 유형이므로 추가 안내만 생략한다.
-      await createRoomType(sessionToken, hotelId, `create-room-type-${createKey}`, { name, maxOccupancy: occupancy });
+      const result = await createRoomType(sessionToken, hotelId, `create-room-type-${createKey}`, { name, maxOccupancy: occupancy });
       setCreateOpen(false);
       setCreateName("");
       setCreateOccupancy("2");
       setCreateKey((key) => key + 1);
       await refresh();
+      // 시드가 끝나야 고객 검색에 나타난다. 재호출(created=false)이면 안내만 넘긴다.
+      const seed = result.seed;
+      if (seed && seed.created) {
+        setCreateNotice(
+          `${name}에 기본 요금제와 ${seed.pricedDays}일분 일자 재고를 심었습니다. ` +
+          `기본 요금 ${seed.defaultRateKrw.toLocaleString("ko-KR")}원, 객실 ${seed.inventoryCapacity}실입니다. ` +
+          `일자별 요금·재고는 이 화면의 다음 단계에서 조정합니다.`,
+        );
+      }
     } catch (cause) {
       setCreateError(cause instanceof StaffApiError ? cause.message : "객실 유형을 추가하지 못했습니다.");
     } finally {
@@ -122,6 +131,7 @@ export function HotelCatalog() {
 
   function openCreateDialog() {
     setCreateError("");
+    setCreateNotice("");
     setCreateOpen(true);
   }
 
@@ -241,6 +251,12 @@ export function HotelCatalog() {
 
       {isHeadquarters && !catalog && !error && (
         <p className="text-sm text-muted-foreground">객실 유형 목록을 불러오는 중입니다.</p>
+      )}
+
+      {createNotice && isHeadquarters && (
+        <p role="status" data-testid="create-room-type-notice" className="break-words text-sm text-muted-foreground">
+          {createNotice}
+        </p>
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>

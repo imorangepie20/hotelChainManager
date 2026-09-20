@@ -142,6 +142,14 @@ test("creates a room type and refreshes the catalog", async ({ page }) => {
           name: "디럭스",
           maxOccupancy: 3,
           created: true,
+          seed: {
+            ratePlanId: "33000000-0000-0000-0000-000000000003",
+            ratePlanName: "기본 요금제",
+            pricedDays: 90,
+            defaultRateKrw: 100000,
+            inventoryCapacity: 8,
+            created: true,
+          },
         }),
       });
       return;
@@ -174,6 +182,46 @@ test("creates a room type and refreshes the catalog", async ({ page }) => {
 
   await expect(page.getByText("객실 유형 3종")).toBeVisible();
   await expect(page.getByRole("cell", { name: "디럭스" })).toBeVisible();
+});
+
+test("tells headquarters the seeded price and inventory", async ({ page }) => {
+  await page.addInitScript(seedStaffScript("HQ_ADMIN"));
+  await page.route("**/api/staff/hotels/*/room-types", async (route) => {
+    if (route.request().method() === "POST") {
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          roomTypeId: "23000000-0000-0000-0000-000000000003",
+          hotelId: "11000000-0000-0000-0000-000000000001",
+          name: "디럭스",
+          maxOccupancy: 3,
+          created: true,
+          seed: {
+            ratePlanId: "33000000-0000-0000-0000-000000000003",
+            ratePlanName: "기본 요금제",
+            pricedDays: 90,
+            defaultRateKrw: 100000,
+            inventoryCapacity: 8,
+            created: true,
+          },
+        }),
+      });
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: "application/json", body: CATALOG_BODY });
+  });
+
+  await page.goto("/dashboard/hotels");
+  await page.getByTestId("create-room-type").click();
+  await page.getByTestId("create-room-type-name").fill("디럭스");
+  await page.getByTestId("create-room-type-occupancy").fill("3");
+  await page.getByTestId("create-room-type-submit").click();
+
+  // 시드 안내가 없으면 본사는 객실 유형이 바로 예약 가능한지 알 수 없다.
+  await expect(page.getByTestId("create-room-type-notice")).toContainText("90일분");
+  await expect(page.getByTestId("create-room-type-notice")).toContainText("100,000원");
+  await expect(page.getByTestId("create-room-type-notice")).toContainText("8실");
 });
 
 test("keeps the dialog open with a server validation message", async ({ page }) => {

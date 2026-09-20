@@ -26,9 +26,9 @@
 ### 1. 지점·객실 유형 관리 (HQ_ADMIN)
 
 - 지점 생성·수정·판매 중지. 객실 유형·요금제(`rate_plan`·`rate_day`) 등록과 일자별 요금 변경.
-- 현재: 읽기 전용 카탈로그(`GET /api/staff/hotels/{hotelId}/room-types`)와 `호텔 및 객실` (`/dashboard/hotels`) 메뉴가 객실 유형·요금제·요금 범위를 보여준다. 객실 유형 추가(`POST /api/staff/hotels/{hotelId}/room-types`)와 추가 대화상자도 동작한다.
-- **후보 메뉴**: `호텔 및 객실` (`/dashboard/hotels`) — **읽기 전용 1차 + 객실 유형 추가 구현됨**
-- 남음: 지점 생성·수정·판매 중지, 객실 유형 수정·삭제, 요금제 등록·수정, 일자별 요금 변경, 새 객실 유형의 초기 재고·요금 생성.
+- 현재: 읽기 전용 카탈로그(`GET /api/staff/hotels/{hotelId}/room-types`)와 `호텔 및 객실` (`/dashboard/hotels`) 메뉴가 객실 유형·요금제·요금 범위를 보여준다. 객실 유형 추가(`POST /api/staff/hotels/{hotelId}/room-types`)가 기본 요금제와 90일분 일자 요금·재고를 같은 트랜잭션에 심어서, 만든 직후 고객 가용성에 나타난다.
+- **후보 메뉴**: `호텔 및 객실` (`/dashboard/hotels`) — **읽기 전용 1차 + 객실 유형 추가·초기 재고·요금 시드 구현됨**
+- 남음: 지점 생성·수정·판매 중지, 객실 유형 수정·삭제, 요금제 등록·수정, 일자별 요금 변경.
 
 ### 2. 재고·가격 관리 (HQ_ADMIN)
 

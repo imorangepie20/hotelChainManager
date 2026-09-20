@@ -1436,12 +1436,22 @@ export type CreateRoomTypeRequest = {
   maxOccupancy: number;
 };
 
+export type CreatedRoomTypeSeed = {
+  ratePlanId: string | null;
+  ratePlanName: string | null;
+  pricedDays: number;
+  defaultRateKrw: number;
+  inventoryCapacity: number;
+  created: boolean;
+};
+
 export type CreatedRoomType = {
   roomTypeId: string;
   hotelId: string;
   name: string;
   maxOccupancy: number;
   created: boolean;
+  seed: CreatedRoomTypeSeed | null;
 };
 
 export async function createRoomType(

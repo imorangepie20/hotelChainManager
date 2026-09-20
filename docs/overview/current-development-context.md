@@ -12,6 +12,15 @@
 
 최종 갱신: 2026-09-20
 
+## 본사 객실 유형 - 기본 요금제·일자 재고 시드 (2026-09-20)
+
+- `admin-menu-roadmap.md` 1번 `지점·객실 유형 관리`에서 남은 첫 항목인 "새 객실 유형의 초기 재고·요금 생성"을 구현했다.
+- `RoomTypeCommandService.create`는 `room_type` 행만 만들었다. `rate_plan`·`rate_day`·`inventory_day`가 없으면 고객 `GET /api/availability`가 그 유형을 빼버려서, 본사가 추가한 객실 유형은 즉시 판매되지 않았다. 라이브 DB의 `스탠다드 트윈`이 이 상태(`plans=0`)였다.
+- 이제 `POST /api/staff/hotels/{hotelId}/room-types`가 기본 요금제 1개와 90일분 일자 요금·재고를 객실 유형과 **같은 트랜잭션**에 심는다. 실패하면 유형 행도 롤백돼서 "유형은 있는데 가격·재고가 없어 예약 불가" 상태가 생기지 않는다.
+- 시드 시작일은 지점 현지 시간대 기준 오늘이다. `Clock`이 UTC이고 지점이 `Asia/Seoul`이면 UTC 자정이 한국 시간 전일 09:00가 돼서 오늘 도착 검색이 빈 결과를 돌려받는다. `clock.withZone(hotelZone)`으로 보정했다.
+- 멱원 재시도가 같은 일자를 두 번 만들지 않는다. `ON CONFLICT DO NOTHING`으로 막는다. 금액은 첫 생성 시점의 환경 변수(`hotel.seed.*`) 값을 따르고, 이후 환경 변수를 바꿔도 이미 만든 유형에 영향을 주지 않는다.
+- API **전체 494건**(건너뜀 3)이 종료 코드 0이고, 관리자 `tsc --noEmit`·내 파일 `eslint`(경고 8건)·Playwright `hotel-catalog` 9건 + 인접 suite 33건이 종료 코드 0이다. 라이브에서 본사 세션으로 생성 201 `seed.pricedDays=90 defaultRateKrw=100000 inventoryCapacity=8`·같은 키 재호출 200 `created=false`를 확인했고, 고객 `GET /api/availability` 응답에 새 유형이 `remaining=8`·`total=300000`으로 포함됐다. 검증용 유형은 삭제해 라이브를 원래 4종으로 복원했다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-20-hq-room-type-seed.md)을 따른다.
+
 ## 본사 공통 정책 - 예약 변경 승인 한도 변경·이력 조회 (2026-09-20)
 
 - `admin-menu-roadmap.md` 5번 `공통 정책 관리`의 둘째 단계를 구현했다. `ReservationChangePolicy.directLimitKrw()`가 `application.yml` 고정값을 쓰고 있어 본사가 한도를 바꿀 수단이 없었다.
