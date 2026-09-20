@@ -17,3 +17,10 @@ reservation:
   change:
     settlement-enabled: false
     gateway: fake
+
+hotel:
+  seed:
+    # 테스트는 0원·0일·0객실을 거부하는 검증을 직접 하므로 유효한 기본값을 둔다.
+    default-rate-krw: 100000
+    rate-days: 90
+    inventory-capacity: 8

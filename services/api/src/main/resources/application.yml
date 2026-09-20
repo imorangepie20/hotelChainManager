@@ -32,6 +32,12 @@ policy:
     refund-cutoff-days-before: ${POLICY_CANCELLATION_CUTOFF_DAYS:1}
     refund-cutoff-local-time: ${POLICY_CANCELLATION_CUTOFF_TIME:18:00}
 
+hotel:
+  seed:
+    default-rate-krw: ${HOTEL_SEED_DEFAULT_RATE_KRW:100000}
+    rate-days: ${HOTEL_SEED_RATE_DAYS:90}
+    inventory-capacity: ${HOTEL_SEED_INVENTORY_CAPACITY:8}
+
 payment:
   provider: ${PAYMENT_PROVIDER:fake}
   checkout-enabled: ${PAYMENT_CHECKOUT_ENABLED:false}
