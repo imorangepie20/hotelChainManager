@@ -1487,6 +1487,57 @@ function roomTypeCreateFailureMessage(status: number) {
   return "객실 유형을 추가하지 못했습니다. 입력값을 확인한 뒤 다시 시도해 주세요.";
 }
 
+// 본사가 객실 유형의 이름·최대 인원을 바꾼다. 최대 인원을 내릴 때
+// 진행 중인 예약과 충돌하면 409로 거부한다.
+export type UpdateRoomTypeInput = {
+  name: string;
+  maxOccupancy: number;
+};
+
+export type UpdatedRoomType = {
+  roomTypeId: string;
+  hotelId: string;
+  name: string;
+  maxOccupancy: number;
+  created: boolean;
+};
+
+export async function updateRoomType(
+  token: string,
+  hotelId: string,
+  roomTypeId: string,
+  idempotencyKey: string,
+  input: UpdateRoomTypeInput,
+): Promise<UpdatedRoomType> {
+  const response = await fetch(`/api/staff/hotels/${hotelId}/room-types/${roomTypeId}`, {
+    method: "PATCH",
+    headers: {
+      "X-Staff-Session": token,
+      "Content-Type": "application/json",
+      "Idempotency-Key": idempotencyKey,
+    },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({})) as ApiErrorPayload;
+    throw new StaffApiError(
+      error.message ?? roomTypeUpdateFailureMessage(response.status),
+      response.status,
+      error.code,
+    );
+  }
+  return (await response.json()) as UpdatedRoomType;
+}
+
+function roomTypeUpdateFailureMessage(status: number) {
+  if (status === 403) return "객실 유형 수정은 본사 관리자만 할 수 있습니다.";
+  if (status === 404) return "객실 유형을 찾을 수 없습니다. 목록을 새로고침해 주세요.";
+  if (status === 409) {
+    return "최대 인원을 내릴 수 없습니다. 진행 중인 예약이 새 인원을 초과합니다.";
+  }
+  return "객실 유형을 수정하지 못했습니다. 입력값을 확인한 뒤 다시 시도해 주세요.";
+}
+
 // 본사가 직원 목록을 읽기 전용으로 확인한다.
 export type StaffAccountView = {
   id: string;

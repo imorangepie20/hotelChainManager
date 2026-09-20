@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Hotel, Plus, RefreshCw } from "lucide-react";
+import { Hotel, Pencil, Plus, RefreshCw } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import {
   createRoomType,
   getRoomTypeCatalog,
+  updateRoomType,
   StaffApiError,
+  type RoomTypeCatalogEntry,
   type RoomTypeCatalogView,
   type StaffPrincipal,
 } from "@/lib/staff-api";
@@ -45,6 +47,13 @@ export function HotelCatalog() {
   const [createError, setCreateError] = useState("");
   const [createNotice, setCreateNotice] = useState("");
   const [createKey, setCreateKey] = useState(0);
+  const [editTarget, setEditTarget] = useState<RoomTypeCatalogEntry | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editOccupancy, setEditOccupancy] = useState("2");
+  const [editing, setEditing] = useState(false);
+  const [editError, setEditError] = useState("");
+  const [editKey, setEditKey] = useState(0);
   const requestGeneration = useRef(0);
   const mounted = useRef(false);
 
@@ -135,6 +144,47 @@ export function HotelCatalog() {
     setCreateOpen(true);
   }
 
+  function openEditDialog(roomType: RoomTypeCatalogEntry) {
+    setEditError("");
+    setEditTarget(roomType);
+    setEditName(roomType.name);
+    setEditOccupancy(String(roomType.maxOccupancy));
+    setEditOpen(true);
+  }
+
+  async function editRoomTypeSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!sessionToken || !editTarget) return;
+    const name = editName.trim();
+    const occupancy = Number(editOccupancy);
+    if (!name) {
+      setEditError("객실 유형 이름을 입력해 주세요.");
+      return;
+    }
+    if (!Number.isInteger(occupancy) || occupancy < 1 || occupancy > 20) {
+      setEditError("최대 인원은 1 이상 20 이하여야 합니다.");
+      return;
+    }
+    // 최대 인원을 내릴 때 진행 중인 예약과 충돌하면 서버가 409로 거부한다.
+    // 여기서 막으면 서버 검증 메시지를 대화상자에서 볼 수 없다.
+    setEditing(true);
+    setEditError("");
+    try {
+      await updateRoomType(sessionToken, hotelId, editTarget.roomTypeId, `update-room-type-${editKey}`, {
+        name,
+        maxOccupancy: occupancy,
+      });
+      setEditKey((key) => key + 1);
+      setEditOpen(false);
+      setEditTarget(null);
+      await refresh();
+    } catch (cause) {
+      setEditError(cause instanceof StaffApiError ? cause.message : "객실 유형을 수정하지 못했습니다.");
+    } finally {
+      setEditing(false);
+    }
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -202,6 +252,7 @@ export function HotelCatalog() {
                   <TableHead>요금제</TableHead>
                   <TableHead>조식</TableHead>
                   <TableHead className="text-right">요금 범위</TableHead>
+                  {isHeadquarters ? <TableHead className="text-right">수정</TableHead> : null}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -240,6 +291,21 @@ export function HotelCatalog() {
                           ? "요금 미등록"
                           : range(Math.min(...prices), Math.max(...prices))}
                       </TableCell>
+                      {isHeadquarters ? (
+                        <TableCell className="text-right align-top">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => openEditDialog(roomType)}
+                            data-testid={`edit-room-type-${roomType.roomTypeId}`}
+                            aria-label={`${roomType.name} 수정`}
+                          >
+                            <Pencil className="h-4 w-4" aria-hidden />
+                            수정
+                          </Button>
+                        </TableCell>
+                      ) : null}
                     </TableRow>
                   );
                 })}
@@ -305,6 +371,58 @@ export function HotelCatalog() {
               </Button>
               <Button type="submit" disabled={creating || !createName.trim()} data-testid="create-room-type-submit">
                 {creating ? "추가하는 중" : "추가"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>객실 유형 수정</DialogTitle>
+            <DialogDescription>
+              이름과 최대 인원을 변경한다. 최대 인원을 내릴 때 진행 중인 예약이 새 인원을
+              초과하면 서버가 거부한다. 가격·재고·예약 확정의 권한은 서버에 있다.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={editRoomTypeSubmit} className="grid gap-3">
+            <label className="grid gap-1 text-sm font-medium">
+              객실 유형 이름
+              <input
+                aria-label="객실 유형 이름"
+                type="text"
+                required
+                maxLength={100}
+                className="h-9 rounded-lg border bg-background px-3"
+                value={editName}
+                onChange={(event) => setEditName(event.target.value)}
+                data-testid="edit-room-type-name"
+              />
+            </label>
+            <label className="grid gap-1 text-sm font-medium">
+              최대 인원
+              <input
+                aria-label="최대 인원"
+                type="text"
+                inputMode="numeric"
+                autoComplete="off"
+                required
+                className="h-9 rounded-lg border bg-background px-3 tabular-nums"
+                value={editOccupancy}
+                onChange={(event) => setEditOccupancy(event.target.value)}
+                data-testid="edit-room-type-occupancy"
+              />
+            </label>
+            {editError ? (
+              <p role="alert" className="break-words text-sm text-destructive">{editError}</p>
+            ) : null}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setEditOpen(false)} disabled={editing}>
+                취소
+              </Button>
+              <Button type="submit" disabled={editing || !editName.trim()} data-testid="edit-room-type-submit">
+                {editing ? "수정하는 중" : "수정"}
               </Button>
             </DialogFooter>
           </form>
