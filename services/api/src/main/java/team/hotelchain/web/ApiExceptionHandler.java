@@ -1,6 +1,7 @@
 package team.hotelchain.web;
 
 import team.hotelchain.hotel.HotelNotFoundException;
+import team.hotelchain.hotel.RoomTypeOccupancyConflictException;
 import team.hotelchain.payment.settlement.SettlementNotRetryableException;
 import team.hotelchain.payment.settlement.SettlementRunNotFoundException;
 import team.hotelchain.reservation.BusinessConflictException;
@@ -97,6 +98,12 @@ public class ApiExceptionHandler {
     @ResponseStatus(HttpStatus.NOT_FOUND)
     public ApiError hotelNotFound(HotelNotFoundException exception) {
         return new ApiError("HOTEL_NOT_FOUND", exception.getMessage());
+    }
+
+    @ExceptionHandler(RoomTypeOccupancyConflictException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public ApiError roomTypeOccupancyConflict(RoomTypeOccupancyConflictException exception) {
+        return new ApiError("ROOM_TYPE_OCCUPANCY_CONFLICT", exception.getMessage());
     }
 
     @ExceptionHandler(SettlementRunNotFoundException.class)

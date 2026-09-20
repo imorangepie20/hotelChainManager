@@ -383,12 +383,183 @@ class RoomTypeCommandIntegrationTest {
         org.assertj.core.api.Assertions.assertThat(count).isEqualTo(3);
     }
 
+    @Test
+    void headquartersUpdatesRoomTypeNameAndOccupancy() throws Exception {
+        mvc.perform(MockMvcRequestBuilders.patch("/api/staff/hotels/{hotelId}/room-types/{roomTypeId}", SOKCHO, STANDARD)
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "update-standard")
+                .contentType("application/json")
+                .content("{\"name\":\"스탠다드 디럭스\",\"maxOccupancy\":4}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.roomTypeId").value(STANDARD.toString()))
+                .andExpect(jsonPath("$.name").value("스탠다드 디럭스"))
+                .andExpect(jsonPath("$.maxOccupancy").value(4))
+                .andExpect(jsonPath("$.created").value(true));
+
+        // 카탈로그가 바뀐 값을 반영한다.
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/hotels/{hotelId}/room-types", SOKCHO)
+                .header("X-Staff-Session", hqToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.roomTypes[0].name").value("스탠다드 디럭스"))
+                .andExpect(jsonPath("$.roomTypes[0].maxOccupancy").value(4));
+    }
+
+    @Test
+    void sameIdempotencyKeyReturnsSameUpdate() throws Exception {
+        String body = "{\"name\":\"스탠다드 디럭스\",\"maxOccupancy\":4}";
+        String first = mvc.perform(MockMvcRequestBuilders.patch("/api/staff/hotels/{hotelId}/room-types/{roomTypeId}", SOKCHO, STANDARD)
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "update-standard")
+                .contentType("application/json")
+                .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.created").value(true))
+                .andReturn().getResponse().getContentAsString();
+
+        // 같은 키 재호출은 같은 결과를 돌려준다.
+        mvc.perform(MockMvcRequestBuilders.patch("/api/staff/hotels/{hotelId}/room-types/{roomTypeId}", SOKCHO, STANDARD)
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "update-standard")
+                .contentType("application/json")
+                .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.created").value(false))
+                .andExpect(jsonPath("$.name").value("스탠다드 디럭스"));
+
+        // 새 키로 같은 내용을 보내도 같은 결과를 돌려준다.
+        mvc.perform(MockMvcRequestBuilders.patch("/api/staff/hotels/{hotelId}/room-types/{roomTypeId}", SOKCHO, STANDARD)
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "update-standard-retry")
+                .contentType("application/json")
+                .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.created").value(false))
+                .andExpect(jsonPath("$.name").value("스탠다드 디럭스"));
+
+        org.assertj.core.api.Assertions.assertThat(extractRoomTypeId(first)).isEqualTo(STANDARD.toString());
+
+        // 수정은 한 번만 일어난다.
+        Integer commands = jdbc.queryForObject(
+                "select count(*) from room_type_command where room_type_id = ? and kind = 'UPDATE'",
+                Integer.class, STANDARD);
+        org.assertj.core.api.Assertions.assertThat(commands).isEqualTo(1);
+    }
+
+    @Test
+    void updateValidationFailuresAreRejected() throws Exception {
+        mvc.perform(MockMvcRequestBuilders.patch("/api/staff/hotels/{hotelId}/room-types/{roomTypeId}", SOKCHO, STANDARD)
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "update-blank")
+                .contentType("application/json")
+                .content("{\"name\":\"   \",\"maxOccupancy\":4}"))
+                .andExpect(status().isBadRequest());
+
+        mvc.perform(MockMvcRequestBuilders.patch("/api/staff/hotels/{hotelId}/room-types/{roomTypeId}", SOKCHO, STANDARD)
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "update-zero")
+                .contentType("application/json")
+                .content("{\"name\":\"스탠다드\",\"maxOccupancy\":0}"))
+                .andExpect(status().isBadRequest());
+
+        mvc.perform(MockMvcRequestBuilders.patch("/api/staff/hotels/{hotelId}/room-types/{roomTypeId}", SOKCHO, STANDARD)
+                .header("X-Staff-Session", hqToken)
+                .contentType("application/json")
+                .content("{\"name\":\"스탠다드\",\"maxOccupancy\":4}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void updatePermissionAndLookupFailures() throws Exception {
+        mvc.perform(MockMvcRequestBuilders.patch("/api/staff/hotels/{hotelId}/room-types/{roomTypeId}", SOKCHO, STANDARD)
+                .header("X-Staff-Session", sokchoToken)
+                .header("Idempotency-Key", "update-standard")
+                .contentType("application/json")
+                .content("{\"name\":\"스탠다드\",\"maxOccupancy\":4}"))
+                .andExpect(status().isForbidden());
+
+        mvc.perform(MockMvcRequestBuilders.patch("/api/staff/hotels/{hotelId}/room-types/{roomTypeId}", SOKCHO, STANDARD)
+                .header("Idempotency-Key", "update-standard")
+                .contentType("application/json")
+                .content("{\"name\":\"스탠다드\",\"maxOccupancy\":4}"))
+                .andExpect(status().isUnauthorized());
+
+        // 없는 지점
+        mvc.perform(MockMvcRequestBuilders.patch("/api/staff/hotels/{hotelId}/room-types/{roomTypeId}", UUID.randomUUID(), STANDARD)
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "update-standard")
+                .contentType("application/json")
+                .content("{\"name\":\"스탠다드\",\"maxOccupancy\":4}"))
+                .andExpect(status().isNotFound());
+
+        // 다른 지점의 객실 유형
+        mvc.perform(MockMvcRequestBuilders.patch("/api/staff/hotels/{hotelId}/room-types/{roomTypeId}", JEJU, STANDARD)
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "update-standard")
+                .contentType("application/json")
+                .content("{\"name\":\"스탠다드\",\"maxOccupancy\":4}"))
+                .andExpect(status().isNotFound());
+
+        // 없는 객실 유형
+        mvc.perform(MockMvcRequestBuilders.patch("/api/staff/hotels/{hotelId}/room-types/{roomTypeId}", SOKCHO, UUID.randomUUID())
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "update-standard")
+                .contentType("application/json")
+                .content("{\"name\":\"스탠다드\",\"maxOccupancy\":4}"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void loweringOccupancyBelowConfirmedReservationIsRejected() throws Exception {
+        // 확정 예약 1건: 성인 2·객실 1은 max_occupancy 2가 필요하다.
+        // 시작 자체가 2이므로 1로 내리면 충돌이다.
+        // STANDARD는 시드 없이 수동으로 만든 유형이므로 요금제를 직접 넣는다.
+        UUID ratePlanId = UUID.randomUUID();
+        jdbc.update("insert into rate_plan (id, room_type_id, name, breakfast_included, policy_version) values (?, ?, ?, false, 'FLEX-2026-01')",
+                ratePlanId, STANDARD, "테스트 요금제");
+        jdbc.update("""
+                insert into reservation
+                    (id, room_type_id, rate_plan_id, check_in, check_out, adults, children, rooms,
+                     status, total_krw, currency, expires_at, guest_name, guest_email,
+                     management_token_hash, policy_snapshot)
+                values (?, ?, ?, current_date, current_date + interval '1 day', 2, 0, 1,
+                    'CONFIRMED', 100000, 'KRW', now() + interval '10 minutes',
+                    '테스트 고객', 'guest@example.com', 'hash-placeholder', '{}')
+                """, UUID.randomUUID(), STANDARD, ratePlanId);
+
+        mvc.perform(MockMvcRequestBuilders.patch("/api/staff/hotels/{hotelId}/room-types/{roomTypeId}", SOKCHO, STANDARD)
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "update-lower")
+                .contentType("application/json")
+                .content("{\"name\":\"스탠다드\",\"maxOccupancy\":1}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("ROOM_TYPE_OCCUPANCY_CONFLICT"));
+
+        // 값은 바뀌지 않는다.
+        Integer occupancy = jdbc.queryForObject(
+                "select max_occupancy from room_type where id = ?", Integer.class, STANDARD);
+        org.assertj.core.api.Assertions.assertThat(occupancy).isEqualTo(2);
+    }
+
+    @Test
+    void raisingOccupancyIsAlwaysAllowed() throws Exception {
+        // 올리는 것은 어떤 예약도 새 한도를 초과하지 않으므로 제한 없이 허용한다.
+        mvc.perform(MockMvcRequestBuilders.patch("/api/staff/hotels/{hotelId}/room-types/{roomTypeId}", SOKCHO, STANDARD)
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "update-raise")
+                .contentType("application/json")
+                .content("{\"name\":\"스탠다드\",\"maxOccupancy\":6}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.maxOccupancy").value(6));
+    }
+
     private String extractRoomTypeId(String body) throws Exception {
         return mapper.readTree(body).get("roomTypeId").asText();
     }
 
     private void clean() {
         jdbc.update("delete from staff_session");
+        // 수정 충돌 검사가 reservation을 읽으므로 테스트가 만든 예약을 먼저 지운다.
+        jdbc.update("delete from reservation where room_type_id in (select id from room_type where hotel_id in (?, ?))", SOKCHO, JEJU);
         // room_type_command가 staff_member와 room_type를 참조하므로 가장 먼저 지운다.
         jdbc.update("delete from room_type_command where hotel_id in (?, ?)", SOKCHO, JEJU);
         jdbc.update("delete from staff_member");

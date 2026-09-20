@@ -5,6 +5,7 @@ import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -19,10 +20,13 @@ public class HotelCatalogController {
 
     private final HotelCatalogQueryService catalog;
     private final RoomTypeCommandService commands;
+    private final RoomTypeUpdateService updates;
 
-    public HotelCatalogController(HotelCatalogQueryService catalog, RoomTypeCommandService commands) {
+    public HotelCatalogController(HotelCatalogQueryService catalog, RoomTypeCommandService commands,
+            RoomTypeUpdateService updates) {
         this.catalog = catalog;
         this.commands = commands;
+        this.updates = updates;
     }
 
     @GetMapping("/{hotelId}/room-types")
@@ -46,5 +50,16 @@ public class HotelCatalogController {
             return ResponseEntity.status(HttpStatus.CREATED).body(response);
         }
         return ResponseEntity.ok(response);
+    }
+
+    // 본사가 객실 유형의 이름·최대 인원을 바꾼다. 응답은 200이고 멱원 재호출은 같은 결과를 돌려준다.
+    @PatchMapping("/{hotelId}/room-types/{roomTypeId}")
+    public RoomTypeUpdateResponse updateRoomType(
+            @PathVariable UUID hotelId,
+            @PathVariable UUID roomTypeId,
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @RequestHeader(value = "X-Staff-Session", required = false) String token,
+            @RequestBody RoomTypeUpdateRequest request) {
+        return updates.update(token, hotelId, roomTypeId, idempotencyKey, request);
     }
 }
