@@ -30,5 +30,12 @@
 ## 미검증·비변경 범위
 
 - API·DB 스키마와 가격·재고 권한 로직은 변경하지 않았다.
-- 전체 관리자 화면, 실제 배포 환경, 실데이터 API 연동은 이번 범위에서 다시 검증하지 않았다.
-- 커밋과 배포는 Gate 2 승인 전 수행하지 않았다.
+- 전체 관리자 화면의 인증 후 수동 클릭 회귀는 배포 환경에서 반복하지 않았다.
+
+## 커밋·배포
+
+- Gate 2 승인 후 전체 작업 트리를 `cdbea6e` (`feat: ship headquarters operations and Zorin deployment`)로 커밋해 원격 `main`에 푸시했다.
+- Zorin 배포 전 DB 볼륨을 `backup/db-2026-09-26-1855.tar.gz`로 백업했다.
+- API·고객 웹·관리자 production image 빌드와 기동이 성공했고 모든 컨테이너가 healthy 상태다.
+- 컨테이너 내부 3개 검사와 Cloudflare Tunnel 경유 공개 HTTPS 3개 검사가 모두 통과했다.
+- Flyway는 운영 DB 스키마 버전 64가 최신 상태라고 확인했다.

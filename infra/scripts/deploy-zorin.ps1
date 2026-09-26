@@ -45,10 +45,12 @@ if (-not ($Push -or $Up -or $Down -or $Logs -or $Verify -or $Backup)) {
 if ($Push) {
   Write-Output "코드를 $Server`:$RemoteDir 로 보낸다"
 
-  # 로컬 산출물과 비밀값은 보내지 않는다. Windows 에 rsync 가 없으므로
-  # tar 로 묶어서 ssh 로 보낸다.
+  # 로컬 산출물과 비밀값은 보내지 않는다. Windows PowerShell 5의 native
+  # pipeline은 tar의 binary stdout을 문자열로 변환할 수 있으므로 tar | ssh를
+  # 사용하지 않고 임시 archive를 만든 뒤 scp로 전송한다.
   $excludes = @(
-    "--exclude=.git", "--exclude=node_modules", "--exclude=target",
+    "--exclude=.git", "--exclude=.agents", "--exclude=.codex",
+    "--exclude=.pytest_cache", "--exclude=node_modules", "--exclude=target",
     "--exclude=dist", "--exclude=.next", "--exclude=build",
     "--exclude=.venv", "--exclude=__pycache__", "--exclude=.tmp",
     "--exclude=.local-runtime", "--exclude=test-results",
@@ -57,9 +59,22 @@ if ($Push) {
     "--exclude=infra/secrets/tunnel.env", "--exclude=infra/secrets/compose.env",
     "--exclude=backup"
   )
-  $tarArgs = @("-czf", "-") + $excludes + @(".")
-  & tar @tarArgs | ssh -o ConnectTimeout=15 $Server "mkdir -p $RemoteDir; tar -xzf - -C $RemoteDir"
-  if ($LASTEXITCODE -ne 0) { throw "tar 전송이 실패했습니다" }
+  $deployArchive = Join-Path ([IO.Path]::GetTempPath()) "hotel-chain-manager-$([guid]::NewGuid().ToString('N')).tar.gz"
+  $remoteArchive = "/tmp/hotel-chain-manager-$([guid]::NewGuid().ToString('N')).tar.gz"
+  try {
+    $tarArgs = @("-czf", $deployArchive) + $excludes + @(".")
+    & tar @tarArgs
+    if ($LASTEXITCODE -ne 0) { throw "배포 archive 생성이 실패했습니다" }
+
+    & scp -o ConnectTimeout=15 $deployArchive "$Server`:$remoteArchive"
+    if ($LASTEXITCODE -ne 0) { throw "배포 archive 전송이 실패했습니다" }
+
+    Invoke-Remote "mkdir -p $RemoteDir; tar -xzf $remoteArchive -C $RemoteDir; chmod +x $RemoteDir/services/api/mvnw $RemoteDir/infra/scripts/*.sh; rm -f $remoteArchive"
+  } finally {
+    if (Test-Path -LiteralPath $deployArchive) {
+      Remove-Item -LiteralPath $deployArchive -Force
+    }
+  }
 
   Write-Output "전송 완료"
 }
@@ -87,7 +102,7 @@ if ($Logs) {
 }
 
 if ($Verify) {
-  Invoke-Remote "cd $RemoteDir; ./infra/scripts/verify-deployment.sh"
+  Invoke-Remote "cd $RemoteDir; bash ./infra/scripts/verify-deployment.sh"
 }
 
 if ($Backup) {

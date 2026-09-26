@@ -58,3 +58,13 @@
 - 이번 작업 트리의 대규모 미커밋 기능 변경 전체를 서버에 배포하지 않았다.
   서버 애플리케이션 소스는 기존 배포본이고, 배포·터널 파일만 갱신했다.
 - 관리자 Cloudflare Access 정책은 구성 여부를 확인하지 않았다.
+
+## 후속 전체 변경 배포
+
+- 전체 미커밋 기능을 `cdbea6e`로 커밋하고 원격 `main`에 푸시한 뒤 Zorin 서버에 배포했다.
+- 배포 전 DB 볼륨을 `backup/db-2026-09-26-1855.tar.gz`로 백업했다.
+- Windows PowerShell의 `tar | ssh`가 바이너리 스트림을 손상시키는 문제가 있어, `deploy-zorin.ps1`을 임시 archive 생성 → `scp` → 원격 해제 방식으로 변경했다.
+- Windows archive가 실행 비트를 보존하지 않는 문제는 전송 후 `mvnw`와 `infra/scripts/*.sh`에 `chmod +x`를 적용하고 API Dockerfile에서도 `mvnw` 실행 권한을 명시해 해결했다.
+- API·고객 웹·관리자 production image가 모두 빌드됐고 컨테이너가 healthy 상태다. Flyway는 스키마 버전 64가 최신 상태임을 확인했다.
+- `verify-deployment.sh`의 컨테이너 내부 API·고객 웹·관리자 검사와 Cloudflare 경유 API·고객 웹·관리자 검사 6개가 모두 통과했다.
+- cloudflared는 서울 리전 `icn01`·`icn06`에 QUIC 연결 4개를 등록했다.
