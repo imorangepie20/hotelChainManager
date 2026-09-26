@@ -34,7 +34,7 @@ WITH hotel_seed(code, hotel_id, room_type_id, rate_plan_id, base_amount, current
            hotel.base_amount,
            period.day_offset,
            guest_no,
-           (CURRENT_DATE - period.day_offset)::date AS created_date
+           ((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Seoul')::date - period.day_offset)::date AS created_date
       FROM hotel_seed hotel
       CROSS JOIN LATERAL (
           SELECT current_offset AS day_offset, hotel.current_daily AS daily_count
@@ -104,7 +104,7 @@ WITH room_seed(room_type_id, capacity, confirmed) AS (
 )
 INSERT INTO inventory_day (room_type_id, stay_date, capacity, held, confirmed)
 SELECT room.room_type_id,
-       (CURRENT_DATE - day_offset)::date,
+       ((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Seoul')::date - day_offset)::date,
        room.capacity,
        0,
        room.confirmed
@@ -171,8 +171,10 @@ SELECT md5('hcm-report-sample-change-' || hotel.code || '-' || request.day_offse
        reservation.children,
        CURRENT_TIMESTAMP + interval '30 days',
        0,
-       ((CURRENT_DATE - request.day_offset)::timestamp + time '14:00') AT TIME ZONE 'Asia/Seoul',
-       ((CURRENT_DATE - request.day_offset)::timestamp + time '14:00') AT TIME ZONE 'Asia/Seoul',
+       (((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Seoul')::date - request.day_offset)::timestamp
+           + time '14:00') AT TIME ZONE 'Asia/Seoul',
+       (((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Seoul')::date - request.day_offset)::timestamp
+           + time '14:00') AT TIME ZONE 'Asia/Seoul',
        'CUSTOMER'
   FROM hotel_seed hotel
   CROSS JOIN request_seed request
@@ -197,11 +199,13 @@ COMMIT;
 SELECT h.name,
        count(DISTINCT r.id) FILTER (
            WHERE (r.created_at AT TIME ZONE 'Asia/Seoul')::date
-                 BETWEEN CURRENT_DATE - 13 AND CURRENT_DATE
+                 BETWEEN (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Seoul')::date - 13
+                     AND (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Seoul')::date
        ) AS sample_reservations_14d,
        count(DISTINCT req.id) FILTER (
            WHERE (req.created_at AT TIME ZONE 'Asia/Seoul')::date
-                 BETWEEN CURRENT_DATE - 13 AND CURRENT_DATE
+                 BETWEEN (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Seoul')::date - 13
+                     AND (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Seoul')::date
        ) AS sample_changes_14d
   FROM hotel h
   LEFT JOIN room_type rt ON rt.hotel_id = h.id
