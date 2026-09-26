@@ -34,6 +34,8 @@
   검증했고 92/93일 경계, 401·403·404, XLSX `no-store`, 상세 동반 새로고침과 늦은 응답 폐기,
   390px 언어 전환·다운로드·문서 폭도 확인했다. 상세 기록은
   [변경 기록](../changes/2026-09-27-hq-reports-comparison-i18n-xlsx.md)을 따른다.
+- `e878762`를 `origin/main`에 푸시해 Zorin 운영 서버에 배포했다. 실제 본사 세션으로 현재/이전
+  7일 JSON과 영문 XLSX를 확인했고, API·고객 웹·관리자 및 세 공개 터널 경로가 모두 정상이다.
 
 ## 본사 환불 규칙·지점별 정책·감사 통합 (2026-09-27)
 
@@ -42,6 +44,8 @@
 - V65가 정책 revision·규칙·no-op 멱원 영수증을 추가한다. 기존 단일 정책 API·snapshot·V65 이전 멱원 키를 호환하고, 연결된 legacy/new revision은 조회·감사에서 새 revision ID 하나로 표현한다.
 - 관리자 공통 정책 화면에 지점 선택, 상속/재정의 상태, 규칙 편집과 상속 복귀를 추가했다. 감사 메뉴에는 `POLICY_CHANGE`가 포함된다.
 - 정책·취소·감사·운영 통계 API 대상 Spring 테스트 7개 suite 125건과 Flyway V65의 PostgreSQL 16 적용, 관리자 TypeScript·프로덕션 빌드·대상 Playwright 38건(키보드·390px 포함), 고객 웹 프로덕션 빌드·대상 Playwright 24건이 통과했다. 관리자 변경 파일 ESLint는 오류 0건이며 기존 effect 안 상태 갱신 패턴 경고 3건이 남아 있다. Maven JAR 접근 오류는 Codex 샌드박스가 사용자 Maven 캐시를 제한한 것이 원인이었고, 허용된 외부 실행으로 testCompile과 테스트를 완료했다. 상세 기록은 [변경 기록](../changes/2026-09-27-hq-refund-branch-policies.md)을 따른다.
+- 운영 DB를 물리·논리 형식으로 백업한 뒤 V65를 적용했다. 운영 정책 읽기 API와 스키마 버전 65,
+  배포 직후 API 오류 로그 부재를 확인했다. 실제 Toss 부분 환불은 수행하지 않았다.
 
 ## 고객 웹 Playwright 기준선 복구와 카탈로그 쓰기 기능 감사 (2026-09-27)
 

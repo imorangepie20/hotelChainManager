@@ -50,8 +50,17 @@
 
 ## 미검증 항목
 
-- 실제 Toss 라이브 결제와 운영 DB migration 적용은 이번 로컬 구현 검증 범위에 포함하지 않았다.
+- 실제 Toss 라이브 결제와 운영 예약의 부분 환불 실행은 수행하지 않았다.
+
+## 배포 결과
+
+- 배포 전에 운영 DB를 물리 볼륨 archive와 PostgreSQL custom-format dump 두 형태로 백업했다.
+- `e878762`를 `origin/main`에 푸시하고 Zorin 운영 서버에 배포했다. Flyway 운영 스키마 버전 65,
+  API·고객 웹·관리자 컨테이너 health와 Cloudflare Tunnel 공개 경로를 확인했다.
+- 실제 본사 세션의 정책 조회가 범위와 한 개 이상의 환불 규칙을 반환하는 것을 확인했다.
+- 배포 직후 API 로그에는 `ERROR`, 애플리케이션 시작 실패, migration 실패가 없었다.
 
 ## 다음 작업
 
-- 운영 배포 전 staging에서 기존 예약 snapshot, 부분 환불, 정책 감사의 실제 DB/API 흐름을 확인한다.
+- 실제 Toss 부분 환불을 열기 전에 staging에서 기존 예약 snapshot, 부분 환불, 정책 감사의
+  실제 PG 흐름을 확인한다.
