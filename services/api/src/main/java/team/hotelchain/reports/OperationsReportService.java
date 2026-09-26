@@ -191,6 +191,67 @@ public class OperationsReportService {
         return count != null && count > 0;
     }
 
+    // 본사가 지점의 객실 유형별 매출을 확인한다. SELECT만 사용한다.
+    // 매출 집계는 applyReservations와 같은 기준을 쓴다.
+    public RoomTypeRevenueView roomTypeRevenue(String token, UUID hotelId, LocalDate from, LocalDate to) {
+        access.requireHeadquarters(token);
+        if (!hotelExists(hotelId)) {
+            throw new HotelNotFoundException(hotelId);
+        }
+        LocalDate start = from == null ? LocalDate.now(ZONE).minusDays(6) : from;
+        LocalDate end = to == null ? LocalDate.now(ZONE) : to;
+        validateRange(start, end);
+
+        HotelRow hotel = loadHotels(hotelId).get(0);
+        List<RoomTypeRevenueView.RoomTypeRevenueRow> rows = loadRoomTypeRows(hotelId, start, end);
+        long totalRevenue = rows.stream().mapToLong(RoomTypeRevenueView.RoomTypeRevenueRow::revenueKrw).sum();
+        long totalReservations = rows.stream().mapToLong(RoomTypeRevenueView.RoomTypeRevenueRow::reservations).sum();
+        long totalCancelled = rows.stream().mapToLong(RoomTypeRevenueView.RoomTypeRevenueRow::cancelled).sum();
+        long totalNoShow = rows.stream().mapToLong(RoomTypeRevenueView.RoomTypeRevenueRow::noShow).sum();
+
+        return new RoomTypeRevenueView(start.toString(), end.toString(),
+                (int) java.time.temporal.ChronoUnit.DAYS.between(start, end) + 1,
+                hotel.id().toString(), hotel.name(), rows,
+                new RoomTypeRevenueView.Totals(totalReservations, totalCancelled, totalNoShow, totalRevenue));
+    }
+
+    // 취소·노쇼가 아닌 예약의 금액만 매출로 인정한다.
+    private List<RoomTypeRevenueView.RoomTypeRevenueRow> loadRoomTypeRows(
+            UUID hotelId, LocalDate from, LocalDate to) {
+        List<RoomTypeRevenueView.RoomTypeRevenueRow> rows = jdbc.query("""
+                select rt.id as room_type_id,
+                       rt.name as room_type_name,
+                       count(*) as reservations,
+                       count(*) filter (where r.status = 'CANCELLED') as cancelled,
+                       count(*) filter (where r.status = 'NO_SHOW') as no_show,
+                       coalesce(sum(r.total_krw), 0) - coalesce(sum(
+                           case when r.status in ('CANCELLED', 'NO_SHOW') then r.total_krw else 0 end), 0) as revenue
+                  from reservation r
+                  join room_type rt on rt.id = r.room_type_id
+                 where rt.hotel_id = ?
+                   and (r.created_at at time zone ?)::date >= ?
+                   and (r.created_at at time zone ?)::date <= ?
+                 group by rt.id, rt.name
+                 order by revenue desc, rt.name
+                """, (rs, row) -> new RoomTypeRevenueView.RoomTypeRevenueRow(
+                        rs.getObject("room_type_id", UUID.class).toString(),
+                        rs.getString("room_type_name"),
+                        rs.getLong("reservations"),
+                        rs.getLong("cancelled"),
+                        rs.getLong("no_show"),
+                        rs.getLong("revenue"),
+                        0.0d),
+                hotelId, ZONE.getId(), from, ZONE.getId(), to);
+
+        // 지점 매출에서 각 유형이 차지하는 비중을 계산한다. 0원이면 0%다.
+        long totalRevenue = rows.stream().mapToLong(RoomTypeRevenueView.RoomTypeRevenueRow::revenueKrw).sum();
+        if (totalRevenue == 0) return rows;
+        return rows.stream().map(row -> new RoomTypeRevenueView.RoomTypeRevenueRow(
+                        row.roomTypeId(), row.roomTypeName(), row.reservations(), row.cancelled(),
+                        row.noShow(), row.revenueKrw(), row.revenueKrw() / (double) totalRevenue))
+                .toList();
+    }
+
     private record HotelRow(UUID id, String name, String region) {
     }
 }

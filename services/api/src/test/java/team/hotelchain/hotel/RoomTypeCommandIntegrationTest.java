@@ -47,7 +47,7 @@ class RoomTypeCommandIntegrationTest {
 
         jdbc.update("insert into hotel values (?, ?, ?, ?)", SOKCHO, "쓰기 속초", "속초", "Asia/Seoul");
         jdbc.update("insert into hotel values (?, ?, ?, ?)", JEJU, "쓰기 제주", "제주도", "Asia/Seoul");
-        jdbc.update("insert into room_type values (?, ?, ?, ?)", STANDARD, SOKCHO, "스탠다드", 2);
+        jdbc.update("insert into room_type (id, hotel_id, name, max_occupancy) values (?, ?, ?, ?)", STANDARD, SOKCHO, "스탠다드", 2);
 
         BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
         jdbc.update("insert into staff_member (id, email, display_name, password_hash, role, hotel_id) values (?, ?, ?, ?, ?, ?)",
@@ -62,6 +62,140 @@ class RoomTypeCommandIntegrationTest {
     @AfterEach
     void cleanAfter() {
         clean();
+    }
+
+    @Test
+    void headquartersCreatesRoomTypeWithBreakfastAndRate() throws Exception {
+        // 본사가 생성 화면에서 정한 조식 포함 여부와 기본 요금이 시드의 기준이 된다.
+        String body = mvc.perform(MockMvcRequestBuilders.post("/api/staff/hotels/{hotelId}/room-types", SOKCHO)
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "create-breakfast")
+                .contentType("application/json")
+                .content("{\"name\":\"디럭스\",\"maxOccupancy\":3,\"breakfastIncluded\":true,\"defaultRateKrw\":150000}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.created").value(true))
+                .andExpect(jsonPath("$.seed.breakfastIncluded").value(true))
+                .andExpect(jsonPath("$.seed.defaultRateKrw").value(150000))
+                .andReturn().getResponse().getContentAsString();
+        UUID roomTypeId = UUID.fromString(mapper.readTree(body).get("roomTypeId").asText());
+
+        Boolean breakfast = jdbc.queryForObject(
+                "select rp.breakfast_included from rate_plan rp where rp.room_type_id = ?", Boolean.class, roomTypeId);
+        org.assertj.core.api.Assertions.assertThat(breakfast).isTrue();
+
+        Integer amount = jdbc.queryForObject(
+                "select min(rd.amount_krw) from rate_day rd join rate_plan rp on rp.id = rd.rate_plan_id where rp.room_type_id = ?",
+                Integer.class, roomTypeId);
+        org.assertj.core.api.Assertions.assertThat(amount).isEqualTo(150000);
+
+        Integer storedRate = jdbc.queryForObject(
+                "select seed_default_rate_krw from room_type where id = ?", Integer.class, roomTypeId);
+        org.assertj.core.api.Assertions.assertThat(storedRate).isEqualTo(150000);
+    }
+
+    @Test
+    void rateOutsideRangeIsRejected() throws Exception {
+        mvc.perform(MockMvcRequestBuilders.post("/api/staff/hotels/{hotelId}/room-types", SOKCHO)
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "create-negative-rate")
+                .contentType("application/json")
+                .content("{\"name\":\"디럭스\",\"maxOccupancy\":3,\"defaultRateKrw\":-1}"))
+                .andExpect(status().isBadRequest());
+
+        mvc.perform(MockMvcRequestBuilders.post("/api/staff/hotels/{hotelId}/room-types", SOKCHO)
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "create-huge-rate")
+                .contentType("application/json")
+                .content("{\"name\":\"디럭스\",\"maxOccupancy\":3,\"defaultRateKrw\":10000001}"))
+                .andExpect(status().isBadRequest());
+
+        Integer count = jdbc.queryForObject(
+                "select count(*) from room_type where hotel_id = ?", Integer.class, SOKCHO);
+        org.assertj.core.api.Assertions.assertThat(count).isEqualTo(1);
+    }
+
+    @Test
+    void headquartersUpdatesBreakfastAndDefaultRate() throws Exception {
+        // STANDARD는 시드 없이 수동으로 만든 유형이므로 요금제를 직접 넣는다.
+        UUID ratePlanId = UUID.randomUUID();
+        jdbc.update("insert into rate_plan (id, room_type_id, name, breakfast_included, policy_version) values (?, ?, ?, false, 'FLEX-2026-01')",
+                ratePlanId, STANDARD, "테스트 요금제");
+        jdbc.update("insert into rate_day (rate_plan_id, stay_date, amount_krw) values (?, current_date, 90000)",
+                ratePlanId);
+
+        mvc.perform(MockMvcRequestBuilders.patch("/api/staff/hotels/{hotelId}/room-types/{roomTypeId}", SOKCHO, STANDARD)
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "update-rate")
+                .contentType("application/json")
+                .content("{\"name\":\"스탠다드\",\"maxOccupancy\":2,\"breakfastIncluded\":true,\"defaultRateKrw\":120000}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ratePlan.breakfastIncluded").value(true))
+                .andExpect(jsonPath("$.ratePlan.defaultRateKrw").value(120000));
+
+        Boolean breakfast = jdbc.queryForObject(
+                "select breakfast_included from rate_plan where id = ?", Boolean.class, ratePlanId);
+        org.assertj.core.api.Assertions.assertThat(breakfast).isTrue();
+
+        Integer minAmount = jdbc.queryForObject(
+                "select min(amount_krw) from rate_day where rate_plan_id = ?", Integer.class, ratePlanId);
+        org.assertj.core.api.Assertions.assertThat(minAmount).isEqualTo(120000);
+    }
+
+    @Test
+    void breakfastChangeConflictingWithConfirmedReservationIsRejected() throws Exception {
+        UUID ratePlanId = UUID.randomUUID();
+        jdbc.update("insert into rate_plan (id, room_type_id, name, breakfast_included, policy_version) values (?, ?, ?, false, 'FLEX-2026-01')",
+                ratePlanId, STANDARD, "테스트 요금제");
+        jdbc.update("insert into rate_day (rate_plan_id, stay_date, amount_krw) values (?, current_date, 90000)",
+                ratePlanId);
+        jdbc.update("""
+                insert into reservation
+                    (id, room_type_id, rate_plan_id, check_in, check_out, adults, children, rooms,
+                     status, total_krw, currency, expires_at, guest_name, guest_email,
+                     management_token_hash, policy_snapshot)
+                values (?, ?, ?, current_date, current_date + interval '1 day', 2, 0, 1,
+                    'CONFIRMED', 90000, 'KRW', now() + interval '10 minutes',
+                    '테스트 고객', 'guest@example.com', 'hash-placeholder', '{}')
+                """, UUID.randomUUID(), STANDARD, ratePlanId);
+
+        mvc.perform(MockMvcRequestBuilders.patch("/api/staff/hotels/{hotelId}/room-types/{roomTypeId}", SOKCHO, STANDARD)
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "update-breakfast")
+                .contentType("application/json")
+                .content("{\"name\":\"스탠다드\",\"maxOccupancy\":2,\"breakfastIncluded\":true}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("ROOM_TYPE_BREAKFAST_CONFLICT"));
+
+        Boolean breakfast = jdbc.queryForObject(
+                "select breakfast_included from rate_plan where id = ?", Boolean.class, ratePlanId);
+        org.assertj.core.api.Assertions.assertThat(breakfast).isFalse();
+    }
+
+    @Test
+    void rateChangeOnRoomTypeWithoutRatePlanIsRejected() throws Exception {
+        // 요금제가 없는 유형은 바꿀 대상이 없다. 404로 거부한다.
+        mvc.perform(MockMvcRequestBuilders.patch("/api/staff/hotels/{hotelId}/room-types/{roomTypeId}", SOKCHO, STANDARD)
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "update-no-plan")
+                .contentType("application/json")
+                .content("{\"name\":\"스탠다드\",\"maxOccupancy\":2,\"defaultRateKrw\":120000}"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void headquartersReadsRoomTypeDefaults() throws Exception {
+        UUID ratePlanId = UUID.randomUUID();
+        jdbc.update("insert into rate_plan (id, room_type_id, name, breakfast_included, policy_version) values (?, ?, ?, true, 'FLEX-2026-01')",
+                ratePlanId, STANDARD, "테스트 요금제");
+        jdbc.update("insert into rate_day (rate_plan_id, stay_date, amount_krw) values (?, current_date, 130000)",
+                ratePlanId);
+
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/hotels/{hotelId}/room-types/{roomTypeId}/defaults", SOKCHO, STANDARD)
+                .header("X-Staff-Session", hqToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ratePlanId").value(ratePlanId.toString()))
+                .andExpect(jsonPath("$.breakfastIncluded").value(true))
+                .andExpect(jsonPath("$.defaultRateKrw").value(130000));
     }
 
     @Test

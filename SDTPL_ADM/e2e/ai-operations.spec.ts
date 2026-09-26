@@ -79,3 +79,14 @@ test("shows a recovery notice when the concierge is unreachable", async ({ page 
 
   await expect(page.getByText("AI 도우미 측정을 불러오지 못했습니다.")).toBeVisible();
 });
+
+test("explains that the concierge is not part of this deployment", async ({ page }) => {
+  // 도우미가 없는 배포에서는 /concierge rewrite 자체가 없어서 404가 돌아온다.
+  await page.addInitScript(seedStaffScript("HQ_ADMIN"));
+  await page.route("**/concierge/metrics/llm", (route) => route.fulfill({ status: 404 }));
+
+  await page.goto("/dashboard/ai-operations");
+  await page.getByRole("button", { name: "새로고침" }).click();
+
+  await expect(page.getByText("AI 도우미가 실행 중이 아닙니다.")).toBeVisible();
+});

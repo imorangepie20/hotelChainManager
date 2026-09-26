@@ -20,6 +20,7 @@ public class AuditController {
     }
 
     // 본사가 V29~V37 감사 표와 예약 변경 이력을 통합해 읽는다.
+    // masked=true면 고객 이름·이메일을 가린다. 화면 공유·캡처 시 개인정보 노출을 막는다.
     @GetMapping
     public AuditEventsView list(
             @RequestHeader(value = "X-Staff-Session", required = false) String token,
@@ -27,8 +28,9 @@ public class AuditController {
             @RequestParam(required = false) UUID hotelId,
             @RequestParam(required = false) LocalDate from,
             @RequestParam(required = false) LocalDate to,
+            @RequestParam(required = false) Boolean masked,
             @RequestParam(required = false) Integer limit,
             @RequestParam(required = false) Integer offset) {
-        return queries.list(token, AuditQueryFilters.of(reservationId, hotelId, from, to, limit, offset));
+        return queries.list(token, AuditQueryFilters.of(reservationId, hotelId, from, to, masked, limit, offset));
     }
 }

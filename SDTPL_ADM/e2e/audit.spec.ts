@@ -20,25 +20,33 @@ function sampleEvents(count: number) {
     staffRole: "HQ_ADMIN",
     hotelId: "11000000-0000-0000-0000-000000000001",
     hotelName: "속초 지점",
-    reservationId: index % 2 === 0 ? "56000000-0000-0000-0000-000000000001" : null,
+    reservationId:
+      index % 2 === 0 ? "56000000-0000-0000-0000-000000000001" : null,
     guestName: index % 2 === 0 ? "감사 고객" : null,
     roomNumber: index % 3 === 0 ? "102" : null,
     summary: `감사 요약 ${index}`,
   }));
 }
 
-const EVENTS_BODY = (count: number, offset: number) =>
+const EVENTS_BODY = (count: number, offset: number, masked = false) =>
   JSON.stringify({
     events: sampleEvents(count),
     totalCount: 25,
     limit: 20,
     offset,
+    masked,
   });
 
 function seedStaffScript(role: "HQ_ADMIN" | "BRANCH_STAFF") {
   const staff =
     role === "HQ_ADMIN"
-      ? { id: "test", email: "hq@example.com", displayName: "본사 관리자", role, hotelId: null }
+      ? {
+          id: "test",
+          email: "hq@example.com",
+          displayName: "본사 관리자",
+          role,
+          hotelId: null,
+        }
       : {
           id: "test",
           email: "sokcho@example.com",
@@ -70,26 +78,42 @@ test("exposes the audit menu to headquarters only", async ({ page }) => {
   await expect(page.getByRole("link", { name: "감사 이력" })).toHaveCount(0);
 });
 
-test("reports audit events with staff and reservation context", async ({ page }) => {
+test("reports audit events with staff and reservation context", async ({
+  page,
+}) => {
   await page.addInitScript(seedStaffScript("HQ_ADMIN"));
   await page.route("**/api/staff/audit*", (route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: EVENTS_BODY(8, 0) }),
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: EVENTS_BODY(8, 0),
+    }),
   );
 
   await page.goto("/dashboard/audit");
 
   await expect(page.getByText("감사 이력 25건")).toBeVisible();
   await expect(page.getByRole("cell", { name: "예약자 정정" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "투숙 중 객실 이동" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "본사 관리자" }).first()).toBeVisible();
-  await expect(page.getByRole("cell", { name: "속초 지점" }).first()).toBeVisible();
+  await expect(
+    page.getByRole("cell", { name: "투숙 중 객실 이동" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("cell", { name: "본사 관리자" }).first(),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("cell", { name: "속초 지점" }).first(),
+  ).toBeVisible();
   await expect(page.getByRole("cell", { name: "감사 요약 0" })).toBeVisible();
 });
 
 test("labels event types in korean", async ({ page }) => {
   await page.addInitScript(seedStaffScript("HQ_ADMIN"));
   await page.route("**/api/staff/audit*", (route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: EVENTS_BODY(8, 0) }),
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: EVENTS_BODY(8, 0),
+    }),
   );
 
   await page.goto("/dashboard/audit");
@@ -127,24 +151,36 @@ test("moves to the next page", async ({ page }) => {
   await page.getByRole("button", { name: "다음 페이지" }).click();
 
   await expect(page.getByTestId("audit-page")).toHaveText("2 / 2");
-  await expect(page.getByRole("button", { name: "다음 페이지" })).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "다음 페이지" }),
+  ).toBeDisabled();
 });
 
-test("tells a branch employee the view is headquarters only", async ({ page }) => {
+test("tells a branch employee the view is headquarters only", async ({
+  page,
+}) => {
   await page.addInitScript(seedStaffScript("BRANCH_STAFF"));
   await page.goto("/dashboard/audit");
 
-  await expect(page.getByText("감사 이력은 본사 관리자만 확인할 수 있습니다.")).toBeVisible();
+  await expect(
+    page.getByText("감사 이력은 본사 관리자만 확인할 수 있습니다."),
+  ).toBeVisible();
   await expect(page.getByRole("button", { name: "새로고침" })).toBeDisabled();
 });
 
-test("shows a recovery notice when the audit is unreachable", async ({ page }) => {
+test("shows a recovery notice when the audit is unreachable", async ({
+  page,
+}) => {
   await page.addInitScript(seedStaffScript("HQ_ADMIN"));
-  await page.route("**/api/staff/audit*", (route) => route.fulfill({ status: 500 }));
+  await page.route("**/api/staff/audit*", (route) =>
+    route.fulfill({ status: 500 }),
+  );
 
   await page.goto("/dashboard/audit");
 
-  await expect(page.getByText("감사 이력을 불러오지 못했습니다.")).toBeVisible();
+  await expect(
+    page.getByText("감사 이력을 불러오지 못했습니다."),
+  ).toBeVisible();
 });
 
 test("reports an empty range without events", async ({ page }) => {
@@ -153,11 +189,72 @@ test("reports an empty range without events", async ({ page }) => {
     route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ events: [], totalCount: 0, limit: 20, offset: 0 }),
+      body: JSON.stringify({
+        events: [],
+        totalCount: 0,
+        limit: 20,
+        offset: 0,
+        masked: false,
+      }),
     }),
   );
 
   await page.goto("/dashboard/audit");
 
-  await expect(page.getByText("해당 범위에 감사 이력이 없습니다.")).toBeVisible();
+  await expect(
+    page.getByText("해당 범위에 감사 이력이 없습니다."),
+  ).toBeVisible();
+});
+
+test("asks the server to mask personal information", async ({ page }) => {
+  await page.addInitScript(seedStaffScript("HQ_ADMIN"));
+  const requested: string[] = [];
+  await page.route("**/api/staff/audit*", async (route) => {
+    const url = new URL(route.request().url());
+    requested.push(url.searchParams.get("masked") ?? "");
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: EVENTS_BODY(8, 0, true),
+    });
+  });
+
+  await page.goto("/dashboard/audit");
+  await expect(page.getByText("감사 이력 25건")).toBeVisible();
+  expect(requested.at(-1)).toBe("");
+
+  await page.getByTestId("audit-masked").click();
+
+  // 토글을 켜면 masked=true 가 요청에 붙는다.
+  await expect.poll(() => requested.at(-1)).toBe("true");
+  await expect(page.getByTestId("audit-masked")).toHaveText("마스킹 켜짐");
+  await expect(page.getByTestId("audit-masked-notice")).toBeVisible();
+  await expect(page.getByTestId("audit-csv")).toBeVisible();
+});
+
+test("exports the visible events as csv", async ({ page }) => {
+  await page.addInitScript(seedStaffScript("HQ_ADMIN"));
+  await page.route("**/api/staff/audit*", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: EVENTS_BODY(2, 0),
+    }),
+  );
+
+  await page.goto("/dashboard/audit");
+  await expect(page.getByText("감사 이력 25건")).toBeVisible();
+
+  const download = page.waitForEvent("download");
+  await page.getByTestId("audit-csv").click();
+  const received = await download;
+  const stream = await received.createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+  const text = Buffer.concat(chunks).toString("utf8");
+
+  expect(text).toContain("발생 시각");
+  expect(text).toContain("예약자 정정");
+  expect(text).toContain("본사 관리자");
+  expect(text).toContain("감사 요약 0");
 });

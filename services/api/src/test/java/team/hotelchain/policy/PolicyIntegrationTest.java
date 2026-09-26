@@ -17,6 +17,7 @@ import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
 
+import team.hotelchain.reservationchange.ReservationChangePolicy;
 import team.hotelchain.staff.StaffAccessService;
 
 @SpringBootTest
@@ -28,6 +29,7 @@ class PolicyIntegrationTest {
 
     @Autowired JdbcTemplate jdbc;
     @Autowired StaffAccessService staffAccess;
+    @Autowired ReservationChangePolicy changePolicy;
     @Autowired WebApplicationContext context;
 
     private MockMvc mvc;
@@ -354,6 +356,147 @@ class PolicyIntegrationTest {
     }
 
     @Test
+    void headquartersReadsConfiguredApprovalTtl() throws Exception {
+        // 본사가 변경하지 않았으면 application.yml의 24h가 내려온다.
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/policies")
+                .header("X-Staff-Session", hqToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.changeApprovalTtlSeconds").value(86400));
+    }
+
+    @Test
+    void headquartersUpdatesChangeApprovalTtl() throws Exception {
+        mvc.perform(MockMvcRequestBuilders.put("/api/staff/policies/change-approval-ttl")
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "update-ttl")
+                .contentType("application/json")
+                .content("{\"approvalTtlSeconds\":3600}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.approvalTtlSeconds").value(3600))
+                .andExpect(jsonPath("$.created").value(true));
+
+        // 본사가 바꾼 TTL이 즉시 현재값에 반영된다.
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/policies")
+                .header("X-Staff-Session", hqToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.changeApprovalTtlSeconds").value(3600));
+    }
+
+    @Test
+    void approvalTtlReachesTheChangeRequestExpiry() throws Exception {
+        mvc.perform(MockMvcRequestBuilders.put("/api/staff/policies/change-approval-ttl")
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "update-ttl")
+                .contentType("application/json")
+                .content("{\"approvalTtlSeconds\":120}"))
+                .andExpect(status().isCreated());
+
+        // 예약 변경 요청이 approval_expires_at을 계산할 때 거치는 경로다.
+        // 체크인이 충분히 멀면 TTL이 그대로 만료 시각이 된다.
+        java.time.Instant created = java.time.Instant.now();
+        java.time.LocalDate farCheckIn = java.time.LocalDate.now().plusDays(30);
+        java.time.Instant expiry = changePolicy.approvalExpiresAt(created, farCheckIn, "Asia/Seoul");
+
+        org.assertj.core.api.Assertions.assertThat(expiry)
+                .isAfter(created.plus(java.time.Duration.ofSeconds(115)))
+                .isBefore(created.plus(java.time.Duration.ofSeconds(125)));
+    }
+
+    @Test
+    void sameIdempotencyKeyReturnsSameTtlRevision() throws Exception {
+        String body = "{\"approvalTtlSeconds\":7200}";
+        mvc.perform(MockMvcRequestBuilders.put("/api/staff/policies/change-approval-ttl")
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "update-ttl")
+                .contentType("application/json")
+                .content(body))
+                .andExpect(status().isCreated());
+
+        mvc.perform(MockMvcRequestBuilders.put("/api/staff/policies/change-approval-ttl")
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "update-ttl")
+                .contentType("application/json")
+                .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.created").value(false))
+                .andExpect(jsonPath("$.approvalTtlSeconds").value(7200));
+
+        Integer count = jdbc.queryForObject(
+                "select count(*) from policy_revision where key = 'change-approval-ttl'", Integer.class);
+        org.assertj.core.api.Assertions.assertThat(count).isEqualTo(1);
+    }
+
+    @Test
+    void sameTtlWithNewIdempotencyKeyReturnsSameRevision() throws Exception {
+        String body = "{\"approvalTtlSeconds\":7200}";
+        mvc.perform(MockMvcRequestBuilders.put("/api/staff/policies/change-approval-ttl")
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "update-ttl")
+                .contentType("application/json")
+                .content(body))
+                .andExpect(status().isCreated());
+
+        // 응답 유실 뒤 클라이언트가 새 멱원 키로 같은 내용을 보낸다.
+        mvc.perform(MockMvcRequestBuilders.put("/api/staff/policies/change-approval-ttl")
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "update-ttl-retry")
+                .contentType("application/json")
+                .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.created").value(false))
+                .andExpect(jsonPath("$.approvalTtlSeconds").value(7200));
+
+        Integer count = jdbc.queryForObject(
+                "select count(*) from policy_revision where key = 'change-approval-ttl'", Integer.class);
+        org.assertj.core.api.Assertions.assertThat(count).isEqualTo(1);
+    }
+
+    @Test
+    void ttlOutsideRangeIsRejected() throws Exception {
+        mvc.perform(MockMvcRequestBuilders.put("/api/staff/policies/change-approval-ttl")
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "ttl-too-short")
+                .contentType("application/json")
+                .content("{\"approvalTtlSeconds\":59}"))
+                .andExpect(status().isBadRequest());
+
+        mvc.perform(MockMvcRequestBuilders.put("/api/staff/policies/change-approval-ttl")
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "ttl-too-long")
+                .contentType("application/json")
+                .content("{\"approvalTtlSeconds\":604801}"))
+                .andExpect(status().isBadRequest());
+
+        // 거부된 요청은 revision을 남기지 않는다.
+        Integer count = jdbc.queryForObject(
+                "select count(*) from policy_revision where key = 'change-approval-ttl'", Integer.class);
+        org.assertj.core.api.Assertions.assertThat(count).isEqualTo(0);
+    }
+
+    @Test
+    void ttlUpdateRequiresIdempotencyKey() throws Exception {
+        mvc.perform(MockMvcRequestBuilders.put("/api/staff/policies/change-approval-ttl")
+                .header("X-Staff-Session", hqToken)
+                .contentType("application/json")
+                .content("{\"approvalTtlSeconds\":3600}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void branchStaffCannotUpdateApprovalTtl() throws Exception {
+        mvc.perform(MockMvcRequestBuilders.put("/api/staff/policies/change-approval-ttl")
+                .header("X-Staff-Session", sokchoToken)
+                .header("Idempotency-Key", "update-ttl")
+                .contentType("application/json")
+                .content("{\"approvalTtlSeconds\":3600}"))
+                .andExpect(status().isForbidden());
+
+        Integer count = jdbc.queryForObject(
+                "select count(*) from policy_revision where key = 'change-approval-ttl'", Integer.class);
+        org.assertj.core.api.Assertions.assertThat(count).isEqualTo(0);
+    }
+
+    @Test
     void headquartersReadsPolicyRevisions() throws Exception {
         mvc.perform(MockMvcRequestBuilders.put("/api/staff/policies/cancellation")
                 .header("X-Staff-Session", hqToken)
@@ -369,16 +512,25 @@ class PolicyIntegrationTest {
                 .content("{\"directLimitKrw\":400000}"))
                 .andExpect(status().isCreated());
 
+        mvc.perform(MockMvcRequestBuilders.put("/api/staff/policies/change-approval-ttl")
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "revision-ttl")
+                .contentType("application/json")
+                .content("{\"approvalTtlSeconds\":3600}"))
+                .andExpect(status().isCreated());
+
         mvc.perform(MockMvcRequestBuilders.get("/api/staff/policies/revisions")
                 .header("X-Staff-Session", hqToken))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.totalCount").value(2))
-                .andExpect(jsonPath("$.revisions", org.hamcrest.Matchers.hasSize(2)))
-                .andExpect(jsonPath("$.revisions[0].key").value("change-approval"))
-                .andExpect(jsonPath("$.revisions[0].summary").value("예약 변경 승인 한도 400,000원"))
+                .andExpect(jsonPath("$.totalCount").value(3))
+                .andExpect(jsonPath("$.revisions", org.hamcrest.Matchers.hasSize(3)))
+                .andExpect(jsonPath("$.revisions[0].key").value("change-approval-ttl"))
+                .andExpect(jsonPath("$.revisions[0].summary").value("예약 변경 승인 TTL 1시간 3,600초"))
                 .andExpect(jsonPath("$.revisions[0].staffEmail").value(HQ_EMAIL))
-                .andExpect(jsonPath("$.revisions[1].key").value("cancellation"))
-                .andExpect(jsonPath("$.revisions[1].summary").value("취소 정책 체크인 3일 전 20:30 마감"));
+                .andExpect(jsonPath("$.revisions[1].key").value("change-approval"))
+                .andExpect(jsonPath("$.revisions[1].summary").value("예약 변경 승인 한도 400,000원"))
+                .andExpect(jsonPath("$.revisions[2].key").value("cancellation"))
+                .andExpect(jsonPath("$.revisions[2].summary").value("취소 정책 체크인 3일 전 20:30 마감"));
     }
 
     @Test

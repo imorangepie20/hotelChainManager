@@ -28,4 +28,14 @@ public class ReportController {
             @RequestParam(required = false) UUID hotelId) {
         return operations.operations(token, from, to, hotelId);
     }
+
+    // 본사가 지점의 객실 유형별 매출을 읽기 전용으로 확인한다.
+    @GetMapping("/operations/room-types")
+    public RoomTypeRevenueView roomTypeRevenue(
+            @RequestHeader(value = "X-Staff-Session", required = false) String token,
+            @RequestParam UUID hotelId,
+            @RequestParam(required = false) LocalDate from,
+            @RequestParam(required = false) LocalDate to) {
+        return operations.roomTypeRevenue(token, hotelId, from, to);
+    }
 }

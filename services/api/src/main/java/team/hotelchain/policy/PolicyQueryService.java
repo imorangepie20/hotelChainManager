@@ -38,7 +38,7 @@ public class PolicyQueryService {
     public PolicyView current(String token) {
         access.requireHeadquarters(token);
         return new PolicyView(current.cancellation(), current.changeApprovalDirectLimitKrw(),
-                changePolicy.settlementEnabled(), revisionCount());
+                current.changeApprovalTtlSeconds(), changePolicy.settlementEnabled(), revisionCount());
     }
 
     // 본사가 정책을 바꾼 이력을 최신순으로 보여준다. 진행 중인 승인·정산 상태는 그대로 둔다.
@@ -54,6 +54,7 @@ public class PolicyQueryService {
 
         List<PolicyRevisionView> revisions = jdbc.query("""
                 select r.key, r.refund_cutoff_days_before, r.refund_cutoff_local_time, r.value_krw,
+                       r.value_seconds,
                        s.email as staff_email, s.display_name as staff_display_name, s.role as staff_role,
                        to_char(r.created_at at time zone 'Asia/Seoul', 'YYYY-MM-DD"T"HH24:MI:SS') as created_at
                   from policy_revision r
@@ -67,10 +68,15 @@ public class PolicyQueryService {
 
     private PolicyRevisionView mapRevision(ResultSet rs, int rowNumber) throws SQLException {
         String key = rs.getString("key");
-        String summary = CurrentPolicy.CANCELLATION_KEY.equals(key)
-                ? "취소 정책 체크인 " + rs.getInt("refund_cutoff_days_before") + "일 전 "
-                        + rs.getString("refund_cutoff_local_time") + " 마감"
-                : "예약 변경 승인 한도 " + String.format("%,d", rs.getLong("value_krw")) + "원";
+        String summary = switch (key) {
+            case CurrentPolicy.CANCELLATION_KEY -> "취소 정책 체크인 " + rs.getInt("refund_cutoff_days_before")
+                    + "일 전 " + rs.getString("refund_cutoff_local_time") + " 마감";
+            case CurrentPolicy.CHANGE_APPROVAL_KEY ->
+                    "예약 변경 승인 한도 " + String.format("%,d", rs.getLong("value_krw")) + "원";
+            case CurrentPolicy.CHANGE_APPROVAL_TTL_KEY ->
+                    "예약 변경 승인 TTL " + formatSeconds(rs.getInt("value_seconds"));
+            default -> key;
+        };
         return new PolicyRevisionView(
                 key,
                 summary,
@@ -78,6 +84,19 @@ public class PolicyQueryService {
                 rs.getString("staff_display_name"),
                 rs.getString("staff_role"),
                 rs.getString("created_at"));
+    }
+
+    private static String formatSeconds(long seconds) {
+        if (seconds <= 0) return seconds + "초";
+        long days = seconds / 86_400;
+        long hours = (seconds % 86_400) / 3_600;
+        long minutes = (seconds % 3_600) / 60;
+        StringBuilder builder = new StringBuilder();
+        if (days > 0) builder.append(days).append("일 ");
+        if (hours > 0) builder.append(hours).append("시간 ");
+        if (minutes > 0) builder.append(minutes).append("분 ");
+        builder.append(String.format("%,d", seconds)).append("초");
+        return builder.toString().trim();
     }
 
     private void validatePaging(int limit, int offset) {

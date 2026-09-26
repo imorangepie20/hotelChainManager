@@ -43,12 +43,15 @@ public class InventoryQueryService {
         List<InventoryRow> rows = jdbc.query("""
                 SELECT rt.id AS room_type_id, rt.name AS room_type_name, rt.max_occupancy,
                        i.stay_date, i.capacity, i.held, i.confirmed,
-                       (i.capacity - i.held - i.confirmed) AS remaining
+                       (i.capacity - i.held - i.confirmed) AS remaining,
+                       coalesce(s.status, 'OPEN') AS sales_status
                   FROM room_type rt
                   JOIN inventory_day i ON i.room_type_id = rt.id
+                  LEFT JOIN room_type_sales_status s
+                    ON s.room_type_id = rt.id AND s.stay_date = i.stay_date
                  WHERE rt.hotel_id = ? AND i.stay_date >= ? AND i.stay_date <= ?
                  ORDER BY rt.id, i.stay_date
-                """, this::mapRow, hotelId, start, end);
+                 """, this::mapRow, hotelId, start, end);
 
         return new InventoryView(hotelId, group(rows));
     }
@@ -81,7 +84,7 @@ public class InventoryQueryService {
                         entry.getValue().stream()
                                 .map(row -> new InventoryView.InventoryDay(
                                         row.stayDate(), row.capacity(), row.held(),
-                                        row.confirmed(), row.remaining()))
+                                        row.confirmed(), row.remaining(), row.salesStatus()))
                                 .toList()))
                 .toList();
     }
@@ -95,11 +98,12 @@ public class InventoryQueryService {
                 rs.getInt("capacity"),
                 rs.getInt("held"),
                 rs.getInt("confirmed"),
-                rs.getInt("remaining"));
+                rs.getInt("remaining"),
+                rs.getString("sales_status"));
     }
 
     private record InventoryRow(
             UUID roomTypeId, String roomTypeName, int maxOccupancy, LocalDate stayDate,
-            int capacity, int held, int confirmed, int remaining) {
+            int capacity, int held, int confirmed, int remaining, String salesStatus) {
     }
 }

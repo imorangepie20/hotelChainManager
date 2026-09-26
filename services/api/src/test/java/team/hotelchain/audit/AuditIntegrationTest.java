@@ -213,6 +213,56 @@ class AuditIntegrationTest {
                 .andExpect(jsonPath("$.events[0].summary").isString());
     }
 
+    @Test
+    void maskedQueryHidesGuestNamesAndEmails() throws Exception {
+        // GUEST_UPDATE 요약에 이름·이메일이 들어 있으므로 같이 가려지는지 확인한다.
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/audit")
+                .header("X-Staff-Session", hqToken)
+                .param("masked", "true")
+                .param("limit", "20"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.masked").value(true))
+                // 'audit-guest'의 마지막 한 글자만 남으므로 원문과 달라야 한다.
+                .andExpect(jsonPath("$.events[?(@.eventType == 'GUEST_UPDATE')].guestName")
+                        .value(Matchers.not(Matchers.hasItem("audit-guest"))))
+                .andExpect(jsonPath("$.events[?(@.eventType == 'GUEST_UPDATE')].guestName")
+                        .value(Matchers.hasItem(Matchers.endsWith("t"))))
+                .andExpect(jsonPath("$.events[?(@.eventType == 'GUEST_UPDATE')].summary")
+                        .value(Matchers.hasItem(Matchers.containsString("**"))))
+                // 이메일 도메인은 식별자가 아니므로 그대로 둔다.
+                .andExpect(jsonPath("$.events[?(@.eventType == 'GUEST_UPDATE')].summary")
+                        .value(Matchers.hasItem(Matchers.containsString("@example.com"))));
+
+        // masked를 생략하면 원래 값이 내려온다.
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/audit")
+                .header("X-Staff-Session", hqToken)
+                .param("limit", "20"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.masked").value(false))
+                .andExpect(jsonPath("$.events[?(@.eventType == 'GUEST_UPDATE')].guestName")
+                        .value(Matchers.hasItem("audit-guest")));
+    }
+
+    @Test
+    void maskedQueryKeepsStaffAndRoomContext() throws Exception {
+        // 식별에 필요한 처리 직원·객실 번호·예약 id는 가리지 않는다.
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/audit")
+                .header("X-Staff-Session", hqToken)
+                .param("masked", "true"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.events[?(@.eventType == 'ROOM_REASSIGNMENT')].roomNumber")
+                        .value(Matchers.hasItem("102")))
+                .andExpect(jsonPath("$.events[?(@.staffEmail == '" + HQ_EMAIL + "')]").exists());
+    }
+
+    @Test
+    void branchStaffCannotReadMaskedAudit() throws Exception {
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/audit")
+                .header("X-Staff-Session", sokchoToken)
+                .param("masked", "true"))
+                .andExpect(status().isForbidden());
+    }
+
     private void seedReservation(UUID hqId) {
         jdbc.update("""
                 insert into reservation

@@ -196,6 +196,96 @@ class OperationsReportIntegrationTest {
                 .andExpect(status().isNotFound());
     }
 
+    @Test
+    void headquartersReadsRoomTypeRevenue() throws Exception {
+        // 속초의 4건은 전부 standard 유형이므로 한 유형이 100%를 차지한다.
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/reports/operations/room-types")
+                .header("X-Staff-Session", hqToken)
+                .param("hotelId", SOKCHO.toString())
+                .param("from", LocalDate.now().toString())
+                .param("to", LocalDate.now().toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.days").value(1))
+                .andExpect(jsonPath("$.hotelName").value("report-sokcho"))
+                .andExpect(jsonPath("$.roomTypes", Matchers.hasSize(1)))
+                .andExpect(jsonPath("$.roomTypes[0].roomTypeName").value("standard"))
+                .andExpect(jsonPath("$.roomTypes[0].reservations").value(6))
+                .andExpect(jsonPath("$.roomTypes[0].cancelled").value(1))
+                .andExpect(jsonPath("$.roomTypes[0].noShow").value(1))
+                // 4건의 확정 예약만 매출로 인정한다.
+                .andExpect(jsonPath("$.roomTypes[0].revenueKrw").value(400_000))
+                .andExpect(jsonPath("$.roomTypes[0].revenueShare").value(Matchers.closeTo(1.0d, 0.000001d)))
+                .andExpect(jsonPath("$.totals.reservations").value(6))
+                .andExpect(jsonPath("$.totals.revenueKrw").value(400_000));
+    }
+
+    @Test
+    void roomTypeRevenueDefaultsToLastSevenDays() throws Exception {
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/reports/operations/room-types")
+                .header("X-Staff-Session", hqToken)
+                .param("hotelId", SOKCHO.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.days").value(7))
+                .andExpect(jsonPath("$.from").value(LocalDate.now().minusDays(6).toString()))
+                .andExpect(jsonPath("$.to").value(LocalDate.now().toString()));
+    }
+
+    @Test
+    void roomTypeRevenueOfEmptyRangeIsZero() throws Exception {
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/reports/operations/room-types")
+                .header("X-Staff-Session", hqToken)
+                .param("hotelId", SOKCHO.toString())
+                .param("from", LocalDate.now().minusDays(30).toString())
+                .param("to", LocalDate.now().minusDays(20).toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.roomTypes", Matchers.hasSize(0)))
+                .andExpect(jsonPath("$.totals.reservations").value(0))
+                // 매출이 0원이면 비중을 계산하지 않는다.
+                .andExpect(jsonPath("$.totals.revenueKrw").value(0));
+    }
+
+    @Test
+    void roomTypeRevenueRequiresHotel() throws Exception {
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/reports/operations/room-types")
+                .header("X-Staff-Session", hqToken)
+                .param("from", LocalDate.now().toString())
+                .param("to", LocalDate.now().toString()))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void roomTypeRevenueOfUnknownHotelIsNotFound() throws Exception {
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/reports/operations/room-types")
+                .header("X-Staff-Session", hqToken)
+                .param("hotelId", UUID.randomUUID().toString()))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void roomTypeRevenueReversedRangeIsRejected() throws Exception {
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/reports/operations/room-types")
+                .header("X-Staff-Session", hqToken)
+                .param("hotelId", SOKCHO.toString())
+                .param("from", LocalDate.now().toString())
+                .param("to", LocalDate.now().minusDays(1).toString()))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void branchStaffCannotReadRoomTypeRevenue() throws Exception {
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/reports/operations/room-types")
+                .header("X-Staff-Session", sokchoToken)
+                .param("hotelId", SOKCHO.toString()))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void roomTypeRevenueRequiresSession() throws Exception {
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/reports/operations/room-types")
+                .param("hotelId", SOKCHO.toString()))
+                .andExpect(status().isUnauthorized());
+    }
+
     private UUID insertReservation(UUID roomTypeId, UUID ratePlanId, String status, long total) {
         UUID reservationId = UUID.randomUUID();
         jdbc.update("""

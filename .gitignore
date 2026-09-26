@@ -15,3 +15,8 @@ docs/diagrams/*.visual-check.*.png
 .worktrees/
 SDTPL_ADM/debug.log
 .tmp/
+infra/secrets/tunnel.env
+infra/secrets/compose.env
+infra/secrets/*.env
+!infra/secrets/*.env.example
+backup/

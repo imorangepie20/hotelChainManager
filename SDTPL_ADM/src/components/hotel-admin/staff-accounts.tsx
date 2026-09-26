@@ -1,18 +1,50 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { KeyRound, Plus, RefreshCw, Users } from "lucide-react";
+import {
+  KeyRound,
+  Pencil,
+  Plus,
+  RefreshCw,
+  UserX,
+  UserCheck,
+  Users,
+  Trash2,
+} from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import {
   createStaffAccount,
+  deleteStaffAccount,
   getStaffAccounts,
   resetStaffPassword,
+  setStaffAccountActive,
   StaffApiError,
+  updateStaffAccount,
   type StaffAccountView,
   type StaffPrincipal,
 } from "@/lib/staff-api";
@@ -32,7 +64,12 @@ const roleLabels = new Map<string, string>([
 
 const headquartersRoles = ["HQ_ADMIN", "HQ_EDITOR", "HQ_PUBLISHER"];
 
-const STAFF_ROLES: StaffRole[] = ["HQ_ADMIN", "HQ_EDITOR", "HQ_PUBLISHER", "BRANCH_STAFF"];
+const STAFF_ROLES: StaffRole[] = [
+  "HQ_ADMIN",
+  "HQ_EDITOR",
+  "HQ_PUBLISHER",
+  "BRANCH_STAFF",
+];
 
 type StaffRole = "HQ_ADMIN" | "HQ_EDITOR" | "HQ_PUBLISHER" | "BRANCH_STAFF";
 
@@ -52,15 +89,35 @@ export function StaffAccounts() {
   const [hotelId, setHotelId] = useState<string>("");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState("");
-  const [issued, setIssued] = useState<{ email: string; password: string } | null>(null);
+  const [issued, setIssued] = useState<{
+    email: string;
+    password: string;
+  } | null>(null);
   const [createKey, setCreateKey] = useState(0);
   const [resetting, setResetting] = useState(false);
   const [resetError, setResetError] = useState("");
+  // 비활성·재활성은 매번 새 멱원 키를 쓴다. 같은 키 재호출과 구분하기 위해서다.
+  const [activationKey, setActivationKey] = useState(0);
+  const [activating, setActivating] = useState(false);
+  const [activationError, setActivationError] = useState("");
+  // 삭제는 매번 새 멱원 키를 쓴다. 되돌릴 수 없는 동작이므로 재시도가
+  // 같은 키를 재사용하지 않게 한다.
+  const [deleteTarget, setDeleteTarget] = useState<StaffAccountView | null>(
+    null,
+  );
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+  const [deleteNotice, setDeleteNotice] = useState("");
+  const [deleteKey, setDeleteKey] = useState(0);
   const requestGeneration = useRef(0);
   const mounted = useRef(false);
 
   const isHeadquarters = staff?.role === "HQ_ADMIN";
-  const sessionToken = typeof window !== "undefined" ? window.localStorage.getItem("hotel-chain-staff-session") : null;
+  const sessionToken =
+    typeof window !== "undefined"
+      ? window.localStorage.getItem("hotel-chain-staff-session")
+      : null;
 
   useEffect(() => {
     mounted.current = true;
@@ -90,10 +147,15 @@ export function StaffAccounts() {
     } catch (cause) {
       if (mounted.current && requestGeneration.current === generation) {
         setAccounts([]);
-        setError(cause instanceof StaffApiError ? cause.message : "직원 목록을 불러오지 못했습니다.");
+        setError(
+          cause instanceof StaffApiError
+            ? cause.message
+            : "직원 목록을 불러오지 못했습니다.",
+        );
       }
     } finally {
-      if (mounted.current && requestGeneration.current === generation) setLoading(false);
+      if (mounted.current && requestGeneration.current === generation)
+        setLoading(false);
     }
   }, [sessionToken]);
 
@@ -124,12 +186,16 @@ export function StaffAccounts() {
     setCreating(true);
     setCreateError("");
     try {
-      const result = await createStaffAccount(sessionToken, `create-staff-${createKey}`, {
-        email: trimmedEmail,
-        displayName: trimmedName,
-        role,
-        hotelId: isBranch ? hotelId : null,
-      });
+      const result = await createStaffAccount(
+        sessionToken,
+        `create-staff-${createKey}`,
+        {
+          email: trimmedEmail,
+          displayName: trimmedName,
+          role,
+          hotelId: isBranch ? hotelId : null,
+        },
+      );
       setCreateKey((key) => key + 1);
       setEmail("");
       setDisplayName("");
@@ -141,7 +207,11 @@ export function StaffAccounts() {
       }
       await refresh();
     } catch (cause) {
-      setCreateError(cause instanceof StaffApiError ? cause.message : "직원을 추가하지 못했습니다.");
+      setCreateError(
+        cause instanceof StaffApiError
+          ? cause.message
+          : "직원을 추가하지 못했습니다.",
+      );
     } finally {
       setCreating(false);
     }
@@ -157,6 +227,64 @@ export function StaffAccounts() {
   const [resetKey, setResetKey] = useState(0);
   const resetIdempotencyKeys = useRef<Record<string, string>>({});
 
+  // 역할·소속 지점 수정. 대화상자를 열 때마다 새 멱원 키를 쓴다.
+  const [editTarget, setEditTarget] = useState<StaffAccountView | null>(null);
+  const [editRole, setEditRole] = useState<StaffRole>("HQ_EDITOR");
+  const [editHotelId, setEditHotelId] = useState<string>("");
+  const [editOpen, setEditOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editError, setEditError] = useState("");
+  const [editKey, setEditKey] = useState(0);
+
+  const editIsBranch = !headquartersRoles.includes(editRole);
+
+  function openEditDialog(account: StaffAccountView) {
+    setEditError("");
+    setEditTarget(account);
+    setEditRole(account.role);
+    setEditHotelId(account.hotelId ?? "");
+    setEditKey((key) => key + 1);
+    setEditOpen(true);
+  }
+
+  function closeEditDialog() {
+    setEditOpen(false);
+    setEditTarget(null);
+    setEditError("");
+  }
+
+  async function submitEdit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!sessionToken || !editTarget) return;
+    if (editIsBranch && !editHotelId) {
+      setEditError("지점 직원은 소속 지점을 선택해 주세요.");
+      return;
+    }
+    setEditing(true);
+    setEditError("");
+    try {
+      await updateStaffAccount(
+        sessionToken,
+        editTarget.id,
+        `update-staff-${editTarget.id}-${editKey}`,
+        {
+          role: editRole,
+          hotelId: editIsBranch ? editHotelId : null,
+        },
+      );
+      closeEditDialog();
+      await refresh();
+    } catch (cause) {
+      setEditError(
+        cause instanceof StaffApiError
+          ? cause.message
+          : "직원 정보를 수정하지 못했습니다.",
+      );
+    } finally {
+      setEditing(false);
+    }
+  }
+
   async function resetPassword(account: StaffAccountView) {
     if (!sessionToken) return;
     const idempotencyKey = `reset-password-${account.id}-${resetKey}`;
@@ -165,7 +293,11 @@ export function StaffAccounts() {
     setResetting(true);
     setResetError("");
     try {
-      const result = await resetStaffPassword(sessionToken, account.id, idempotencyKey);
+      const result = await resetStaffPassword(
+        sessionToken,
+        account.id,
+        idempotencyKey,
+      );
       if (result.temporaryPassword) {
         setIssued({ email: result.email, password: result.temporaryPassword });
       } else {
@@ -173,9 +305,86 @@ export function StaffAccounts() {
         setIssued({ email: result.email, password: "" });
       }
     } catch (cause) {
-      setResetError(cause instanceof StaffApiError ? cause.message : "비밀번호를 재발급하지 못했습니다.");
+      setResetError(
+        cause instanceof StaffApiError
+          ? cause.message
+          : "비밀번호를 재발급하지 못했습니다.",
+      );
     } finally {
       setResetting(false);
+    }
+  }
+
+  // 비활성 직원의 세션은 서버가 즉시 끊는다. 재활성하면 다시 로그인할 수 있다.
+  async function toggleActive(account: StaffAccountView) {
+    if (!sessionToken) return;
+    const next = !account.active;
+    setActivating(true);
+    setActivationError("");
+    try {
+      await setStaffAccountActive(
+        sessionToken,
+        account.id,
+        `activate-staff-${account.id}-${activationKey}`,
+        next,
+      );
+      setActivationKey((key) => key + 1);
+      await refresh();
+    } catch (cause) {
+      setActivationError(
+        cause instanceof StaffApiError
+          ? cause.message
+          : "활성 상태를 바꾸지 못했습니다.",
+      );
+    } finally {
+      if (mounted.current) setActivating(false);
+    }
+  }
+
+  function openDeleteDialog(account: StaffAccountView) {
+    setDeleteError("");
+    setDeleteNotice("");
+    setDeleteTarget(account);
+    setDeleteKey((key) => key + 1);
+    setDeleteOpen(true);
+  }
+
+  function closeDeleteDialog() {
+    setDeleteOpen(false);
+    setDeleteTarget(null);
+    setDeleteError("");
+  }
+
+  async function submitDelete(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!sessionToken || !deleteTarget) return;
+    setDeleting(true);
+    setDeleteError("");
+    try {
+      // 삭제는 매번 새 멱원 키를 쓴다. 네트워크 장애 뒤 다시 눌러도
+      // 중복 삭제 시도가 생기지 않는다.
+      const result = await deleteStaffAccount(
+        sessionToken,
+        deleteTarget.id,
+        `delete-staff-${deleteTarget.id}-${deleteKey}`,
+      );
+      setDeleteKey((key) => key + 1);
+      const deletedName = deleteTarget.displayName;
+      const deletedEmail = deleteTarget.email;
+      closeDeleteDialog();
+      await refresh();
+      setDeleteNotice(
+        `${deletedName} (${deletedEmail}) 계정을 삭제했습니다. 남은 직원은 ${result.remainingStaff}명입니다. 진행 중인 예약 변경 요청과 정산 실행의 담당자 표시는 삭제된 직원으로 남습니다.`,
+      );
+    } catch (cause) {
+      // 서버 검증 실패 시 대화상자를 닫지 않고 이유를 보여준다.
+      setDeleteError(
+        cause instanceof StaffApiError
+          ? cause.message
+          : "직원을 삭제하지 못했습니다.",
+      );
+    } finally {
+      if (mounted.current) setDeleting(false);
     }
   }
 
@@ -188,16 +397,26 @@ export function StaffAccounts() {
             직원 권한
           </h2>
           <p className="mt-1 max-w-[72ch] text-sm text-muted-foreground">
-            직원 목록을 읽고 새 직원을 추가하며 임시 비밀번호를 재발급한다. 비밀번호 원문은 저장하지 않는다.
+            직원 목록을 읽고 새 직원을 추가하며 역할·소속 지점을 바꾸고 임시
+            비밀번호를 재발급한다. 비밀번호 원문은 저장하지 않는다.
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button type="button" variant="outline" onClick={() => void refresh()} disabled={loading || !isHeadquarters}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void refresh()}
+            disabled={loading || !isHeadquarters}
+          >
             <RefreshCw className="h-4 w-4" aria-hidden />
             {loading ? "불러오는 중" : "새로고침"}
           </Button>
           {isHeadquarters && (
-            <Button type="button" onClick={openCreateDialog} data-testid="create-staff">
+            <Button
+              type="button"
+              onClick={openCreateDialog}
+              data-testid="create-staff"
+            >
               <Plus className="h-4 w-4" aria-hidden />
               직원 추가
             </Button>
@@ -205,10 +424,50 @@ export function StaffAccounts() {
         </div>
       </div>
 
-      {error && <p role="alert" className="break-words text-sm text-destructive">{error}</p>}
+      {error && (
+        <p role="alert" className="break-words text-sm text-destructive">
+          {error}
+        </p>
+      )}
 
       {resetError && (
-        <p role="alert" className="break-words text-sm text-destructive" data-testid="reset-error">{resetError}</p>
+        <p
+          role="alert"
+          className="break-words text-sm text-destructive"
+          data-testid="reset-error"
+        >
+          {resetError}
+        </p>
+      )}
+
+      {activationError && (
+        <p
+          role="alert"
+          className="break-words text-sm text-destructive"
+          data-testid="activation-error"
+        >
+          {activationError}
+        </p>
+      )}
+
+      {deleteNotice && isHeadquarters && (
+        <p
+          role="status"
+          data-testid="delete-staff-notice"
+          className="break-words text-sm text-muted-foreground"
+        >
+          {deleteNotice}
+        </p>
+      )}
+
+      {deleteError && isHeadquarters && (
+        <p
+          role="alert"
+          data-testid="delete-staff-error"
+          className="break-words text-sm text-destructive"
+        >
+          {deleteError}
+        </p>
       )}
 
       {staff && !isHeadquarters && (
@@ -224,9 +483,12 @@ export function StaffAccounts() {
       {isHeadquarters && accounts.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">직원 {accounts.length}명</CardTitle>
+            <CardTitle className="text-base">
+              직원 {accounts.length}명
+            </CardTitle>
             <CardDescription>
-              이메일·이름·역할·소속 지점을 보여준다. 비밀번호는 표시하지 않는다.
+              이메일·이름·역할·소속 지점·활성 상태를 보여준다. 비밀번호는
+              표시하지 않는다.
             </CardDescription>
           </CardHeader>
           <CardContent className="overflow-x-auto p-0">
@@ -237,20 +499,77 @@ export function StaffAccounts() {
                   <TableHead>이름</TableHead>
                   <TableHead>역할</TableHead>
                   <TableHead>소속 지점</TableHead>
+                  <TableHead>활성</TableHead>
+                  <TableHead className="text-right">역할·지점</TableHead>
                   <TableHead className="text-right">비밀번호</TableHead>
+                  <TableHead className="text-right">삭제</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {accounts.map((account) => (
                   <TableRow key={account.id} data-staff-id={account.id}>
-                    <TableCell className="font-medium break-all">{account.email}</TableCell>
+                    <TableCell className="font-medium break-all">
+                      {account.email}
+                    </TableCell>
                     <TableCell>{account.displayName}</TableCell>
                     <TableCell>
-                      <Badge variant={account.role === "HQ_ADMIN" ? "default" : "secondary"}>
+                      <Badge
+                        variant={
+                          account.role === "HQ_ADMIN" ? "default" : "secondary"
+                        }
+                      >
                         {roleLabel(account.role)}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-muted-foreground">{account.hotelName ?? "본사"}</TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {account.hotelName ?? "본사"}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={account.active ? "default" : "secondary"}>
+                        {account.active ? "활성" : "비활성"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => openEditDialog(account)}
+                        disabled={editing}
+                        aria-label={`${account.displayName} 역할·소속 지점 수정`}
+                        data-testid={`edit-staff-${account.id}`}
+                      >
+                        <Pencil className="h-4 w-4" aria-hidden />
+                        수정
+                      </Button>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void toggleActive(account)}
+                        disabled={activating}
+                        aria-label={
+                          account.active
+                            ? `${account.displayName} 비활성`
+                            : `${account.displayName} 재활성`
+                        }
+                        data-testid={`toggle-active-${account.id}`}
+                      >
+                        {account.active ? (
+                          <>
+                            <UserX className="h-4 w-4" aria-hidden />
+                            비활성
+                          </>
+                        ) : (
+                          <>
+                            <UserCheck className="h-4 w-4" aria-hidden />
+                            재활성
+                          </>
+                        )}
+                      </Button>
+                    </TableCell>
                     <TableCell className="text-right">
                       <Button
                         type="button"
@@ -265,6 +584,21 @@ export function StaffAccounts() {
                         재발급
                       </Button>
                     </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="text-destructive"
+                        onClick={() => openDeleteDialog(account)}
+                        disabled={deleting}
+                        aria-label={`${account.displayName} 삭제`}
+                        data-testid={`delete-staff-${account.id}`}
+                      >
+                        <Trash2 className="h-4 w-4" aria-hidden />
+                        삭제
+                      </Button>
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -273,7 +607,12 @@ export function StaffAccounts() {
         </Card>
       )}
 
-      <Dialog open={!!issued} onOpenChange={(open) => { if (!open) setIssued(null); }}>
+      <Dialog
+        open={!!issued}
+        onOpenChange={(open) => {
+          if (!open) setIssued(null);
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>임시 비밀번호 발급</DialogTitle>
@@ -289,19 +628,27 @@ export function StaffAccounts() {
             {issued?.password && (
               <>
                 <p className="text-sm text-muted-foreground">임시 비밀번호</p>
-                <p className="break-all rounded-lg border bg-muted/40 p-3 font-mono text-sm" data-testid="temporary-password">
+                <p
+                  className="break-all rounded-lg border bg-muted/40 p-3 font-mono text-sm"
+                  data-testid="temporary-password"
+                >
                   {issued.password}
                 </p>
               </>
             )}
             {!issued?.password && (
-              <p className="break-words rounded-lg border bg-muted/40 p-3 text-sm" data-testid="temporary-password-unavailable">
+              <p
+                className="break-words rounded-lg border bg-muted/40 p-3 text-sm"
+                data-testid="temporary-password-unavailable"
+              >
                 재발급 직후에는 같은 직원의 비밀번호를 다시 발급할 수 없습니다.
               </p>
             )}
           </div>
           <DialogFooter>
-            <Button type="button" onClick={() => setIssued(null)}>확인</Button>
+            <Button type="button" onClick={() => setIssued(null)}>
+              확인
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -311,7 +658,8 @@ export function StaffAccounts() {
           <DialogHeader>
             <DialogTitle>직원 추가</DialogTitle>
             <DialogDescription>
-              이메일·이름·역할·소속 지점을 입력한다. 본사 역할은 지점을 가질 수 없다.
+              이메일·이름·역할·소속 지점을 입력한다. 본사 역할은 지점을 가질 수
+              없다.
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={submitCreate} className="grid gap-3">
@@ -351,7 +699,9 @@ export function StaffAccounts() {
                 data-testid="create-staff-role"
               >
                 {STAFF_ROLES.map((value) => (
-                  <option key={value} value={value}>{roleLabel(value)}</option>
+                  <option key={value} value={value}>
+                    {roleLabel(value)}
+                  </option>
                 ))}
               </select>
             </label>
@@ -368,20 +718,168 @@ export function StaffAccounts() {
                 >
                   <option value="">선택하세요</option>
                   {hotels.map((hotel) => (
-                    <option key={hotel.id} value={hotel.id}>{hotel.name}</option>
+                    <option key={hotel.id} value={hotel.id}>
+                      {hotel.name}
+                    </option>
                   ))}
                 </select>
               </label>
             )}
             {createError && (
-              <p role="alert" className="break-words text-sm text-destructive">{createError}</p>
+              <p role="alert" className="break-words text-sm text-destructive">
+                {createError}
+              </p>
             )}
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setCreateOpen(false)} disabled={creating}>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setCreateOpen(false)}
+                disabled={creating}
+              >
                 취소
               </Button>
-              <Button type="submit" disabled={creating || !email.trim() || !displayName.trim()} data-testid="create-staff-submit">
+              <Button
+                type="submit"
+                disabled={creating || !email.trim() || !displayName.trim()}
+                data-testid="create-staff-submit"
+              >
                 {creating ? "추가하는 중" : "추가"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={editOpen}
+        onOpenChange={(open) => {
+          if (!open) closeEditDialog();
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>역할·소속 지점 수정</DialogTitle>
+            <DialogDescription>
+              {editTarget?.email} ({editTarget?.displayName})의 역할과 소속
+              지점을 바꾼다. 본사 역할은 지점을 가질 수 없다. 역할을 바꾸면 다음
+              로그인부터 적용된다.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={submitEdit} className="grid gap-3">
+            <label className="grid gap-1 text-sm font-medium">
+              역할
+              <select
+                aria-label="역할"
+                className="h-9 rounded-lg border bg-background px-3"
+                value={editRole}
+                onChange={(event) =>
+                  setEditRole(event.target.value as StaffRole)
+                }
+                data-testid="edit-staff-role"
+              >
+                {STAFF_ROLES.map((value) => (
+                  <option key={value} value={value}>
+                    {roleLabel(value)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {editIsBranch && (
+              <label className="grid gap-1 text-sm font-medium">
+                소속 지점
+                <select
+                  aria-label="소속 지점"
+                  required
+                  className="h-9 rounded-lg border bg-background px-3"
+                  value={editHotelId}
+                  onChange={(event) => setEditHotelId(event.target.value)}
+                  data-testid="edit-staff-hotel"
+                >
+                  <option value="">선택하세요</option>
+                  {hotels.map((hotel) => (
+                    <option key={hotel.id} value={hotel.id}>
+                      {hotel.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {editError && (
+              <p
+                role="alert"
+                className="break-words text-sm text-destructive"
+                data-testid="edit-error"
+              >
+                {editError}
+              </p>
+            )}
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={closeEditDialog}
+                disabled={editing}
+              >
+                취소
+              </Button>
+              <Button
+                type="submit"
+                disabled={editing}
+                data-testid="edit-staff-submit"
+              >
+                {editing ? "수정하는 중" : "수정"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={deleteOpen}
+        onOpenChange={(open) => {
+          if (!open) closeDeleteDialog();
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>직원 계정 삭제</DialogTitle>
+            <DialogDescription>
+              {deleteTarget
+                ? `${deleteTarget.email} (${deleteTarget.displayName}) 계정을 영구 삭제한다.`
+                : "직원을 선택해 주세요."}
+              이 작업은 되돌릴 수 없다. 로그인할 수 없게 되고 직원 목록에서
+              빠진다. 진행 중인 예약 변경 요청·정산 실행의 담당자 표시는
+              삭제된 직원으로 남는다. 잠시 멈추는 것이 목적이면 비활성을
+              먼저 쓴다.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={submitDelete} className="grid gap-3">
+            {deleteError ? (
+              <p
+                role="alert"
+                className="break-words text-sm text-destructive"
+                data-testid="delete-staff-form-error"
+              >
+                {deleteError}
+              </p>
+            ) : null}
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={closeDeleteDialog}
+                disabled={deleting}
+              >
+                취소
+              </Button>
+              <Button
+                type="submit"
+                variant="destructive"
+                disabled={deleting}
+                data-testid="delete-staff-submit"
+              >
+                {deleting ? "삭제하는 중" : "삭제"}
               </Button>
             </DialogFooter>
           </form>

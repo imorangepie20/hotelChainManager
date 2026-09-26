@@ -38,11 +38,14 @@ public class RoomTypeUpdateService {
     private final JdbcTemplate jdbc;
     private final StaffAccessService access;
     private final Clock clock;
+    private final RoomTypeRatePlanService ratePlans;
 
-    public RoomTypeUpdateService(JdbcTemplate jdbc, StaffAccessService access, Clock clock) {
+    public RoomTypeUpdateService(JdbcTemplate jdbc, StaffAccessService access, Clock clock,
+            RoomTypeRatePlanService ratePlans) {
         this.jdbc = jdbc;
         this.access = access;
         this.clock = clock;
+        this.ratePlans = ratePlans;
     }
 
     @Transactional
@@ -85,6 +88,10 @@ public class RoomTypeUpdateService {
                  where id = ? and hotel_id = ?
                 """, trimmedName, newOccupancy, roomTypeId, hotelId);
 
+        // 조식 포함 여부와 기본 요금은 보냈을 때만 바꾼다. 객실 유형의 속성이
+        // 아니라 기본 요금제의 속성이므로 보내지 않은 필드를 건드리지 않는다.
+        applyRatePlanChanges(roomTypeId, request);
+
         jdbc.update("""
                 insert into room_type_command
                     (id, hotel_id, staff_id, room_type_id, kind, idempotency_key, request_hash,
@@ -94,7 +101,36 @@ public class RoomTypeUpdateService {
                 idempotencyKey, requestHash, existing.name(), existing.maxOccupancy(),
                 java.sql.Timestamp.from(clock.instant()));
 
-        return new RoomTypeUpdateResponse(roomTypeId, hotelId, trimmedName, newOccupancy, true);
+        return new RoomTypeUpdateResponse(roomTypeId, hotelId, trimmedName, newOccupancy, true,
+                ratePlanSummary(roomTypeId));
+    }
+
+    private void applyRatePlanChanges(UUID roomTypeId, RoomTypeUpdateRequest request) {
+        boolean breakfastChanged = request.breakfastIncluded() != null;
+        boolean rateChanged = request.defaultRateKrw() != null;
+        if (!breakfastChanged && !rateChanged) {
+            return;
+        }
+
+        RoomTypeRatePlanService.RatePlanDefaults defaults = ratePlans.loadDefaults(roomTypeId);
+        if (defaults.ratePlanId() == null) {
+            // 요금제가 없으면 조식·요금을 바꿀 대상이 없다. 404로 거부한다.
+            throw new RoomTypeRatePlanNotFoundException(roomTypeId);
+        }
+
+        boolean breakfastIncluded = breakfastChanged ? request.breakfastIncluded() : defaults.breakfastIncluded();
+        if (breakfastChanged) {
+            // 조식 포함 여부는 예약의 계약 조건이다. 확정 예약이 현재 조건으로
+            // 예약돼 있으면 새 조건과 충돌하므로 값을 바꾸지 않고 거부한다.
+            int conflicts = ratePlans.countBreakfastConflicts(roomTypeId, breakfastIncluded);
+            if (conflicts > 0) {
+                throw new RoomTypeBreakfastConflictException(conflicts);
+            }
+        }
+
+        if (rateChanged) {
+            ratePlans.updateDefaults(roomTypeId, breakfastIncluded, request.defaultRateKrw());
+        }
     }
 
     private ExistingRoomType loadRoomType(UUID hotelId, UUID roomTypeId) {
@@ -141,8 +177,29 @@ public class RoomTypeUpdateService {
                 select id, name, max_occupancy from room_type where id = ? and hotel_id = ?
                 """, rs -> rs.next() ? new RoomTypeUpdateResponse(
                         rs.getObject("id", UUID.class), hotelId,
-                        rs.getString("name"), rs.getInt("max_occupancy"), created) : null,
+                        rs.getString("name"), rs.getInt("max_occupancy"), created,
+                        ratePlanSummary(roomTypeId)) : null,
                 roomTypeId, hotelId);
+    }
+
+    // 멱원 재호출은 같은 결과를 돌려줘야 한다. 이미 저장된 요금제 상태를 다시 읽는다.
+    private RoomTypeUpdateResponse.RatePlanSummary ratePlanSummary(UUID roomTypeId) {
+        RoomTypeRatePlanService.RatePlanDefaults defaults = ratePlans.loadDefaults(roomTypeId);
+        if (defaults.ratePlanId() == null) {
+            return null;
+        }
+        return new RoomTypeUpdateResponse.RatePlanSummary(
+                defaults.ratePlanId(),
+                defaults.ratePlanName(),
+                Boolean.TRUE.equals(defaults.breakfastIncluded()),
+                defaults.minAmountKrw() == null ? 0 : defaults.minAmountKrw(),
+                pricedDays(defaults.ratePlanId()));
+    }
+
+    private int pricedDays(UUID ratePlanId) {
+        Integer count = jdbc.queryForObject(
+                "select count(*) from rate_day where rate_plan_id = ?", Integer.class, ratePlanId);
+        return count == null ? 0 : count;
     }
 
     private void requireIdempotencyKey(String idempotencyKey) {
@@ -153,7 +210,8 @@ public class RoomTypeUpdateService {
 
     static String requestHash(UUID staffId, UUID hotelId, UUID roomTypeId, RoomTypeUpdateRequest request) {
         String payload = staffId + "|" + hotelId + "|" + roomTypeId + "|"
-                + request.name().trim() + "|" + request.maxOccupancy();
+                + request.name().trim() + "|" + request.maxOccupancy()
+                + "|" + request.breakfastIncluded() + "|" + request.defaultRateKrw();
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
                     .digest(payload.getBytes(StandardCharsets.UTF_8)));

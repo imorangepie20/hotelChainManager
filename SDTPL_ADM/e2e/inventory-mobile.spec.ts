@@ -23,6 +23,16 @@ const INVENTORY_BODY = JSON.stringify({
   ],
 });
 
+const HOTELS_BODY = JSON.stringify([
+  {
+    id: "11000000-0000-0000-0000-000000000001",
+    name: "속초 지점",
+    region: "속초",
+    timezone: "Asia/Seoul",
+    active: true,
+  },
+]);
+
 function seedStaffScript() {
   const staff = { id: "test", email: "hq@example.com", displayName: "본사 관리자", role: "HQ_ADMIN", hotelId: null };
   return `
@@ -36,6 +46,9 @@ test("inventory grid stays inside a 390px viewport", async ({ page }) => {
   await page.route("**/api/staff/me", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: "{}" }),
   );
+  await page.route("**/api/staff/hotels", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: HOTELS_BODY }),
+  );
   await page.route("**/api/staff/hotels/*/inventory**", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: INVENTORY_BODY }),
   );
@@ -43,6 +56,11 @@ test("inventory grid stays inside a 390px viewport", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/dashboard/inventory");
 
+  await expect(page.getByRole("button", { name: "속초 지점" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(page.getByText("선택됨", { exact: true })).toBeVisible();
   await expect(page.getByRole("rowheader", { name: "스탠다드 시티" })).toBeVisible();
 
   const overflow = await page.evaluate(() => {

@@ -29,6 +29,9 @@ public class StaffAccountCommandService {
 
     static final String KIND_CREATE = "CREATE";
     static final String KIND_RESET_PASSWORD = "RESET_PASSWORD";
+    static final String KIND_UPDATE = "UPDATE";
+    static final String KIND_ACTIVATE = "ACTIVATE";
+    static final String KIND_DEACTIVATE = "DEACTIVATE";
 
     private static final int IDEMPOTENCY_KEY_MAX_LENGTH = 100;
     private static final int TEMPORARY_PASSWORD_LENGTH = 16;
@@ -137,6 +140,137 @@ public class StaffAccountCommandService {
                 resetCooldown.toSeconds());
     }
 
+    // 본사가 직원의 역할과 소속 지점을 바꾼다. 세션은 token_hash 기반이라
+    // 역할을 바꿔도 기존 세션이 즉시 만료되지 않는다. 다음 로그인부터 새 역할이 적용된다.
+    @Transactional
+    public StaffAccountUpdateResponse update(
+            String token, UUID staffId, String idempotencyKey, StaffAccountUpdateRequest request) {
+        StaffPrincipal principal = access.requireHeadquarters(token);
+        requireIdempotencyKey(idempotencyKey);
+        request.validate();
+        if (staffId.equals(principal.id())) {
+            throw new StaffSelfModificationException();
+        }
+        if (request.hotelId() != null && !hotelExists(request.hotelId())) {
+            throw new HotelNotFoundException(request.hotelId());
+        }
+
+        AccountRow account = loadAccount(staffId);
+        if (account == null) {
+            throw new StaffAccountNotFoundException(staffId);
+        }
+
+        // 동시 수정을 직렬화한다. 두 본사 관리자가 같은 직원을 동시에 바꾸면
+        // 한 쪽의 잠금이 풀릴 때까지 다른 쪽이 기다린다.
+        jdbc.query("select id from staff_member where id = ? for update", rs -> { }, staffId);
+
+        String requestHash = requestHash(staffId, principal.id(), request);
+        UUID handled = findUpdatedCommand(staffId, idempotencyKey, requestHash);
+        if (handled != null) {
+            return loadUpdated(handled, false);
+        }
+
+        String nextRole = request.role() != null ? request.role() : account.role();
+        UUID nextHotelId = request.role() != null
+                ? request.hotelId()
+                : (request.hotelId() != null ? request.hotelId() : account.hotelIdAsUuid());
+
+        jdbc.update("update staff_member set role = ?, hotel_id = ? where id = ?",
+                nextRole, nextHotelId, staffId);
+        jdbc.update("""
+                insert into staff_account_command
+                    (id, staff_id, created_staff_id, kind, idempotency_key, request_hash, created_at)
+                values (?, ?, ?, ?, ?, ?, ?)
+                """, UUID.randomUUID(), staffId, principal.id(), KIND_UPDATE, idempotencyKey,
+                requestHash, java.sql.Timestamp.from(clock.instant()));
+
+        return loadUpdated(staffId, true);
+    }
+
+    // 본사가 직원을 비활성하거나 다시 활성한다. 비활성 직원은 로그인과
+    // 세션 사용이 즉시 거부된다. 본인 계정은 본인이 비활성할 수 없다.
+    @Transactional
+    public StaffAccountActivationResponse activate(
+            String token, UUID staffId, String idempotencyKey, StaffAccountActivationRequest request) {
+        StaffPrincipal principal = access.requireHeadquarters(token);
+        requireIdempotencyKey(idempotencyKey);
+        if (staffId.equals(principal.id())) {
+            throw new StaffSelfModificationException();
+        }
+
+        AccountRow account = loadAccount(staffId);
+        if (account == null) {
+            throw new StaffAccountNotFoundException(staffId);
+        }
+
+        // 동시 수정을 직렬화한다. 두 본사 관리자가 같은 직원을 동시에 바꾸면
+        // 한 쪽의 잠금이 풀릴 때까지 다른 쪽이 기다린다.
+        jdbc.query("select id from staff_member where id = ? for update", rs -> { }, staffId);
+
+        String kind = request.active() ? KIND_ACTIVATE : KIND_DEACTIVATE;
+        String requestHash = activationRequestHash(staffId, principal.id(), request);
+        UUID handled = findActivationCommand(staffId, idempotencyKey, requestHash);
+        if (handled != null) {
+            return loadActivation(handled, false);
+        }
+
+        if (account.active() == request.active()) {
+            // 같은 상태를 다시 요청하면 상태를 바꾸지 않고 멱원 기록만 남긴다.
+            // 그래야 응답을 유실한 뒤 새 키로 같은 내용을 보내도 같은 결과를 돌려준다.
+        }
+
+        jdbc.update("update staff_member set active = ? where id = ?", request.active(), staffId);
+        if (!request.active()) {
+            // 비활성 직원이 남겨둔 세션을 즉시 끊는다. 그렇지 않으면
+            // 비활성 직원이 로그아웃하기 전까지 계속 API를 쓸 수 있다.
+            jdbc.update("delete from staff_session where staff_id = ?", staffId);
+        }
+        jdbc.update("""
+                insert into staff_account_command
+                    (id, staff_id, created_staff_id, kind, idempotency_key, request_hash, created_at)
+                values (?, ?, ?, ?, ?, ?, ?)
+                """, UUID.randomUUID(), staffId, principal.id(), kind, idempotencyKey,
+                requestHash, java.sql.Timestamp.from(clock.instant()));
+
+        return loadActivation(staffId, true);
+    }
+
+    private StaffAccountActivationResponse loadActivation(UUID staffId, boolean created) {
+        return jdbc.query("""
+                select m.id, m.email, m.display_name, m.role, m.hotel_id, h.name as hotel_name, m.active
+                  from staff_member m
+                  left join hotel h on h.id = m.hotel_id
+                 where m.id = ?
+                """, rs -> rs.next() ? new StaffAccountActivationResponse(
+                        rs.getObject("id", UUID.class).toString(),
+                        rs.getString("email"),
+                        rs.getString("display_name"),
+                        rs.getString("role"),
+                        rs.getObject("hotel_id", UUID.class) == null
+                                ? null : rs.getObject("hotel_id", UUID.class).toString(),
+                        rs.getString("hotel_name"),
+                        rs.getBoolean("active"),
+                        created) : null,
+                staffId);
+    }
+
+    private StaffAccountUpdateResponse loadUpdated(UUID staffId, boolean created) {
+        return jdbc.query("""
+                select m.id, m.email, m.display_name, m.role, m.hotel_id, h.name as hotel_name
+                  from staff_member m
+                  left join hotel h on h.id = m.hotel_id
+                 where m.id = ?
+                """, rs -> rs.next() ? new StaffAccountUpdateResponse(
+                        rs.getObject("id", UUID.class),
+                        rs.getString("email"),
+                        rs.getString("display_name"),
+                        rs.getString("role"),
+                        rs.getObject("hotel_id", UUID.class),
+                        rs.getString("hotel_name"),
+                        created) : null,
+                staffId);
+    }
+
     private long cooldownSeconds(Instant now) {
         Instant lastReset = lastPasswordReset(null);
         if (lastReset == null) return 0;
@@ -172,7 +306,7 @@ public class StaffAccountCommandService {
 
     private AccountRow loadAccount(UUID staffId) {
         return jdbc.query("""
-                select m.id, m.email, m.display_name, m.role, m.hotel_id, h.name as hotel_name
+                select m.id, m.email, m.display_name, m.role, m.hotel_id, h.name as hotel_name, m.active
                   from staff_member m
                   left join hotel h on h.id = m.hotel_id
                  where m.id = ?
@@ -183,7 +317,8 @@ public class StaffAccountCommandService {
                         rs.getString("role"),
                         rs.getObject("hotel_id", UUID.class) == null
                                 ? null : rs.getObject("hotel_id", UUID.class).toString(),
-                        rs.getString("hotel_name")) : null,
+                        rs.getString("hotel_name"),
+                        rs.getBoolean("active")) : null,
                 staffId);
     }
 
@@ -208,6 +343,25 @@ public class StaffAccountCommandService {
                  where staff_id = ? and kind = ? and idempotency_key = ?
                 """, rs -> rs.next() ? rs.getObject("staff_id", UUID.class) : null,
                 staffId, kind, idempotencyKey);
+    }
+
+    // 수정은 같은 키 재호출과 같은 내용의 다른 키 재시도를 모두 잡는다.
+    // 응답을 유실한 뒤 새 키로 같은 내용을 보내면 실제로 두 번 적용되므로
+    // 지문까지 비교한다.
+    private UUID findUpdatedCommand(UUID staffId, String idempotencyKey, String requestHash) {
+        UUID byKey = jdbc.query("""
+                select staff_id from staff_account_command
+                 where staff_id = ? and kind = ? and idempotency_key = ?
+                """, rs -> rs.next() ? rs.getObject("staff_id", UUID.class) : null,
+                staffId, KIND_UPDATE, idempotencyKey);
+        if (byKey != null) {
+            return byKey;
+        }
+        return jdbc.query("""
+                select staff_id from staff_account_command
+                 where staff_id = ? and kind = ? and request_hash = ?
+                """, rs -> rs.next() ? rs.getObject("staff_id", UUID.class) : null,
+                staffId, KIND_UPDATE, requestHash);
     }
 
     private StaffAccountCreateResponse loadExisting(UUID staffId, String temporaryPassword, boolean created) {
@@ -261,6 +415,33 @@ public class StaffAccountCommandService {
         return sha256("reset-password|" + staffId);
     }
 
+    static String requestHash(UUID staffId, UUID modifiedBy, StaffAccountUpdateRequest request) {
+        String payload = staffId + "|" + modifiedBy + "|" + request.role() + "|" + request.hotelId();
+        return sha256(payload);
+    }
+
+    static String activationRequestHash(UUID staffId, UUID modifiedBy, StaffAccountActivationRequest request) {
+        return sha256(staffId + "|" + modifiedBy + "|active=" + request.active());
+    }
+
+    // 활성화는 같은 키 재호출과 같은 내용의 다른 키 재시도를 모두 잡는다.
+    // 응답을 유실한 뒤 새 키로 같은 내용을 보내면 세션이 두 번 끊기므로 지문까지 비교한다.
+    private UUID findActivationCommand(UUID staffId, String idempotencyKey, String requestHash) {
+        UUID byKey = jdbc.query("""
+                select staff_id from staff_account_command
+                 where staff_id = ? and kind in (?, ?) and idempotency_key = ?
+                """, rs -> rs.next() ? rs.getObject("staff_id", UUID.class) : null,
+                staffId, KIND_ACTIVATE, KIND_DEACTIVATE, idempotencyKey);
+        if (byKey != null) {
+            return byKey;
+        }
+        return jdbc.query("""
+                select staff_id from staff_account_command
+                 where staff_id = ? and kind in (?, ?) and request_hash = ?
+                """, rs -> rs.next() ? rs.getObject("staff_id", UUID.class) : null,
+                staffId, KIND_ACTIVATE, KIND_DEACTIVATE, requestHash);
+    }
+
     private static String sha256(String payload) {
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
@@ -271,6 +452,11 @@ public class StaffAccountCommandService {
     }
 
     private record AccountRow(
-            String id, String email, String displayName, String role, String hotelId, String hotelName) {
+            String id, String email, String displayName, String role, String hotelId, String hotelName,
+            boolean active) {
+
+        UUID hotelIdAsUuid() {
+            return hotelId == null ? null : UUID.fromString(hotelId);
+        }
     }
 }

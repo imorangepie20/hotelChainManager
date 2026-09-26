@@ -96,6 +96,35 @@ public class PolicyCommandService {
         return new ChangeApprovalLimitUpdateResponse(request.limitKrw(), limitRevisionNumber(), true);
     }
 
+    // 본사가 예약 변경 승인 TTL을 변경한다. 진행 중인 변경 요청은 이미 저장된
+    // approval_expires_at을 그대로 쓴다. 신규 요청부터 새 TTL이 적용된다.
+    @Transactional
+    public ChangeApprovalTtlUpdateResponse updateChangeApprovalTtl(String token, String idempotencyKey,
+            ChangeApprovalTtlUpdateRequest request) {
+        StaffPrincipal staff = access.requireHeadquarters(token);
+        requireIdempotencyKey(idempotencyKey);
+        request.validate();
+
+        lockKey(CurrentPolicy.CHANGE_APPROVAL_TTL_KEY);
+
+        UUID existing = findExistingRevision(CurrentPolicy.CHANGE_APPROVAL_TTL_KEY, staff.id(), idempotencyKey,
+                ttlRequestHash(staff.id(), request));
+        if (existing != null) {
+            return loadExistingTtl(existing);
+        }
+
+        jdbc.update("""
+                insert into policy_revision
+                    (id, key, refund_cutoff_days_before, refund_cutoff_local_time, timezone,
+                     value_seconds, staff_id, idempotency_key, request_hash, created_at)
+                values (?, ?, 0, '00:00', ?, ?, ?, ?, ?, ?)
+                """, UUID.randomUUID(), CurrentPolicy.CHANGE_APPROVAL_TTL_KEY, CurrentPolicy.DEFAULT_TIMEZONE,
+                request.ttlSeconds(), staff.id(), idempotencyKey,
+                ttlRequestHash(staff.id(), request), java.sql.Timestamp.from(clock.instant()));
+
+        return new ChangeApprovalTtlUpdateResponse(request.ttlSeconds(), ttlRevisionNumber(), true);
+    }
+
     private void lockKey(String key) {
         jdbc.query("select pg_advisory_xact_lock(hashtextextended(?, 0)) is null", rs -> { }, key);
     }
@@ -134,6 +163,15 @@ public class PolicyCommandService {
                 revisionId);
     }
 
+    private ChangeApprovalTtlUpdateResponse loadExistingTtl(UUID revisionId) {
+        return jdbc.query("""
+                select value_seconds from policy_revision where id = ?
+                """, rs -> rs.next()
+                        ? new ChangeApprovalTtlUpdateResponse(rs.getInt(1), ttlRevisionNumber(), false)
+                        : null,
+                revisionId);
+    }
+
     private int revisionNumber() {
         Integer count = jdbc.queryForObject(
                 "select count(*) from policy_revision where key = ?", Integer.class, CurrentPolicy.CANCELLATION_KEY);
@@ -143,6 +181,13 @@ public class PolicyCommandService {
     private int limitRevisionNumber() {
         Integer count = jdbc.queryForObject(
                 "select count(*) from policy_revision where key = ?", Integer.class, CurrentPolicy.CHANGE_APPROVAL_KEY);
+        return count == null ? 0 : count;
+    }
+
+    private int ttlRevisionNumber() {
+        Integer count = jdbc.queryForObject(
+                "select count(*) from policy_revision where key = ?", Integer.class,
+                CurrentPolicy.CHANGE_APPROVAL_TTL_KEY);
         return count == null ? 0 : count;
     }
 
@@ -160,6 +205,11 @@ public class PolicyCommandService {
 
     static String limitRequestHash(UUID staffId, ChangeApprovalLimitUpdateRequest request) {
         String payload = staffId + "|" + CurrentPolicy.CHANGE_APPROVAL_KEY + "|" + request.limitKrw();
+        return sha256(payload);
+    }
+
+    static String ttlRequestHash(UUID staffId, ChangeApprovalTtlUpdateRequest request) {
+        String payload = staffId + "|" + CurrentPolicy.CHANGE_APPROVAL_TTL_KEY + "|" + request.ttlSeconds();
         return sha256(payload);
     }
 

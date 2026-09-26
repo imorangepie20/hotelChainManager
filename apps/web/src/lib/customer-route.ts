@@ -8,6 +8,7 @@ export type CustomerRoute = (
   | { kind: 'reservations'; pathname: string }
   | { kind: 'reservation-detail'; pathname: string; reservationId: string }
   | { kind: 'reservation-change'; pathname: string; reservationId: string }
+  | { kind: 'contact'; pathname: '/contact' | '/en/contact' }
   | { kind: 'collection'; pathname: string; hotelSlug?: string; contentKind: 'ROOM' | 'DINING' | 'FACILITY' | 'EXPERIENCE' | 'PROMOTION' | 'GUIDE' | 'BRAND' }
   | { kind: 'page'; pathname: string; segments: string[] }) & { locale?: 'ko' | 'en' }
 
@@ -47,6 +48,9 @@ function resolveBaseRoute(pathname: string): CustomerRoute | null {
   if (normalizedPathname === '/') return { kind: 'home', pathname: '/' }
   if (normalizedPathname === '/reservation-change-payment') {
     return { kind: 'reservation-change-payment', pathname: '/reservation-change-payment' }
+  }
+  if (normalizedPathname === '/contact') {
+    return { kind: 'contact', pathname: '/contact' }
   }
   const bookingRoutes = {
     '/booking/results': 'booking-results',

@@ -1,0 +1,175 @@
+x-logging: &default-logging
+  driver: local
+  options:
+    max-size: 10m
+    max-file: "3"
+
+# 호텔 체인 매니저 - Zorin 홈 서버 배포.
+# 호스트 포트를 하나도 열지 않는다. 서버에 여러 프로젝트가 있어
+# 포트가 겹치면 안 되기 때문이다. 외부로 나가는 유일한 길은
+# Cloudflare Tunnel 이고, 터널은 컨테이너 네트워크의 서비스 이름으로
+# 직접 연결한다. 디버그는 docker compose exec 로 들어간다.
+services:
+  postgres:
+    image: postgres:16.15-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${HCM_DB_NAME}
+      POSTGRES_USER: ${HCM_DB_USER}
+      POSTGRES_PASSWORD: ${HCM_DB_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - hcm-db-data:/var/lib/postgresql/data
+    networks: [backend]
+    logging: *default-logging
+
+  api:
+    image: hcm-api:${APP_VERSION:-local}
+    build:
+      context: ../services/api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES:-dev}
+      DATABASE_URL: jdbc:postgresql://postgres:5432/${HCM_DB_NAME}
+      DATABASE_USER: ${HCM_DB_USER}
+      DATABASE_PASSWORD: ${HCM_DB_PASSWORD}
+      STAFF_DEV_ENABLED: ${STAFF_DEV_ENABLED:-false}
+      STAFF_HQ_PASSWORD: ${STAFF_HQ_PASSWORD:-}
+      STAFF_SOKCHO_PASSWORD: ${STAFF_SOKCHO_PASSWORD:-}
+      STAFF_SEORAKSAN_PASSWORD: ${STAFF_SEORAKSAN_PASSWORD:-}
+      STAFF_JEJU_PASSWORD: ${STAFF_JEJU_PASSWORD:-}
+      RESERVATION_CHANGE_SETTLEMENT_ENABLED: ${RESERVATION_CHANGE_SETTLEMENT_ENABLED:-false}
+      RESERVATION_CHANGE_GATEWAY: ${RESERVATION_CHANGE_GATEWAY:-fake}
+      PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:-fake}
+      PAYMENT_CHECKOUT_ENABLED: ${PAYMENT_CHECKOUT_ENABLED:-false}
+      PAYMENT_CUSTOMER_ORIGIN: ${PAYMENT_CUSTOMER_ORIGIN:-https://hcm.approid.team}
+      TOSS_PAYMENTS_CLIENT_KEY: ${TOSS_PAYMENTS_CLIENT_KEY:-}
+      TOSS_PAYMENTS_SECRET_KEY: ${TOSS_PAYMENTS_SECRET_KEY:-}
+      TOSS_PAYMENTS_MERCHANT_ACCOUNT: ${TOSS_PAYMENTS_MERCHANT_ACCOUNT:-}
+      TOSS_SETTLEMENT_ENABLED: ${TOSS_SETTLEMENT_ENABLED:-false}
+      TOSS_SETTLEMENT_PAGE_SIZE: ${TOSS_SETTLEMENT_PAGE_SIZE:-500}
+      TOSS_SETTLEMENT_DELAY_DAYS: ${TOSS_SETTLEMENT_DELAY_DAYS:-2}
+      WEBSITE_MEDIA_STORAGE_DIR: /app/media
+      WEBSITE_MEDIA_STORAGE_MODE: ${WEBSITE_MEDIA_STORAGE_MODE:-local}
+      # 터널이 https로 들어오므로 미리보기 링크도 https를 쓴다.
+      WEBSITE_PREVIEW_REQUIRE_HTTPS: ${WEBSITE_PREVIEW_REQUIRE_HTTPS:-true}
+      HOTEL_SEED_DEFAULT_RATE_KRW: ${HOTEL_SEED_DEFAULT_RATE_KRW:-100000}
+      HOTEL_SEED_RATE_DAYS: ${HOTEL_SEED_RATE_DAYS:-90}
+      HOTEL_SEED_INVENTORY_CAPACITY: ${HOTEL_SEED_INVENTORY_CAPACITY:-8}
+    # 호스트 포트를 열지 않는다. 서버에 여러 프로젝트가 있어 포트가
+    # 겹치면 안 된다. 외부 입구는 Cloudflare Tunnel 뿐이고, 터널은
+    # 컨테이너 네트워크의 api:4080 으로 직접 연결한다.
+    # 디버그가 필요하면 docker compose exec api sh 로 들어간다.
+    expose:
+      - "4080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      # readinessState가 UP이어야 트래픽을 받는다. Flyway 마이그레이션이
+      # 끝나지 않았으면 starting이므로 start_period를 넉넉히 준다.
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:4080/actuator/health/readiness | grep -q UP || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 120s
+    volumes:
+      - hcm-media-data:/app/media
+    networks: [backend, frontend]
+    logging: *default-logging
+
+  # 고객 웹. 빌드된 정적 파일을 nginx로 서비스하고 /api는 API 컨테이너로
+  # 보낸다. 같은 도메인에서 서비스하므로 브라우저의 상대 경로 호출이
+  # 그대로 동작한다.
+  web:
+    image: hcm-web:${APP_VERSION:-local}
+    build:
+      context: ../apps/web
+      dockerfile: infra/Dockerfile
+    restart: unless-stopped
+    environment:
+      API_PROXY_TARGET: ${API_PROXY_TARGET:-http://api:4080}
+    # 80·8080·3000 은 쓰지 않는다. 프로젝트 전용 대역인 3110 을
+    # 컨테이너 포트로 쓰고 호스트 포트는 열지 않는다.
+    expose:
+      - "3110"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3110/ | grep -q '<html' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks: [frontend]
+    logging: *default-logging
+
+  # 관리자. Next standalone 서버가 /api rewrite를 런타임 환경변수로
+  # API 컨테이너에 연결한다. 별도 서브도메인으로 서비스하므로
+  # basePath 없이 /dashboard 경로를 그대로 쓴다.
+  admin:
+    image: hcm-admin:${APP_VERSION:-local}
+    build:
+      context: ../SDTPL_ADM
+      dockerfile: infra/Dockerfile
+      args:
+        # Next.js rewrites 의 destination 은 빌드 시점에 매니페스트에
+        # 구워진다. 런타임 환경변수로는 바꿀 수 없어서 빌드 시점에
+        # 컨테이너 이름을 넣는다.
+        API_PROXY_TARGET: ${ADMIN_API_PROXY_TARGET:-http://api:4080}
+        # NEXT_PUBLIC_* 변수도 빌드 시점에 구워진다. 런타임 environment 의
+        # 값을 쓰면 배포 주소가 아니라 로컬 개발 주소가 들어간다.
+        NEXT_PUBLIC_CUSTOMER_WEB_ORIGIN: ${CUSTOMER_WEB_ORIGIN:-https://hcm.approid.team}
+        # 이 배포에 AI 도우미가 없다. 빈 값을 주면 /concierge rewrite 를
+        # 만들지 않아서 관리자 AI 메뉴가 컨테이너 자신을 가리키지 않는다.
+        CONCIERGE_PROXY_TARGET: ${CONCIERGE_PROXY_TARGET-}
+    restart: unless-stopped
+    environment:
+      # 관리자 화면이 고객 웹 미리보기를 열 때 쓰는 공개 도메인이다.
+      NEXT_PUBLIC_CUSTOMER_WEB_ORIGIN: ${CUSTOMER_WEB_ORIGIN:-https://hcm.approid.team}
+    # 호스트 포트를 열지 않는다. 포트 충돌을 원천적으로 없앤다.
+    expose:
+      - "3111"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3111/ | grep -q '<html' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks: [frontend]
+    logging: *default-logging
+
+  tunnel:
+    image: cloudflare/cloudflared:latest@sha256:ff69a2225ad7c6f85ed84fbd5f3087df46202426b2388ec60214098e0adf05e9
+    profiles: [tunnel]
+    restart: unless-stopped
+    env_file: ./secrets/tunnel.env
+    command: tunnel --no-autoupdate run
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+      admin:
+        condition: service_healthy
+    networks: [frontend]
+    logging: *default-logging
+
+volumes:
+  hcm-db-data:
+  hcm-media-data:
+
+networks:
+  backend:
+    name: hcm-backend
+  frontend:
+    name: hcm-frontend

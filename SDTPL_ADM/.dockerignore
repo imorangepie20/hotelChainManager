@@ -1,0 +1,11 @@
+node_modules
+.next
+test-results
+.playwright
+.git
+.idea
+*.iml
+.tmp
+.env
+.env.*
+debug.log

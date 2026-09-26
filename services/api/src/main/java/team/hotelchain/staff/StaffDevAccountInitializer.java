@@ -49,11 +49,16 @@ public class StaffDevAccountInitializer {
             throw new IllegalStateException("직원 개발 계정 비밀번호 환경 변수를 모두 설정해야 합니다.");
         }
         for (DevAccount account : accounts) {
+            // 삭제된 계정의 이메일은 자리 표시자로 덮여 있으므로 email 충돌이
+            // 나지 않는다. 그래도 실수로 삭제된 계정을 되살리지 않도록
+            // REMOVED가 아닌 행만 다시 맞춘다.
             jdbc.update("""
                     INSERT INTO staff_member (id, email, display_name, password_hash, role, hotel_id)
                     VALUES (?, ?, ?, ?, ?, ?)
                     ON CONFLICT (email) DO UPDATE SET display_name = EXCLUDED.display_name,
-                        password_hash = EXCLUDED.password_hash, role = EXCLUDED.role, hotel_id = EXCLUDED.hotel_id
+                        password_hash = EXCLUDED.password_hash, role = EXCLUDED.role, hotel_id = EXCLUDED.hotel_id,
+                        active = true
+                    WHERE staff_member.role <> 'REMOVED'
                     """, UUID.randomUUID(), account.email(), account.displayName(), passwordEncoder.encode(account.password()),
                     account.role(), account.hotelId());
         }

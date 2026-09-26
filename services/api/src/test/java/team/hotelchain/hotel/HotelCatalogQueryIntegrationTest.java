@@ -51,8 +51,10 @@ class HotelCatalogQueryIntegrationTest {
         jdbc.update("insert into room_type values (?, ?, ?, ?)", STANDARD, SOKCHO, "스탠다드", 2);
         jdbc.update("insert into room_type values (?, ?, ?, ?)", SUITE, SOKCHO, "스위트", 4);
 
-        jdbc.update("insert into rate_plan values (?, ?, ?, true, ?)", RATE_WITH_BREAKFAST, STANDARD, "조식 포함", "FLEX-2026-01");
+        // V62가 rate_plan.created_at을 추가했고 요금제 정렬이 생성 순서를 따른다.
+        // 그래서 id 역순으로 심어도 표시 순서가 id 순서와 같게 한다.
         jdbc.update("insert into rate_plan values (?, ?, ?, false, ?)", RATE_WITHOUT_BREAKFAST, STANDARD, "객실만", "FLEX-2026-01");
+        jdbc.update("insert into rate_plan values (?, ?, ?, true, ?)", RATE_WITH_BREAKFAST, STANDARD, "조식 포함", "FLEX-2026-01");
         jdbc.update("insert into rate_day values (?, ?, ?)", RATE_WITH_BREAKFAST, LocalDate.of(2026, 10, 1), 100000);
         jdbc.update("insert into rate_day values (?, ?, ?)", RATE_WITH_BREAKFAST, LocalDate.of(2026, 10, 2), 150000);
         jdbc.update("insert into rate_day values (?, ?, ?)", RATE_WITHOUT_BREAKFAST, LocalDate.of(2026, 10, 1), 90000);

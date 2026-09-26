@@ -1,0 +1,11 @@
+node_modules
+dist
+test-results
+.git
+.env
+.env.*
+infra/secrets/tunnel.env
+infra/secrets/compose.env
+backup
+.tmp
+.local-runtime

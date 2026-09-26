@@ -9,6 +9,9 @@ import java.util.UUID;
  * <p>
  * 시드 필드는 본사가 방금 만든 유형이 바로 예약 가능한지 확인하게 해 준다.
  * 요금·재고가 없는 유형은 고객 검색에 나타나지 않는다.
+ * <p>
+ * {@code breakfastIncluded}·{@code defaultRateKrw}는 본사가 생성 화면에서 정한
+ * 기본 요금제의 조식 포함 여부와 일자별 기본 요금이다.
  */
 public record RoomTypeCreateResponse(
         UUID roomTypeId,
@@ -21,8 +24,9 @@ public record RoomTypeCreateResponse(
     public record SeedSummary(
             UUID ratePlanId,
             String ratePlanName,
-            int pricedDays,
+            boolean breakfastIncluded,
             int defaultRateKrw,
+            int pricedDays,
             int inventoryCapacity,
             boolean created) {
     }
@@ -38,11 +42,11 @@ public record RoomTypeCreateResponse(
     }
 
     public SeedSummary seedOrEmpty() {
-        return seed != null ? seed : new SeedSummary(null, null, 0, 0, 0, false);
+        return seed != null ? seed : new SeedSummary(null, null, false, 0, 0, 0, false);
     }
 
     public static SeedSummary noSeed() {
-        return new SeedSummary(null, null, 0, 0, 0, false);
+        return new SeedSummary(null, null, false, 0, 0, 0, false);
     }
 
     public record RateDayRow(java.time.LocalDate stayDate, int amountKrw) {
@@ -54,6 +58,7 @@ public record RoomTypeCreateResponse(
     public record SeedBatch(
             UUID ratePlanId,
             String ratePlanName,
+            boolean breakfastIncluded,
             List<RateDayRow> rateDays,
             List<InventoryDayRow> inventoryDays,
             int defaultRateKrw,

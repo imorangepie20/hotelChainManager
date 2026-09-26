@@ -29,6 +29,27 @@ public class HotelCatalogQueryService {
 
     public RoomTypeCatalogResponse listRoomTypes(String token, UUID hotelId, Integer limit, Integer offset) {
         access.requireHotel(token, hotelId);
+        return listRoomTypes(hotelId, limit, offset);
+    }
+
+    /**
+     * 본사가 수정 화면에 미리 채울 기본 요금제의 현재값을 돌려준다.
+     * 다른 지점의 유형을 읽지 않도록 {@code hotel_id} 쌍으로 찾는다. SELECT만 사용한다.
+     */
+    public RoomTypeCatalogView.RoomDefaults roomDefaults(UUID hotelId, UUID roomTypeId, String token) {
+        access.requireHotel(token, hotelId);
+        if (!hotelExists(hotelId)) {
+            throw new HotelNotFoundException(hotelId);
+        }
+        Integer count = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM room_type WHERE id = ? AND hotel_id = ?", Integer.class, roomTypeId, hotelId);
+        if (count == null || count == 0) {
+            throw new HotelNotFoundException(hotelId);
+        }
+        return roomDefaults(roomTypeId);
+    }
+
+    private RoomTypeCatalogResponse listRoomTypes(UUID hotelId, Integer limit, Integer offset) {
         if (!hotelExists(hotelId)) {
             throw new HotelNotFoundException(hotelId);
         }
@@ -48,9 +69,9 @@ public class HotelCatalogQueryService {
                   LEFT JOIN rate_day rd ON rd.rate_plan_id = rp.id
                  WHERE rt.hotel_id = ?
                  GROUP BY rt.id, rp.id
-                 ORDER BY rt.id, rp.id
+                 ORDER BY rt.id, rp.created_at, rp.id
                  LIMIT ? OFFSET ?
-                """, this::mapRow, hotelId, pageSize, pageOffset);
+                 """, this::mapRow, hotelId, pageSize, pageOffset);
 
         Integer total = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM room_type WHERE hotel_id = ?", Integer.class, hotelId);
@@ -59,6 +80,28 @@ public class HotelCatalogQueryService {
                 hotelId,
                 total == null ? 0 : total,
                 groupRows(rows));
+    }
+
+    /**
+     * 본사가 수정 화면에 미리 채울 기본 요금제의 현재값을 돌려준다.
+     * 카탈로그 본문과 같은 선택 기준을 쓴다. SELECT만 사용한다.
+     */
+    public RoomTypeCatalogView.RoomDefaults roomDefaults(UUID roomTypeId) {
+        return jdbc.query("""
+                SELECT rp.id AS rate_plan_id, rp.name AS rate_plan_name, rp.breakfast_included,
+                       MIN(rd.amount_krw) AS min_amount_krw
+                  FROM rate_plan rp
+                  LEFT JOIN rate_day rd ON rd.rate_plan_id = rp.id
+                 WHERE rp.room_type_id = ?
+                 GROUP BY rp.id, rp.name, rp.breakfast_included
+                 ORDER BY (SELECT rt.seed_completed_at IS NULL FROM room_type rt WHERE rt.id = rp.room_type_id),
+                          rp.created_at, rp.id
+                 LIMIT 1
+                """, rs -> rs.next() ? new RoomTypeCatalogView.RoomDefaults(
+                        rs.getObject("rate_plan_id", UUID.class),
+                        rs.getString("rate_plan_name"),
+                        rs.getBoolean("breakfast_included"),
+                        rs.getObject("min_amount_krw", Integer.class)) : null, roomTypeId);
     }
 
     private boolean hotelExists(UUID hotelId) {
@@ -94,7 +137,9 @@ public class HotelCatalogQueryService {
                             row.avgAmountKrw() == null ? null : Math.round(row.avgAmountKrw() * 100.0) / 100.0))
                     .toList();
             roomTypes.add(new RoomTypeCatalogView(
-                    first.roomTypeId(), first.roomTypeName(), first.maxOccupancy(), ratePlans));
+                    first.roomTypeId(), first.roomTypeName(), first.maxOccupancy(),
+                    first.ratePlanId() != null && first.breakfastIncluded(),
+                    first.minAmountKrw(), ratePlans));
         }
         return roomTypes;
     }

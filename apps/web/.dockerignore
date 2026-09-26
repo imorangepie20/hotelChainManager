@@ -1,0 +1,10 @@
+node_modules
+dist
+test-results
+.playwright
+.git
+.idea
+*.iml
+.tmp
+.env
+.env.*

@@ -1,14 +1,28 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { History, RefreshCw } from "lucide-react";
+import { Download, EyeOff, History, RefreshCw } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import {
   auditEventLabels,
+  buildAuditEventsCsv,
   getAuditEvents,
   StaffApiError,
   type AuditEvent,
@@ -33,13 +47,17 @@ export function AuditEvents() {
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [offset, setOffset] = useState(0);
+  const [masked, setMasked] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const requestGeneration = useRef(0);
   const mounted = useRef(false);
 
   const isHeadquarters = staff?.role === "HQ_ADMIN";
-  const sessionToken = typeof window !== "undefined" ? window.localStorage.getItem("hotel-chain-staff-session") : null;
+  const sessionToken =
+    typeof window !== "undefined"
+      ? window.localStorage.getItem("hotel-chain-staff-session")
+      : null;
 
   useEffect(() => {
     mounted.current = true;
@@ -63,7 +81,11 @@ export function AuditEvents() {
     setLoading(true);
     setError("");
     try {
-      const next = await getAuditEvents(sessionToken, { limit: PAGE_SIZE, offset });
+      const next = await getAuditEvents(sessionToken, {
+        limit: PAGE_SIZE,
+        offset,
+        masked,
+      });
       if (!mounted.current || requestGeneration.current !== generation) return;
       setEvents(next.events);
       setTotalCount(next.totalCount);
@@ -71,17 +93,48 @@ export function AuditEvents() {
       if (mounted.current && requestGeneration.current === generation) {
         setEvents([]);
         setTotalCount(0);
-        setError(cause instanceof StaffApiError ? cause.message : "감사 이력을 불러오지 못했습니다.");
+        setError(
+          cause instanceof StaffApiError
+            ? cause.message
+            : "감사 이력을 불러오지 못했습니다.",
+        );
       }
     } finally {
-      if (mounted.current && requestGeneration.current === generation) setLoading(false);
+      if (mounted.current && requestGeneration.current === generation)
+        setLoading(false);
     }
-  }, [offset, sessionToken]);
+  }, [offset, masked, sessionToken]);
 
   useEffect(() => {
     if (!isHeadquarters) return;
     void refresh();
   }, [isHeadquarters, refresh]);
+
+  // CSV는 브라우저에서 파일로 내려준다. 마스킹이 켜져 있으면 가린 값이 그대로 들어간다.
+  function downloadCsv() {
+    if (events.length === 0) return;
+    const blob = new Blob(
+      [
+        "﻿" +
+          buildAuditEventsCsv({
+            events,
+            totalCount,
+            limit: PAGE_SIZE,
+            offset,
+            masked,
+          }),
+      ],
+      {
+        type: "text/csv;charset=utf-8",
+      },
+    );
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `audit-events${masked ? "-masked" : ""}-${offset}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
 
   function gotoPage(next: number) {
     const page = Math.max(0, next);
@@ -101,16 +154,63 @@ export function AuditEvents() {
             감사 이력
           </h2>
           <p className="mt-1 max-w-[72ch] text-sm text-muted-foreground">
-            예약자 정정·인원·객실 재배정·일정 변경·취소·운영 상태 전환 이력을 읽기 전용으로 확인한다.
+            예약자 정정·인원·객실 재배정·일정 변경·취소·운영 상태 전환 이력을
+            읽기 전용으로 확인한다.
           </p>
         </div>
-        <Button type="button" variant="outline" onClick={() => void refresh()} disabled={loading || !isHeadquarters}>
-          <RefreshCw className="h-4 w-4" aria-hidden />
-          {loading ? "불러오는 중" : "새로고침"}
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void refresh()}
+            disabled={loading || !isHeadquarters}
+          >
+            <RefreshCw className="h-4 w-4" aria-hidden />
+            {loading ? "불러오는 중" : "새로고침"}
+          </Button>
+          <Button
+            type="button"
+            variant={masked ? "default" : "outline"}
+            aria-pressed={masked}
+            onClick={() => {
+              setMasked((prev) => !prev);
+              setOffset(0);
+            }}
+            disabled={!isHeadquarters}
+            data-testid="audit-masked"
+          >
+            <EyeOff className="h-4 w-4" aria-hidden />
+            {masked ? "마스킹 켜짐" : "개인정보 마스킹"}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={downloadCsv}
+            disabled={!isHeadquarters || events.length === 0}
+            data-testid="audit-csv"
+          >
+            <Download className="h-4 w-4" aria-hidden />
+            CSV 내보내기
+          </Button>
+        </div>
       </div>
 
-      {error && <p role="alert" className="break-words text-sm text-destructive">{error}</p>}
+      {error && (
+        <p role="alert" className="break-words text-sm text-destructive">
+          {error}
+        </p>
+      )}
+
+      {isHeadquarters && masked && (
+        <p
+          role="status"
+          className="text-sm text-muted-foreground"
+          data-testid="audit-masked-notice"
+        >
+          고객 이름·이메일이 가려진 상태다. 식별자(예약 id·객실 번호)는 그대로
+          둔다.
+        </p>
+      )}
 
       {staff && !isHeadquarters && (
         <p role="status" className="text-sm text-muted-foreground">
@@ -119,15 +219,21 @@ export function AuditEvents() {
       )}
 
       {isHeadquarters && events.length === 0 && !error && !loading && (
-        <p className="text-sm text-muted-foreground">해당 범위에 감사 이력이 없습니다.</p>
+        <p className="text-sm text-muted-foreground">
+          해당 범위에 감사 이력이 없습니다.
+        </p>
       )}
 
       {isHeadquarters && events.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">감사 이력 {totalCount}건</CardTitle>
+            <CardTitle className="text-base">
+              감사 이력 {totalCount}건
+            </CardTitle>
             <CardDescription>
-              처리 직원과 예약·객실 정보를 함께 보여준다. 원본 요청·개인정보 전문은 노출하지 않는다.
+              처리 직원과 예약·객실 정보를 함께 보여준다. 원본 요청·개인정보
+              전문은 노출하지 않는다.
+              {masked && " 고객 이름·이메일도 가려져 있다."}
             </CardDescription>
           </CardHeader>
           <CardContent className="overflow-x-auto p-0">
@@ -145,32 +251,48 @@ export function AuditEvents() {
               </TableHeader>
               <TableBody>
                 {events.map((event) => (
-                  <TableRow key={`${event.eventType}-${event.createdAt}-${event.staffEmail}`}>
+                  <TableRow
+                    key={`${event.eventType}-${event.createdAt}-${event.staffEmail}`}
+                  >
                     <TableCell className="whitespace-nowrap tabular-nums">
                       {dateTime(event.createdAt)}
                     </TableCell>
                     <TableCell>
-                      <Badge variant="secondary">{eventLabel(event.eventType)}</Badge>
+                      <Badge variant="secondary">
+                        {eventLabel(event.eventType)}
+                      </Badge>
                     </TableCell>
                     <TableCell>
                       <div className="grid gap-0.5">
-                        <span className="font-medium break-all">{event.staffDisplayName}</span>
-                        <span className="text-xs text-muted-foreground break-all">{event.staffEmail}</span>
+                        <span className="font-medium break-all">
+                          {event.staffDisplayName}
+                        </span>
+                        <span className="text-xs text-muted-foreground break-all">
+                          {event.staffEmail}
+                        </span>
                       </div>
                     </TableCell>
-                    <TableCell className="whitespace-nowrap">{event.hotelName}</TableCell>
+                    <TableCell className="whitespace-nowrap">
+                      {event.hotelName}
+                    </TableCell>
                     <TableCell className="text-muted-foreground">
                       {event.reservationId ? (
                         <div className="grid gap-0.5">
                           <span className="break-all">{event.guestName}</span>
-                          <span className="text-xs break-all">{event.reservationId.slice(0, 8)}</span>
+                          <span className="text-xs break-all">
+                            {event.reservationId.slice(0, 8)}
+                          </span>
                         </div>
                       ) : (
                         <span className="text-xs">예약 없음</span>
                       )}
                     </TableCell>
-                    <TableCell className="tabular-nums">{event.roomNumber ?? "-"}</TableCell>
-                    <TableCell className="max-w-[34ch] break-words text-sm">{event.summary}</TableCell>
+                    <TableCell className="tabular-nums">
+                      {event.roomNumber ?? "-"}
+                    </TableCell>
+                    <TableCell className="max-w-[34ch] break-words text-sm">
+                      {event.summary}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -180,7 +302,10 @@ export function AuditEvents() {
       )}
 
       {isHeadquarters && totalCount > PAGE_SIZE && (
-        <div className="flex items-center justify-center gap-2" data-testid="audit-paging">
+        <div
+          className="flex items-center justify-center gap-2"
+          data-testid="audit-paging"
+        >
           <Button
             type="button"
             variant="outline"
@@ -204,7 +329,6 @@ export function AuditEvents() {
           </Button>
         </div>
       )}
-
     </div>
   );
 }

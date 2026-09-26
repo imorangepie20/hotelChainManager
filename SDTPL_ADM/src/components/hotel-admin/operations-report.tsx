@@ -1,18 +1,34 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { RefreshCw, TrendingUp } from "lucide-react";
+import { Download, RefreshCw, TrendingUp } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  buildOperationsReportCsv,
   getOperationsReport,
+  getRoomTypeRevenue,
   StaffApiError,
   type OperationsReport,
+  type RoomTypeRevenue,
   type StaffPrincipal,
 } from "@/lib/staff-api";
 
@@ -22,13 +38,22 @@ const rangePresets = [
   { days: 30, label: "30일" },
 ];
 
+const HOTELS = [
+  { id: "11000000-0000-0000-0000-000000000001", name: "속초 지점" },
+  { id: "11000000-0000-0000-0000-000000000002", name: "설악산 지점" },
+  { id: "11000000-0000-0000-0000-000000000003", name: "제주 지점" },
+];
+
 function isoDate(value: Date) {
   return value.toISOString().slice(0, 10);
 }
 
 function defaultRange(days: number) {
   const start = new Date();
-  return { from: isoDate(start), to: isoDate(new Date(start.getTime() + (days - 1) * 86400000)) };
+  return {
+    from: isoDate(start),
+    to: isoDate(new Date(start.getTime() + (days - 1) * 86400000)),
+  };
 }
 
 function money(value: number) {
@@ -40,8 +65,10 @@ function percent(value: number) {
 }
 
 function displayDate(value: string) {
-  return new Intl.DateTimeFormat("ko-KR", { month: "long", day: "numeric" })
-    .format(new Date(`${value}T00:00:00`));
+  return new Intl.DateTimeFormat("ko-KR", {
+    month: "long",
+    day: "numeric",
+  }).format(new Date(`${value}T00:00:00`));
 }
 
 export function OperationsReport() {
@@ -50,13 +77,18 @@ export function OperationsReport() {
   const [range, setRange] = useState(defaultRange(7));
   const from = range.from;
   const to = range.to;
+  const [hotelId, setHotelId] = useState<string>(HOTELS[0].id);
+  const [roomTypes, setRoomTypes] = useState<RoomTypeRevenue | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const requestGeneration = useRef(0);
   const mounted = useRef(false);
 
   const isHeadquarters = staff?.role === "HQ_ADMIN";
-  const sessionToken = typeof window !== "undefined" ? window.localStorage.getItem("hotel-chain-staff-session") : null;
+  const sessionToken =
+    typeof window !== "undefined"
+      ? window.localStorage.getItem("hotel-chain-staff-session")
+      : null;
 
   useEffect(() => {
     mounted.current = true;
@@ -81,22 +113,49 @@ export function OperationsReport() {
     setError("");
     try {
       const next = await getOperationsReport(sessionToken, { from, to });
+      // 객실 유형별 매출은 같은 기간·같은 세대에서 함께 불러온다.
+      const breakdown = await getRoomTypeRevenue(sessionToken, hotelId, {
+        from,
+        to,
+      });
       if (!mounted.current || requestGeneration.current !== generation) return;
       setReport(next);
+      setRoomTypes(breakdown);
     } catch (cause) {
       if (mounted.current && requestGeneration.current === generation) {
         setReport(null);
-        setError(cause instanceof StaffApiError ? cause.message : "운영 통계를 불러오지 못했습니다.");
+        setRoomTypes(null);
+        setError(
+          cause instanceof StaffApiError
+            ? cause.message
+            : "운영 통계를 불러오지 못했습니다.",
+        );
       }
     } finally {
-      if (mounted.current && requestGeneration.current === generation) setLoading(false);
+      if (mounted.current && requestGeneration.current === generation)
+        setLoading(false);
     }
-  }, [from, to, sessionToken]);
+  }, [from, to, hotelId, sessionToken]);
 
   useEffect(() => {
     if (!isHeadquarters) return;
     void loadReport();
   }, [isHeadquarters, loadReport]);
+
+  // CSV는 브라우저에서 파일로 내려준다. 서버를 거치지 않는다.
+  function downloadCsv() {
+    if (!report) return;
+    // BOM이 있어야 엑셀이 UTF-8로 인식한다.
+    const blob = new Blob(["﻿" + buildOperationsReportCsv(report)], {
+      type: "text/csv;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `operations-report-${report.from}-${report.to}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
 
   const hotels = report?.hotels ?? [];
   const totals = report?.totals;
@@ -110,16 +169,38 @@ export function OperationsReport() {
             운영 통계
           </h2>
           <p className="mt-1 max-w-[72ch] text-sm text-muted-foreground">
-            지점별 예약 건수·매출·점유율·취소율·노쇼율과 예약 변경 승인 대기·완료 건수를 읽기 전용으로 확인한다.
+            지점별 예약 건수·매출·점유율·취소율·노쇼율과 예약 변경 승인
+            대기·완료 건수를 읽기 전용으로 확인한다.
           </p>
         </div>
-        <Button type="button" variant="outline" onClick={() => void loadReport()} disabled={loading || !isHeadquarters}>
-          <RefreshCw className="h-4 w-4" aria-hidden />
-          {loading ? "불러오는 중" : "새로고침"}
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void loadReport()}
+            disabled={loading || !isHeadquarters}
+          >
+            <RefreshCw className="h-4 w-4" aria-hidden />
+            {loading ? "불러오는 중" : "새로고침"}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={downloadCsv}
+            disabled={!isHeadquarters || !report}
+            data-testid="report-csv"
+          >
+            <Download className="h-4 w-4" aria-hidden />
+            CSV 내보내기
+          </Button>
+        </div>
       </div>
 
-      {error && <p role="alert" className="break-words text-sm text-destructive">{error}</p>}
+      {error && (
+        <p role="alert" className="break-words text-sm text-destructive">
+          {error}
+        </p>
+      )}
 
       {staff && !isHeadquarters && (
         <p role="status" className="text-sm text-muted-foreground">
@@ -135,7 +216,9 @@ export function OperationsReport() {
               id="report-from"
               type="date"
               value={from}
-              onChange={(event) => setRange((prev) => ({ ...prev, from: event.target.value }))}
+              onChange={(event) =>
+                setRange((prev) => ({ ...prev, from: event.target.value }))
+              }
               data-testid="report-from"
             />
           </div>
@@ -145,9 +228,28 @@ export function OperationsReport() {
               id="report-to"
               type="date"
               value={to}
-              onChange={(event) => setRange((prev) => ({ ...prev, to: event.target.value }))}
+              onChange={(event) =>
+                setRange((prev) => ({ ...prev, to: event.target.value }))
+              }
               data-testid="report-to"
             />
+          </div>
+          <div className="grid gap-1">
+            <Label htmlFor="report-hotel">객실 유형별 대상 지점</Label>
+            <select
+              id="report-hotel"
+              aria-label="객실 유형별 대상 지점"
+              className="h-9 rounded-lg border bg-background px-3"
+              value={hotelId}
+              onChange={(event) => setHotelId(event.target.value)}
+              data-testid="report-hotel"
+            >
+              {HOTELS.map((hotel) => (
+                <option key={hotel.id} value={hotel.id}>
+                  {hotel.name}
+                </option>
+              ))}
+            </select>
           </div>
           <div className="flex flex-wrap gap-1.5 pb-0.5">
             {rangePresets.map((preset) => (
@@ -156,7 +258,10 @@ export function OperationsReport() {
                 type="button"
                 variant="outline"
                 size="sm"
-                aria-pressed={from === defaultRange(preset.days).from && to === defaultRange(preset.days).to}
+                aria-pressed={
+                  from === defaultRange(preset.days).from &&
+                  to === defaultRange(preset.days).to
+                }
                 onClick={() => setRange(defaultRange(preset.days))}
                 data-testid={`report-preset-${preset.days}`}
               >
@@ -169,7 +274,8 @@ export function OperationsReport() {
 
       {isHeadquarters && report && (
         <p className="text-sm text-muted-foreground" data-testid="report-range">
-          {displayDate(report.from)} ~ {displayDate(report.to)} · {report.days}일
+          {displayDate(report.from)} ~ {displayDate(report.to)} · {report.days}
+          일
         </p>
       )}
 
@@ -178,18 +284,25 @@ export function OperationsReport() {
           <Card>
             <CardHeader className="pb-2">
               <CardDescription>예약 건수</CardDescription>
-              <CardTitle className="tabular-nums" data-testid="report-total-reservations">
+              <CardTitle
+                className="tabular-nums"
+                data-testid="report-total-reservations"
+              >
                 {totals.reservations}
               </CardTitle>
             </CardHeader>
             <CardContent className="text-xs text-muted-foreground">
-              취소 {totals.cancelled} · 노쇼 {totals.noShow} · 만료 {totals.expired}
+              취소 {totals.cancelled} · 노쇼 {totals.noShow} · 만료{" "}
+              {totals.expired}
             </CardContent>
           </Card>
           <Card>
             <CardHeader className="pb-2">
               <CardDescription>매출</CardDescription>
-              <CardTitle className="tabular-nums" data-testid="report-total-revenue">
+              <CardTitle
+                className="tabular-nums"
+                data-testid="report-total-revenue"
+              >
                 {money(totals.revenueKrw)}
               </CardTitle>
             </CardHeader>
@@ -200,20 +313,30 @@ export function OperationsReport() {
           <Card>
             <CardHeader className="pb-2">
               <CardDescription>변경 승인 대기</CardDescription>
-              <CardTitle className="tabular-nums" data-testid="report-total-pending">
+              <CardTitle
+                className="tabular-nums"
+                data-testid="report-total-pending"
+              >
                 {totals.changeRequestsPending}
               </CardTitle>
             </CardHeader>
-            <CardContent className="text-xs text-muted-foreground">진행 중인 예약 변경 요청</CardContent>
+            <CardContent className="text-xs text-muted-foreground">
+              진행 중인 예약 변경 요청
+            </CardContent>
           </Card>
           <Card>
             <CardHeader className="pb-2">
               <CardDescription>변경 완료</CardDescription>
-              <CardTitle className="tabular-nums" data-testid="report-total-completed">
+              <CardTitle
+                className="tabular-nums"
+                data-testid="report-total-completed"
+              >
                 {totals.changeRequestsCompleted}
               </CardTitle>
             </CardHeader>
-            <CardContent className="text-xs text-muted-foreground">완료된 예약 변경 요청</CardContent>
+            <CardContent className="text-xs text-muted-foreground">
+              완료된 예약 변경 요청
+            </CardContent>
           </Card>
         </div>
       )}
@@ -223,7 +346,8 @@ export function OperationsReport() {
           <CardHeader>
             <CardTitle className="text-base">지점별 통계</CardTitle>
             <CardDescription>
-              점유율은 숙박일별 가용 재고 대비 확정 건수로 계산한다. 화면에서 값을 변경하지 않는다.
+              점유율은 숙박일별 가용 재고 대비 확정 건수로 계산한다. 화면에서
+              값을 변경하지 않는다.
             </CardDescription>
           </CardHeader>
           <CardContent className="overflow-x-auto p-0">
@@ -242,18 +366,26 @@ export function OperationsReport() {
               </TableHeader>
               <TableBody>
                 {hotels.map((hotel) => {
-                  const cancellationRate = hotel.reservations === 0
-                    ? 0
-                    : (hotel.cancelled + hotel.noShow) / hotel.reservations;
+                  const cancellationRate =
+                    hotel.reservations === 0
+                      ? 0
+                      : (hotel.cancelled + hotel.noShow) / hotel.reservations;
                   return (
                     <TableRow key={hotel.hotelId}>
                       <TableCell>
                         <div className="grid gap-0.5">
-                          <span className="font-medium whitespace-nowrap">{hotel.hotelName}</span>
-                          <span className="text-xs text-muted-foreground">{hotel.region}</span>
+                          <span className="font-medium whitespace-nowrap">
+                            {hotel.hotelName}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            {hotel.region}
+                          </span>
                         </div>
                       </TableCell>
-                      <TableCell className="text-right tabular-nums" data-testid="report-reservations">
+                      <TableCell
+                        className="text-right tabular-nums"
+                        data-testid="report-reservations"
+                      >
                         {hotel.reservations}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
@@ -264,15 +396,27 @@ export function OperationsReport() {
                           </span>
                         </div>
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">{hotel.noShow}</TableCell>
-                      <TableCell className="text-right tabular-nums whitespace-nowrap">{money(hotel.revenueKrw)}</TableCell>
                       <TableCell className="text-right tabular-nums">
-                        <Badge variant={hotel.occupancyRate >= 0.8 ? "default" : "secondary"}>
+                        {hotel.noShow}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums whitespace-nowrap">
+                        {money(hotel.revenueKrw)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        <Badge
+                          variant={
+                            hotel.occupancyRate >= 0.8 ? "default" : "secondary"
+                          }
+                        >
                           {percent(hotel.occupancyRate)}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">{hotel.changeRequestsPending}</TableCell>
-                      <TableCell className="text-right tabular-nums">{hotel.changeRequestsCompleted}</TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {hotel.changeRequestsPending}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {hotel.changeRequestsCompleted}
+                      </TableCell>
                     </TableRow>
                   );
                 })}
@@ -281,6 +425,81 @@ export function OperationsReport() {
           </CardContent>
         </Card>
       )}
+
+      {isHeadquarters && roomTypes && roomTypes.roomTypes.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">
+              {roomTypes.hotelName} · 객실 유형별 매출
+            </CardTitle>
+            <CardDescription>
+              취소·노쇼 예약의 금액은 매출에서 제외한다. 비중은 지점 매출에서
+              차지하는 몫이다.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="overflow-x-auto p-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>객실 유형</TableHead>
+                  <TableHead className="text-right">예약</TableHead>
+                  <TableHead className="text-right">취소</TableHead>
+                  <TableHead className="text-right">노쇼</TableHead>
+                  <TableHead className="text-right">매출</TableHead>
+                  <TableHead className="text-right">매출 비중</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {roomTypes.roomTypes.map((row) => (
+                  <TableRow key={row.roomTypeId}>
+                    <TableCell className="font-medium whitespace-nowrap">
+                      {row.roomTypeName}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {row.reservations}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {row.cancelled}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {row.noShow}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums whitespace-nowrap">
+                      {money(row.revenueKrw)}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      <div className="grid justify-items-end gap-0.5">
+                        <Badge
+                          variant={
+                            row.revenueShare >= 0.5 ? "default" : "secondary"
+                          }
+                        >
+                          {(row.revenueShare * 100).toFixed(1)}%
+                        </Badge>
+                        <span className="text-xs text-muted-foreground tabular-nums">
+                          {money(row.revenueKrw)}
+                        </span>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+
+      {isHeadquarters &&
+        roomTypes &&
+        roomTypes.roomTypes.length === 0 &&
+        !error && (
+          <p
+            className="text-sm text-muted-foreground"
+            data-testid="room-type-empty"
+          >
+            선택한 기간에 {roomTypes.hotelName}의 객실 유형별 매출이 없습니다.
+          </p>
+        )}
 
       {isHeadquarters && hotels.length === 0 && !error && (
         <p className="text-sm text-muted-foreground" data-testid="report-empty">

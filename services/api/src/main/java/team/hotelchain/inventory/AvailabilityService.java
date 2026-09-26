@@ -23,6 +23,11 @@ public class AvailabilityService {
 
     public List<AvailabilityOffer> search(AvailabilityQuery query) {
         validate(query);
+        if (!hotelIsActive(query.hotelId())) {
+            // 판매 중지한 지점은 고객에게 오퍼를 내놓지 않는다.
+            // 빈 결과를 돌려주면 화면이 "예약 가능한 객실이 없습니다"를 보여준다.
+            return List.of();
+        }
         int nights = Math.toIntExact(ChronoUnit.DAYS.between(query.checkIn(), query.checkOut()));
         int partySize = query.adults() + query.children();
 
@@ -36,11 +41,15 @@ public class AvailabilityService {
                   JOIN rate_plan rp ON rp.room_type_id = rt.id
                   JOIN rate_day rd ON rd.rate_plan_id = rp.id
                   JOIN inventory_day i ON i.room_type_id = rt.id AND i.stay_date = rd.stay_date
-                 WHERE rt.hotel_id = ?
-                   AND rd.stay_date >= ? AND rd.stay_date < ?
-                   AND rt.max_occupancy * ? >= ?
-                 ORDER BY rp.id, rd.stay_date
-                """, this::mapRow, query.hotelId(), query.checkIn(), query.checkOut(), query.rooms(), partySize);
+                  WHERE rt.hotel_id = ?
+                    AND rd.stay_date >= ? AND rd.stay_date < ?
+                    AND rt.max_occupancy * ? >= ?
+                    AND NOT EXISTS (
+                        SELECT 1 FROM room_type_sales_status s
+                         WHERE s.room_type_id = rt.id AND s.stay_date = rd.stay_date
+                           AND s.status = 'STOPPED')
+                  ORDER BY rp.created_at, rp.id, rd.stay_date
+                 """, this::mapRow, query.hotelId(), query.checkIn(), query.checkOut(), query.rooms(), partySize);
 
         Map<UUID, List<OfferNightRow>> byRatePlan = new LinkedHashMap<>();
         rows.forEach(row -> byRatePlan.computeIfAbsent(row.ratePlanId(), ignored -> new ArrayList<>()).add(row));
@@ -50,6 +59,13 @@ public class AvailabilityService {
                 .filter(group -> group.stream().mapToInt(OfferNightRow::remaining).min().orElse(0) >= query.rooms())
                 .map(group -> toOffer(group, query.rooms()))
                 .toList();
+    }
+
+    // 판매 중지한 지점은 고객 검색에서 빠진다. 없는 지점도 중지한 것과 같이 취급한다.
+    private boolean hotelIsActive(UUID hotelId) {
+        Boolean active = jdbc.queryForObject(
+                "select active from hotel where id = ?", Boolean.class, hotelId);
+        return Boolean.TRUE.equals(active);
     }
 
     private void validate(AvailabilityQuery query) {

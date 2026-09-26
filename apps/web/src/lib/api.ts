@@ -175,6 +175,29 @@ export const api = {
     '/api/reservation-change-payments/current/checkout',
     { method: 'POST', credentials: 'include' },
   ),
+  submitGuestRequest: (hotelId: string, key: string, input: GuestRequestInput) =>
+    request<GuestRequestReceipt>(`/api/hotels/${encodeURIComponent(hotelId)}/guest-requests`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key },
+      body: JSON.stringify(input),
+    }),
+}
+
+export type GuestRequestInput = {
+  requestType: 'ROOM_REQUEST' | 'AMENITY_REQUEST' | 'REFUND_INQUIRY' | 'GENERAL_INQUIRY' | 'OTHER'
+  subject: string
+  body: string
+  guestName: string
+  guestEmail: string
+  guestPhone?: string | null
+}
+
+export type GuestRequestReceipt = {
+  requestId: string
+  requestType: string
+  subject: string
+  status: string
+  createdAt: string
 }
 
 export function createManagementToken() {

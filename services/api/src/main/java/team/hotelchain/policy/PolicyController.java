@@ -60,4 +60,16 @@ public class PolicyController {
                 ? ResponseEntity.status(HttpStatus.CREATED).body(response)
                 : ResponseEntity.ok(response);
     }
+
+    // 본사가 예약 변경 승인 TTL을 변경한다. 진행 중인 변경 요청은 저장된 만료 시각을 유지한다.
+    @PutMapping("/change-approval-ttl")
+    public ResponseEntity<ChangeApprovalTtlUpdateResponse> updateChangeApprovalTtl(
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @RequestHeader(value = "X-Staff-Session", required = false) String token,
+            @RequestBody ChangeApprovalTtlUpdateRequest request) {
+        ChangeApprovalTtlUpdateResponse response = commands.updateChangeApprovalTtl(token, idempotencyKey, request);
+        return response.created()
+                ? ResponseEntity.status(HttpStatus.CREATED).body(response)
+                : ResponseEntity.ok(response);
+    }
 }

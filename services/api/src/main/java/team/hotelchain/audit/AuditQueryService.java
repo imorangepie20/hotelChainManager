@@ -60,11 +60,71 @@ public class AuditQueryService {
                         + " limit ? offset ?",
                 this::mapEvent, rows.toArray());
 
-        return new AuditEventsView(events, totalCount, filters.limit(), filters.offset());
+        // masked가 true면 고객 이름·이메일을 가린다. 요약에 포함된 값도 함께 가린다.
+        List<AuditEventView> exposed = filters.masked()
+                ? events.stream().map(AuditQueryService::masked).toList()
+                : events;
+
+        return new AuditEventsView(exposed, totalCount, filters.limit(), filters.offset(), filters.masked());
     }
 
-    private String unionAll() {
-        return String.join("\nunion all\n", List.of(
+    // masked가 true일 때 고객 이름·이메일을 가린다. 직원 연락처는 본사가 처리를 확인해야 하므로 그대로 둔다.
+    private static AuditEventView masked(AuditEventView event) {
+        String guestName = PiiMasker.name(event.guestName());
+        return new AuditEventView(
+                event.eventType(),
+                event.createdAt(),
+                event.staffEmail(),
+                event.staffDisplayName(),
+                event.staffRole(),
+                event.hotelId(),
+                event.hotelName(),
+                event.reservationId(),
+                guestName,
+                event.roomNumber(),
+                maskedSummary(event, guestName));
+    }
+
+    // GUEST_UPDATE 요약은 "이전 예약자 A / a@x → B / b@x" 형태라 값이 중복으로 들어 있다.
+    private static String maskedSummary(AuditEventView event, String guestName) {
+        if (!"GUEST_UPDATE".equals(event.eventType())) return event.summary();
+        String summary = event.summary();
+        int arrow = summary.indexOf(" → ");
+        if (arrow < 0) return summary;
+        return maskGuestPair(summary.substring(0, arrow), guestName)
+                + " → "
+                + maskGuestPair(summary.substring(arrow + 3), guestName);
+    }
+
+    // "이전 예약자 이름 / 이메일"에서 앞의 '이전 예약자' 접두사와 뒤의 이름·이메일을 나눈다.
+    private static String maskGuestPair(String pair, String guestName) {
+        int slash = pair.indexOf(" / ");
+        if (slash < 0) return pair;
+        int prefixEnd = pair.indexOf("예약자");
+        if (prefixEnd < 0 || prefixEnd >= slash) return pair;
+        String prefix = pair.substring(0, prefixEnd + 3);
+        String email = pair.substring(slash + 3);
+        return prefix + PiiMasker.name(pair.substring(prefix.length(), slash))
+                + " / " + PiiMasker.email(email);
+    }
+
+    // ResultSet의 컬럼을 그대로 옮긴다. masked가 true면 list()에서 한 번 더 가린다.
+    private AuditEventView mapEvent(ResultSet rs, int rowNumber) throws SQLException {
+        return new AuditEventView(
+                rs.getString("event_type"),
+                rs.getString("created_at"),
+                rs.getString("staff_email"),
+                rs.getString("staff_display_name"),
+                rs.getString("staff_role"),
+                rs.getString("hotel_id"),
+                rs.getString("hotel_name"),
+                rs.getString("reservation_id"),
+                rs.getString("guest_name"),
+                rs.getString("room_number"),
+                rs.getString("summary"));
+    }
+
+    private String unionAll() {        return String.join("\nunion all\n", List.of(
                 guestChanges(), partyChanges(), roomReassignments(), stayChanges(),
                 cancellations(), roomOperationalTransitions(), checkedInRoomMoves(),
                 changeRequestEvents()));
@@ -235,21 +295,6 @@ public class AuditQueryService {
 
     private static java.time.Instant atStartOfDay(LocalDate date) {
         return date.atStartOfDay(java.time.ZoneId.of("Asia/Seoul")).toInstant();
-    }
-
-    private AuditEventView mapEvent(ResultSet rs, int rowNumber) throws SQLException {
-        return new AuditEventView(
-                rs.getString("event_type"),
-                rs.getString("created_at"),
-                rs.getString("staff_email"),
-                rs.getString("staff_display_name"),
-                rs.getString("staff_role"),
-                rs.getString("hotel_id"),
-                rs.getString("hotel_name"),
-                rs.getString("reservation_id"),
-                rs.getString("guest_name"),
-                rs.getString("room_number"),
-                rs.getString("summary"));
     }
 
     private void validate(AuditQueryFilters filters) {

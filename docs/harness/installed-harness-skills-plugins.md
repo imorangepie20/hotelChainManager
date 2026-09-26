@@ -1,6 +1,6 @@
 # hotelChainManager 하네스·스킬·플러그인 현황
 
-기준일: 2026-09-20. 현재 작업 PC의 저장소, 사용자 스킬 디렉터리, 플러그인 manifest, Codex 설정의 플러그인 활성화 항목 및 이번 세션의 사용 가능 목록을 대조했다. 설치일이나 모든 과거 세션의 호출 이력을 조사한 문서는 아니다.
+기준일: 2026-09-26. 현재 작업 PC의 저장소, 사용자 스킬 디렉터리, 플러그인 manifest, Codex 설정의 플러그인 활성화 항목 및 이번 세션의 사용 가능 목록을 대조했다. 설치일이나 모든 과거 세션의 호출 이력을 조사한 문서는 아니다. 2026-09-26에 ECC 2.2.2를 프로젝트 로컬 `.agents/`에 추가로 설치했다. 9절 참조.
 
 ## 1. 요약과 확인 수준
 
@@ -10,6 +10,7 @@
 |---|---|---|
 | 프로젝트 하네스 | 루트 AGENTS.md, 프로젝트 원칙·현황·설계·계획·변경 기록 | 호텔 업무와 개발 절차의 기준 |
 | 프로젝트 로컬 스킬 | Impeccable 1개, 스킬 버전 4.3.1 | 현재 PC에 설치됨. Git 제외 경로 |
+| 프로젝트 로컬 에이전트 하네스 | **ECC 2.2.2, 프로필 `minimal`** | 2026-09-26 설치. `.agents/` 안에 에이전트 68·규칙 122·워크플로 94·스킬 48종. Git 제외 경로. 9절 참조 |
 | 사용자 공통 스킬 | `~/.agents/skills`에 58개 | 여러 프로젝트가 공유하며 전부 호텔 프로젝트 필수는 아님 |
 | 사용자 Codex 스킬 | `~/.codex/skills` 바로 아래 2개 | humanizer, i-have-adhd. 세션 노출 여부는 서로 다름 |
 | 시스템 스킬 | `~/.codex/skills/.system`에 6개 | 사용자 추가 설치 수에 포함하지 않음 |
@@ -170,14 +171,38 @@ React·Next.js·Spring Boot·PostgreSQL·FastAPI·LangGraph·Docker Compose·Pla
 ## 8. 재확인과 인수인계
 
 1. 프로젝트 AGENTS.md와 현재 개발 상태를 읽는다.
-2. 로컬 `.agents/skills/impeccable`, `.codex/hooks.json` 및 Git 제외 여부를 확인한다.
+2. 로컬 `.agents/skills/impeccable`, `.agents/ECC.md`, `.agents/ecc-install-state.json`, `.codex/hooks.json` 및 Git 제외 여부를 확인한다.
 3. 사용자 스킬 루트별 `SKILL.md`를 세고 현재 세션 제공 목록과 대조한다.
 4. 사용자 config.toml에서는 플러그인 ID와 활성화 값만 확인하고, 버전은 각 plugin.json에서 읽는다. 전체 설정·토큰·계정 정보는 문서에 복사하지 않는다.
 5. 새 환경에서 필요한 도구만 설치한 뒤 최소 실행으로 동작을 따로 확인하고 결과를 변경 기록에 남긴다. 이 문서는 설치 스크립트나 환경 잠금 파일이 아니다.
 
 ### 이번 검증과 남은 범위
 
-- 확인: 저장소 규칙·이식 원문, 스킬 디렉터리 수, Impeccable 버전·훅·에이전트 정의, 플러그인 활성화 항목·manifest 버전, 세션 노출, Archify 과거 사용 근거.
-- 미검증: 모든 스킬의 실행·트리거, 플러그인 외부 연결·인증, Impeccable 훅 실행, 모든 과거 호출 이력, 온라인 최신 버전, 새 PC 재현.
+- 확인: 저장소 규칙·이식 원문, 스킬 디렉터리 수, Impeccable 버전·훅·에이전트 정의, 플러그인 활성화 항목·manifest 버전, 세션 노출, Archify 과거 사용 근거. 2026-09-26 ECC 설치: 출처 커밋·버전·타깃·프로필·모듈·387개 파일 SHA-256 0건 불일치·루트 AGENTS.md·`.codex/hooks.json`·Impeccable 무변경·Git 추적 파일 무영향.
+- 미검증: 모든 스킬의 실행·트리거, 플러그인 외부 연결·인증, Impeccable 훅 실행, 모든 과거 호출 이력, 온라인 최신 버전, 새 PC 재현. ECC: 스킬·워크플로·에이전트 실행, 새 세션 노출, `.agents/rules/`의 항상 로드 여부, `unified-memory`·`continuous-learning-v2` 로컬 상태, 다른 하네스에서의 재현.
 - 다음 작업: 설치나 동작 점검이 필요할 때 해당 항목만 최소 실행하고, 설치·활성·사용 기록을 각각 갱신한다.
-- 문서 작성 계획: [현황 문서화 계획](../plans/2026-09-20-harness-skill-plugin-inventory.md).
+- 문서 작성 계획: [현황 문서화 계획](../plans/2026-09-20-harness-skill-plugin-inventory.md), [ECC 설치 계획](../plans/2026-09-26-ecc-install.md).
+
+## 9. ECC 2.2.2 프로젝트 로컬 설치 (2026-09-26)
+
+사용자가 `https://github.com/affaan-m/ECC`의 설치를 지시했다. 설치 계획·실행·검증 결과는 [ECC 설치 계획](../plans/2026-09-26-ecc-install.md)과 [변경 기록](../changes/2026-09-26-ecc-install.md)에 있고, 사용 지침은 [`.agents/ECC.md`](../../.agents/ECC.md)에 있다. 여기서는 현황 관점만 기록한다.
+
+| 항목 | 확인 결과 |
+|---|---|
+| 출처 | `https://github.com/affaan-m/ECC` 커밋 `e482e579415fde18357cafce70f177ae19fd7f03`, `VERSION` 2.2.2 |
+| 타깃 | `antigravity` 프로젝트 로컬 `.agents/`. 설치 루트와 설치 상태 파일 모두 `.agents/` 안 |
+| 프로필 | `minimal`, `hookConsent: "declined"` |
+| 선택 모듈 | `rules-core`·`agents-core`·`commands-core`·`platform-configs`·`skill-unified-memory`·`workflow-quality` |
+| 복사 파일 | 387개. `.agents/agents/` 68·`.agents/rules/` 122(평탄화)·`.agents/workflows/` 94·`.agents/skills/` 102. `platform-configs`는 파일 없음 |
+| 설치 상태 | `.agents/ecc-install-state.json`에 연산 387개와 파일별 SHA-256. 전부 비교해 0건 불일치 |
+| 무결성 | 루트 `AGENTS.md` 해시 `865f1944…`로 커밋과 동일. `.codex/hooks.json` Impeccable 훅만 유지. `.agents/skills/impeccable/` 내용 무변경(4.3.1) |
+| Git 경계 | `.agents/`·`.tmp/`는 `.gitignore` 제외. `git status`의 추적 파일 변경에 ECC 항목 없음 |
+| 사용자 전역과 중복 | `impeccable` 1개만 겹침. 나머지 ECC 스킬 48종은 사용자 전역 `~/.agents/skills`와 이름이 겹치지 않는다 |
+
+### 타깃 선택 이유
+
+`--target opencode`는 `OPENCODE_CONFIG_DIR`·`XDG_CONFIG_HOME/opencode`·`~/.config/opencode/` 중 하나에 설치하고 `.opencode/dist/index.js`·`plugins`·`tools` 컴파일 결과를 요구했다. `claude`·`claude-project`가 아닌 `claude`·`codex`·`qwen`·`hermes`·`openclaw` 타깃은 작업 폴더 바깽 `~/.claude/`·`~/.codex/`·`~/.qwen/`·`~/.hermes/`·`~/.openclaw/`에 쓴다. `antigravity`는 `.agents/` 안만 쓰는 유일한 프로젝트 로컬 타깃이었다.
+
+### 적용 순위
+
+ECC 자산과 이 프로젝트 하네스가 겹칠 때는 루트 `AGENTS.md`·프로젝트 문서가 우선하고, `.agents/rules/`은 충돌하지 않을 때만 보조 기준이다. 구체적 충돌과 사용 자산은 `.agents/ECC.md` 2절·3절에 정리했다.

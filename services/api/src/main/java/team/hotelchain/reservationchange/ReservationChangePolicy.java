@@ -36,7 +36,9 @@ public class ReservationChangePolicy {
     }
 
     public Duration approvalTtl() {
-        return approvalTtl;
+        // 본사가 정책을 변경하면 DB의 현재값을 쓴다. 변경 전에는
+        // application.yml의 reservation.change.approval-ttl을 쓴다.
+        return Duration.ofSeconds(currentPolicy.changeApprovalTtlSeconds());
     }
 
     public Duration holdTtl() {
@@ -44,7 +46,7 @@ public class ReservationChangePolicy {
     }
 
     public Instant approvalExpiresAt(Instant createdAt, LocalDate checkIn, String timezone) {
-        Instant ttlExpiry = createdAt.plus(approvalTtl);
+        Instant ttlExpiry = createdAt.plus(approvalTtl());
         Instant checkInCutoff = checkIn.atStartOfDay(ZoneId.of(timezone)).toInstant();
         return ttlExpiry.isBefore(checkInCutoff) ? ttlExpiry : checkInCutoff;
     }

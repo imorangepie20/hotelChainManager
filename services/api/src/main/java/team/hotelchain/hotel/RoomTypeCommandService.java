@@ -38,13 +38,15 @@ public class RoomTypeCommandService {
     private final StaffAccessService access;
     private final Clock clock;
     private final RoomTypeSeedProperties seed;
+    private final RoomTypeRatePlanService ratePlans;
 
     public RoomTypeCommandService(JdbcTemplate jdbc, StaffAccessService access, Clock clock,
-            RoomTypeSeedProperties seed) {
+            RoomTypeSeedProperties seed, RoomTypeRatePlanService ratePlans) {
         this.jdbc = jdbc;
         this.access = access;
         this.clock = clock;
         this.seed = seed;
+        this.ratePlans = ratePlans;
     }
 
     @Transactional
@@ -66,13 +68,20 @@ public class RoomTypeCommandService {
         }
 
         UUID roomTypeId = UUID.randomUUID();
-        jdbc.update("insert into room_type (id, hotel_id, name, max_occupancy) values (?, ?, ?, ?)",
-                roomTypeId, hotelId, request.name().trim(), request.maxOccupancy());
+        boolean breakfastIncluded = request.breakfastIncludedOrFalse();
+        int defaultRateKrw = request.defaultRateKrw() != null ? request.defaultRateKrw() : seed.defaultRateKrw();
+        jdbc.update("""
+                insert into room_type (id, hotel_id, name, max_occupancy,
+                                       seed_breakfast_included, seed_default_rate_krw)
+                values (?, ?, ?, ?, ?, ?)
+                """, roomTypeId, hotelId, request.name().trim(), request.maxOccupancy(),
+                breakfastIncluded, defaultRateKrw);
 
         // 시드는 객실 유형과 같은 트랜잭션에 묶인다. 실패하면 유형 행도 롤백돼서
         // "유형은 있는데 가격·재고가 없어 예약 불가" 상태가 생기지 않는다.
+        // 본사가 생성 화면에서 정한 조식 포함 여부·기본 요금을 시드의 기준으로 쓴다.
         java.time.ZoneId hotelZone = hotelTimezone(hotelId);
-        RoomTypeCreateResponse.SeedBatch batch = seedDefaults(roomTypeId, hotelZone);
+        RoomTypeCreateResponse.SeedBatch batch = seedDefaults(roomTypeId, hotelZone, breakfastIncluded, defaultRateKrw);
 
         jdbc.update("""
                 insert into room_type_command
@@ -83,8 +92,8 @@ public class RoomTypeCommandService {
 
         return RoomTypeCreateResponse.created(roomTypeId, hotelId, request.name().trim(), request.maxOccupancy(),
                 new RoomTypeCreateResponse.SeedSummary(
-                        batch.ratePlanId(), batch.ratePlanName(), batch.rateDays().size(),
-                        batch.defaultRateKrw(), batch.inventoryCapacity(), true));
+                        batch.ratePlanId(), batch.ratePlanName(), batch.breakfastIncluded(), batch.defaultRateKrw(),
+                        batch.rateDays().size(), batch.inventoryCapacity(), true));
     }
 
     /**
@@ -94,13 +103,15 @@ public class RoomTypeCommandService {
      * 과거 일자는 의미가 없다. {@code ON CONFLICT DO NOTHING}으로 멱원 재시도가
      * 같은 일자를 두 번 만들지 않게 한다.
      */
-    private RoomTypeCreateResponse.SeedBatch seedDefaults(UUID roomTypeId, java.time.ZoneId hotelZone) {
+    private RoomTypeCreateResponse.SeedBatch seedDefaults(UUID roomTypeId, java.time.ZoneId hotelZone,
+            boolean breakfastIncluded, int defaultRateKrw) {
         UUID ratePlanId = UUID.randomUUID();
         jdbc.update("""
-                insert into rate_plan (id, room_type_id, name, breakfast_included, policy_version)
-                values (?, ?, ?, false, ?)
+                insert into rate_plan (id, room_type_id, name, breakfast_included, policy_version, created_at)
+                values (?, ?, ?, ?, ?, ?)
                 on conflict do nothing
-                """, ratePlanId, roomTypeId, SEED_RATE_PLAN_NAME, SEED_POLICY_VERSION);
+                """, ratePlanId, roomTypeId, SEED_RATE_PLAN_NAME, breakfastIncluded, SEED_POLICY_VERSION,
+                java.sql.Timestamp.from(clock.instant()));
 
         LocalDate firstDay = LocalDate.now(clock.withZone(hotelZone));
         List<RoomTypeCreateResponse.RateDayRow> rateDays = new ArrayList<>();
@@ -111,9 +122,9 @@ public class RoomTypeCommandService {
                     insert into rate_day (rate_plan_id, stay_date, amount_krw)
                     values (?, ?, ?)
                     on conflict do nothing
-                    """, ratePlanId, stayDate, seed.defaultRateKrw());
+                    """, ratePlanId, stayDate, defaultRateKrw);
             if (inserted > 0) {
-                rateDays.add(new RoomTypeCreateResponse.RateDayRow(stayDate, seed.defaultRateKrw()));
+                rateDays.add(new RoomTypeCreateResponse.RateDayRow(stayDate, defaultRateKrw));
             }
             int inventoryInserted = jdbc.update("""
                     insert into inventory_day (room_type_id, stay_date, capacity, held, confirmed)
@@ -129,8 +140,8 @@ public class RoomTypeCommandService {
                 java.sql.Timestamp.from(clock.instant()), roomTypeId);
 
         return new RoomTypeCreateResponse.SeedBatch(
-                ratePlanId, SEED_RATE_PLAN_NAME, rateDays, inventoryDays,
-                seed.defaultRateKrw(), seed.inventoryCapacity());
+                ratePlanId, SEED_RATE_PLAN_NAME, breakfastIncluded, rateDays, inventoryDays,
+                defaultRateKrw, seed.inventoryCapacity());
     }
 
     private UUID findRoomTypeId(UUID hotelId, UUID staffId, String idempotencyKey, String requestHash) {
@@ -151,7 +162,9 @@ public class RoomTypeCommandService {
 
     private RoomTypeCreateResponse loadExisting(UUID roomTypeId, UUID hotelId) {
         return jdbc.query("""
-                select id, name, max_occupancy, seed_completed_at from room_type where id = ? and hotel_id = ?
+                select id, name, max_occupancy, seed_completed_at,
+                       seed_breakfast_included, seed_default_rate_krw
+                  from room_type where id = ? and hotel_id = ?
                 """, rs -> {
             if (!rs.next()) {
                 return null;
@@ -168,27 +181,31 @@ public class RoomTypeCommandService {
         if (seededAt == null) {
             return RoomTypeCreateResponse.noSeed();
         }
-        return jdbc.query("""
-                select rp.id as rate_plan_id, rp.name as rate_plan_name,
-                       (select count(*) from rate_day rd where rd.rate_plan_id = rp.id) as priced_days,
-                       coalesce((select min(rd.amount_krw) from rate_day rd where rd.rate_plan_id = rp.id), 0) as amount_krw,
-                       (select max(i.capacity) from inventory_day i where i.room_type_id = ?) as inventory_capacity
-                  from rate_plan rp
-                 where rp.room_type_id = ?
-                 order by rp.id
-                 limit 1
-                """, rs -> {
-            if (!rs.next()) {
-                return RoomTypeCreateResponse.noSeed();
-            }
-            return new RoomTypeCreateResponse.SeedSummary(
-                    rs.getObject("rate_plan_id", UUID.class),
-                    rs.getString("rate_plan_name"),
-                    rs.getInt("priced_days"),
-                    rs.getInt("amount_krw"),
-                    rs.getInt("inventory_capacity") == 0 ? 0 : rs.getInt("inventory_capacity"),
-                    true);
-        }, roomTypeId, roomTypeId);
+        // 기본 요금제의 조식 포함 여부와 대표 금액을 함께 읽는다.
+        // 본사가 생성 화면에서 정한 값이 그대로 드러나야 한다.
+        RoomTypeRatePlanService.RatePlanDefaults defaults = ratePlans.loadDefaults(roomTypeId);
+        if (defaults.ratePlanId() == null) {
+            return RoomTypeCreateResponse.noSeed();
+        }
+        return new RoomTypeCreateResponse.SeedSummary(
+                defaults.ratePlanId(),
+                defaults.ratePlanName(),
+                Boolean.TRUE.equals(defaults.breakfastIncluded()),
+                defaults.minAmountKrw() == null ? 0 : defaults.minAmountKrw(),
+                pricedDays(defaults.ratePlanId()),
+                inventoryCapacity(roomTypeId),
+                true);
+    }
+    private int pricedDays(UUID ratePlanId) {
+        Integer count = jdbc.queryForObject(
+                "select count(*) from rate_day where rate_plan_id = ?", Integer.class, ratePlanId);
+        return count == null ? 0 : count;
+    }
+
+    private int inventoryCapacity(UUID roomTypeId) {
+        Integer capacity = jdbc.queryForObject(
+                "select max(capacity) from inventory_day where room_type_id = ?", Integer.class, roomTypeId);
+        return capacity == null ? 0 : capacity;
     }
 
     private java.time.ZoneId hotelTimezone(UUID hotelId) {
@@ -221,7 +238,8 @@ public class RoomTypeCommandService {
     }
 
     static String requestHash(UUID staffId, UUID hotelId, RoomTypeCreateRequest request) {
-        String payload = staffId + "|" + hotelId + "|" + request.name().trim() + "|" + request.maxOccupancy();
+        String payload = staffId + "|" + hotelId + "|" + request.name().trim() + "|" + request.maxOccupancy()
+                + "|" + request.breakfastIncluded() + "|" + request.defaultRateKrw();
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
                     .digest(payload.getBytes(StandardCharsets.UTF_8)));

@@ -35,14 +35,19 @@ public class StaffAccessService {
     @Transactional
     public StaffSessionView login(String email, String password) {
         StaffMember member = jdbc.query("""
-                SELECT id, email, display_name, password_hash, role, hotel_id
+                SELECT id, email, display_name, password_hash, role, hotel_id, active
                   FROM staff_member WHERE email = ?
                 """, rs -> rs.next() ? new StaffMember(
                         rs.getObject("id", UUID.class), rs.getString("email"), rs.getString("display_name"),
-                        rs.getString("password_hash"), rs.getString("role"), rs.getObject("hotel_id", UUID.class)) : null,
+                        rs.getString("password_hash"), rs.getString("role"), rs.getObject("hotel_id", UUID.class),
+                        rs.getBoolean("active")) : null,
                 email.trim().toLowerCase());
         if (member == null || !passwordEncoder.matches(password, member.passwordHash())) {
             throw new StaffAuthenticationException();
+        }
+        // 비활성 계정은 로그인을 거부한다. 비밀번호가 맞아도 세션을 만들지 않는다.
+        if (!member.active()) {
+            throw new StaffAccessDeniedException();
         }
 
         String token = newToken();
@@ -58,7 +63,7 @@ public class StaffAccessService {
         StaffPrincipal principal = jdbc.query("""
                 SELECT m.id, m.email, m.display_name, m.role, m.hotel_id
                   FROM staff_session s JOIN staff_member m ON m.id = s.staff_id
-                 WHERE s.token_hash = ? AND s.expires_at > ?
+                 WHERE s.token_hash = ? AND s.expires_at > ? AND m.active
                 """, rs -> rs.next() ? new StaffPrincipal(
                         rs.getObject("id", UUID.class), rs.getString("email"), rs.getString("display_name"),
                         rs.getString("role"), rs.getObject("hotel_id", UUID.class)) : null,
@@ -126,7 +131,8 @@ public class StaffAccessService {
         }
     }
 
-    private record StaffMember(UUID id, String email, String displayName, String passwordHash, String role, UUID hotelId) {
+    private record StaffMember(UUID id, String email, String displayName, String passwordHash, String role, UUID hotelId,
+            boolean active) {
         StaffPrincipal principal() {
             return new StaffPrincipal(id, email, displayName, role, hotelId);
         }

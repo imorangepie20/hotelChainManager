@@ -10,7 +10,276 @@
 
 
 
-최종 갱신: 2026-09-20
+최종 갱신: 2026-09-26
+
+## 관리자 호텔·객실 지점 선택 명확화 (2026-09-26)
+
+- 호텔·객실과 재고·가격 화면에 현재 지점의 선택 행, `aria-pressed`, `선택됨` 배지와 결과 제목 지점명을 추가했다.
+- 재고·가격 화면은 하드코딩 지점 대신 서버 지점 목록을 사용한다. 전환 중 이전 결과를 숨기고 현재 지점 응답만 표시한다.
+- 저장 중 지점 전환을 잠그고, 이전 지점의 늦은 객실 기본값·요금 상세 응답은 generation 검사로 폐기한다.
+- 관련 관리자 Chromium 61건과 TypeScript 검사가 통과했다. ESLint는 오류 0건, Effect 내 상태 갱신 경고 6건이다. 상세 기록은 [관리자 호텔·객실 지점 선택 명확화](../changes/2026-09-26-admin-hotel-selection-clarity.md)를 따른다.
+
+## 라이브 3개 호텔 객실유형·요금·재고 시드 적용 (2026-09-26)
+
+- 관리자 `객실유형` 화면은 호텔 목록의 첫 항목을, `재고·가격` 화면은 속초 호텔을
+  기본 선택하고 있었다. 라이브 DB에는 속초만 객실유형·요금·재고 시드가 있어 서로
+  다른 화면 결과처럼 보인 것이 원인이었다.
+- 최신 `R__demo_data.sql`을 라이브 서버에 선별 반영하고 API를 재빌드했다. Flyway
+  repeatable migration `demo data`가 1건 적용됐으며 기존 속초 행은 덮어쓰지 않았다.
+- DB에서 속초·설악·제주 모두 객실유형 3개와 요금제 3개를 확인했다. 실제 HQ 직원
+  세션의 객실유형 API도 세 호텔 모두 `totalCount=3`을 반환했다.
+- 전체 배포·Cloudflare Tunnel 검증 스크립트가 다시 통과했다. 적용 전 DB와 시드는
+  `backup/pre-three-hotel-seed-20260926-180701`에 보관했다. 상세 결과는
+  [변경 기록](../changes/2026-09-26-live-three-hotel-room-type-seed.md)에 있다.
+
+## 라이브 관리자 직원 로그인 계정 시드 (2026-09-26)
+
+- 공개 관리자 로그인은 UI·API 프록시 문제가 아니라 서버에서
+  `STAFF_DEV_ENABLED=false`, 직원 비밀번호 4개 미설정, 직원 계정 0건인
+  것이 원인이었다.
+- 사용자가 서버 비밀값 파일에 비밀번호를 직접 설정한 뒤 API만 재생성했고,
+  본사 관리자·편집자·발행자와 지점 직원 3명 등 활성 계정 6개가 생성됐다.
+- 설정된 HQ 비밀번호로 컨테이너 내부 로그인과
+  `https://admin-hcm.approid.team/api/staff/sessions` 공개 프록시 로그인이
+  모두 성공했다. 비밀번호와 세션 토큰은 출력하거나 저장소에 기록하지
+  않았다. 상세 결과는 [변경 기록](../changes/2026-09-26-live-staff-login-seed.md)에 있다.
+
+## Cloudflare Tunnel 라이브 연결 및 배포 포트 전환 (2026-09-26)
+
+- Zorin 서버의 애플리케이션 컨테이너는 healthy였지만 기존 터널 토큰이
+  폐기돼 `Unauthorized: Tunnel not found`를 반복하고 있었다. 새 `hcm`
+  터널 토큰을 적용한 뒤 서울 엣지 연결 4개가 정상 등록됐다.
+- 배포 파일만 최신 무호스트포트 구성으로 반영해 API·고객 웹·관리자를
+  `api:4080`·`web:3110`·`admin:3111`로 다시 빌드·기동했다. 세 서비스 모두
+  healthy이며 호스트 published port는 없다.
+- 공개 고객 API `https://hcm.approid.team/api/hotels`는 200 JSON, 고객 웹
+  `https://hcm.approid.team/`은 200 HTML이다. 관리자는 Universal SSL이
+  지원하는 단일 단계 호스트 `https://admin-hcm.approid.team/`을 사용하며
+  `/login`으로 307 이동한다.
+- 전체 미커밋 기능 소스는 배포하지 않았고 배포 관련 파일 6개만 반영했다.
+  실제 관리자 로그인과 예약·결제 브라우저 E2E는 미검증이다. 상세 결과와
+  롤백용 백업 경로는 [변경 기록](../changes/2026-09-26-cloudflare-tunnel-live-connection.md)에 있다.
+
+## ECC 설치 - 프로젝트 로컬 `.agents/`에 ECC 2.2.2 minimal (2026-09-26)
+
+- 사용자가 `https://github.com/affaan-m/ECC`의 설치를 지시했다. 이 작업 폴더에는 ECC가 설치돼 있지 않았고(`.opencode/`·`.claude/` 없음), Codex 플러그인 캐시 `~/.codex/plugins/cache/ecc/ecc/2.2.2`는 있었으나 활성 상태가 아니었다.
+- `--target antigravity`는 **유일하게 쓰기 대상이 프로젝트 로컬 `.agents/`인 타깃**이었다. `opencode` 타깃은 `OPENCODE_CONFIG_DIR`·`XDG_CONFIG_HOME/opencode`·`~/.config/opencode/` 중 하나에 설치하고 컴파일된 플러그인 페이로드(`.opencode/dist/index.js`·`plugins`·`tools`)를 요구했고, `claude`·`codex`·`qwen`·`hermes` 타깃은 작업 폴더 바깥인 `~/.claude/`·`~/.codex/`·`~/.qwen/`·`~/.hermes/`에 쓴다. 현재 세션의 작업 폴더 권한은 `.agents/` 바깥 쓰기를 허용하지 않으므로 `antigravity`를 선택했다.
+- **`--profile minimal`과 `--no-hooks`를 사용했다.** minimal이 선택한 모듈은 `rules-core`·`agents-core`·`commands-core`·`platform-configs`·`skill-unified-memory`·`workflow-quality` 6개, 파일 387개다. 훅은 Impeccable 훅(`.codex/hooks.json`)이 이미 동작 중이어서 **`hookConsent: "declined"`**로 ECC 훅 런타임을 빼고 설치했다.
+- 설치 결과는 `.agents/agents/*.md` 68개·`.agents/rules/<언어>-<주제>.md` 122개(평탄화)·`.agents/workflows/*.md` 94개·`.agents/skills/` 160개(기존 Impeccable 포함, ECC 스킬 48종)다. `.agents/ecc-install-state.json`에 연산 387개와 파일별 SHA-256이 기록됐고, **전부 비교해 0건 불일치**를 확인했다.
+- **기존 하네스를 훼손하지 않았다.** 루트 `AGENTS.md` 해시가 커밋 `865f1944…`와 동일하고, `.codex/hooks.json`도 Impeccable 훅만 그대로며, `.agents/skills/impeccable/` 내용(스킬 4.3.1, 실행기 0.1.5)도 변경되지 않았다. `git status`의 Git 추적 파일 변경에 ECC 설치 항목은 없다. `.agents/`·`.tmp/`는 `.gitignore`로 제외된다.
+- `.agents/ECC.md`를 추가해 설치 범위, ECC 자산과 루트 `AGENTS.md`·프로젝트 문서의 **적용 순위**(호텔 규칙이 우선, ECC 규칙은 충돌하지 않을 때만 보조), 알려진 충돌(최소 커버리지 80%·TDD 의무화·파일 크기 권장), 사용 자산 목록, 미검증 항목, 유지보수 방법을 지정했다.
+- **미검증**: ECC 스킬·워크플로·에이전트의 실제 실행, 새 세션에서의 노출 여부, `.agents/rules/`가 항상 로드되는 규칙으로 인식되는지 여부, `unified-memory`·`continuous-learning-v2`가 만드는 로컬 상소 파일, 다른 PC·하네스에서의 재현. 상세 범위는 [계획](../plans/2026-09-26-ecc-install.md)과 [변경 기록](../changes/2026-09-26-ecc-install.md)을 따른다.
+
+## 포트 충돌 제거 - 호스트 포트를 하나도 열지 않는다 (2026-09-26)
+
+- 사용자가 "8080도 안 돼", "서비스하는 프로젝트가 많아서 포트 충돌나면 안 돼"라고 지시했다. 바로 앞 작업에서 nginx 수신 포트를 `80`→`8080`로 바꿨지만 **근본 해결이 아니었다.** `8080`도 다른 프로젝트가 쓸 수 있고, 더 본질적으로는 **호스트 포트를 여는 한 어떤 번호든 충돌 가능성이 남는다.**
+- **해결은 `ports:` 를 전부 `expose:` 로 바꾼 것이다.** `expose:` 는 호스트에 바인딩하지 않고 컨테이너 네트워크 안에서만 연다. 터널이 `hcm-frontend` 네트워크에 붙어 있어서 호스트 포트 없이 `api:4080` 으로 직접 통신하므로 이것이 가능하다. `api`·`web`·`admin` 세 서비스의 호스트 포트(`3201`·`3110`·`3111`)를 전부 없앴다. **`docker compose ps` 를 실행하면 `PORTS` 칸이 비어 있는 것이 정상이다.**
+- **컨테이너 포트도 80·8080·3000 을 없애고 `3110`·`3111` 로 통일했다.** `nginx.conf`(`listen 3110`)·`apps/web/infra/Dockerfile`(`EXPOSE 3110`)·`SDTPL_ADM/infra/Dockerfile`(`ENV PORT=3111`, `EXPOSE 3111`)·compose 헬스체크 3곳. **로컬 개발 `compose.yaml` 은 건드리지 않았다** — 개발 머신에서만 실행하므로 `4080`·`55432`·`9000` 호스트 포트를 그대로 연다.
+- **`verify-deployment.sh` 가 더 이상 동작하지 않았다.** 호스트 포트를 찌르고 있었기 때문이다. 전부 `docker compose exec` 로 컨테이너 안에서 검사하게 재작성했다. 컨테이너 안의 `127.0.0.1` 은 컨테이너 자신이므로 `expose` 된 포트를 검사한다. 터널 경유 `https` 검사 3개는 그대로 둬서 Cloudflare 설정 문제와 컨테이너 문제를 분리했다.
+- **`infra/CLOUDFLARE-TUNNEL.md` 를 새로 만들었다.** 이전 문서는 표 하나에 그쳤는데, 입력칸 하나하나·등록 순서·실수 목록 10개·502 디버깅·Access 정책까지 11개 절로 정리했다. **가장 중요한 정정: `/` (전체 경로)는 `api:4080` 이 아니라 `web:3110` 이다.** nginx 가 도메인 안에서 `/` 는 정적 파일, `/api/` 는 API 로 나눈다. 이전 문서는 둘 다 `api:4080` 으로 적어서 **고객 웹이 빈 페이지가 될 결함**이 있었다.
+- **검증**: `docker compose … config --quiet` 종료 코드 0, 출력에서 `ports:`/`published` **0개**·`expose:` **3개**(`4080`·`3110`·`3111`) 확인. 실제 `nginx:1.29-alpine` 에 프로젝트 `nginx.conf` 를 넣고 기동하니 `http://…/` → **STATUS 200**, `http://…/api/actuator/health` → **STATUS 502** (프록시 대상을 의도적으로 존재하지 않는 `9999` 로 지정했으므로 **502 가 나온 것이 `/api/` 가 정상적으로 프록시되고 있다는 뜻**이다). `PORTS.md`·`DEPLOY-ZORIN.md`·`set-tunnel-token.sh`·`compose.env.example` 도 전부 새 포트로 맞췄다.
+- **서버에서 `docker compose up` 을 실행하지 않았다.** 컨테이너 빌드도, Cloudflare 대시보드 등록도, 터널 경유 검사도 안 했다. nginx 단독 컨테이너 검증뿐이다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-26-no-host-ports.md)을 따른다.
+
+## 80번 포트 제거·포트 맵 문서화 (2026-09-26)
+
+- 사용자가 "80번 포트는 사용하지 마"라고 지시했다. 고객 웹 컨테이너의 nginx가 컨테이너 안에서 `80`을 수신하고 있었고, Cloudflare Public Hostname URL도 `web:80`이었다. **컨테이너 내부 포트를 `8080`으로 바꿨다.** 호스트 포트 `3110`은 그대로라서 `verify-deployment.sh`와 서버의 다른 서비스에 영향이 없다. `nginx.conf`(`listen 8080`)·`Dockerfile`(`EXPOSE 8080`)·`compose.zorin.yml`(`3110:8080`, 헬스체크 `8080`) 세 곳을 같이 바꿨다.
+- **터널 등록값에 숨어 있던 별도의 결함을 같이 고쳤다.** Compose에 `container_name`을 지정하지 않았으므로 Compose 네트워크 안에서 DNS로 풀리는 이름은 **서비스 이름**인데, 문서와 스크립트는 `hcm-api`·`hcm-admin`·`hcm-web`을 쓰고 있었다. 이 이름들은 풀리지 않아 **터널이 502**를 냈을 것이다. `set-tunnel-token.sh`는 더 심했다 — `hcm-admin:3111`은 **호스트 포트**까지 적혀 있었다. `api:4080`·`web:8080`·`admin:3000`으로 바꿨다.
+- **`infra/PORTS.md`를 추가했다.** 포트 할당이 6개 파일에 흩어져 있었고 로컬 개발과 배포의 포트 체계가 서로 달랐다. 로컬(`55432`·`55433`·`4080`·`9000`·`59090`·`4000`·`3000`)과 배포(`3201`·`3110`·`3111`, 전부 `127.0.0.1`만), 대역 규칙(`3100`~`3104`·`3200`은 같은 서버의 다른 프로젝트가 쓴다), 80번을 쓰지 않는 이유, **컨테이너 포트(터널 URL) vs 호스트 포트(검증 스크립트)** 를 한 곳에 모았다.
+- **nginx 설정을 실제 이미지로 검증했다.** `nginx:1.29-alpine`에 프로젝트 `nginx.conf`를 주입해 `nginx -t`를 실행했고 `syntax is ok`·`test is successful`, `${API_PROXY_TARGET}` 환경변수 치환도 통과했다. nginx 컨테이너를 `127.0.0.1:18080:8080`로 띄워 `http://127.0.0.1:18080/`에 접근하니 **STATUS=200**, 본문 `port-8080-ok`. 8080 수신을 확인했다.
+- **서버에서 `docker compose up`을 실행하지 않았다.** 컨테이너 빌드도 돌지 않았고 Cloudflare 대시보드에도 등록하지 않았다. `nginx.conf` 단독 검증뿐이다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-26-port-8080.md)을 따른다.
+
+## 서버 배포·Cloudflare 터널 - 배포 차단 결함 수정 (2026-09-26)
+
+- `infra/` 배포 구성(compose·Dockerfile·스크립트·문서)은 이미 거의 완성돼 있었고, 서버 배포와 Cloudflare 터널 연결을 진행 중이었다. 배포를 실행하기 전에 구성을 확인했을 때 **첫 기동을 깨거나 화면 하나를 통째로 쓸 수 없게 만드는 결함 4가지**가 있었다. 코드가 아니라 "어느 환경에서 무엇을 가리키는가"에 관한 것들이었다.
+- **dev 프로필 시드가 속초 지점만 심었다.** `R__demo_data.sql`은 3개 지점 행은 만들었지만 객실 유형·요금·재고를 속초 3개 유형만 심었으므로, 고객이 설악산·제주를 검색하면 **오퍼가 한 건도 나오지 않았다**. 반면 `R__web_content_data.sql`은 3개 지점 콘텐츠를 모두 심어서 지점 선택기는 세 지점을 다 보여줬다. 설악산·제주의 유형·요금제·90일분 일자 요금·재고를 추가했고 **모든 insert가 `ON CONFLICT DO NOTHING`이라 기존 DB의 속초 행은 바뀌지 않는다.** 이 파일은 dev 프로필에서만 읽히고 테스트는 기본 프로필을 쓰므로 테스트에 영향이 없다.
+- **관리자 `/concierge` rewrite가 컨테이너 자신을 가리켰다.** `CONCIERGE_PROXY_TARGET`가 정의되지 않으면 `http://127.0.0.1:9000`이 기본값이었고, 컨테이너 안에서 이것은 **관리자 컨테이너 자신**이라 도우미가 없는데 연결을 시도했다. 빈 값을 주면 **rewrite 자체를 만들지 않게** 했고, compose는 `${CONCIERGE_PROXY_TARGET-}`(`:-`가 아닌 `-`)로 빈 값을 전달한다. `staff-api.ts`가 404를 만나면 "AI 도우미가 실행 중이 아닙니다. 이 배포에는 도우미가 포함되지 않았습니다."를 보여주고, 502는 도우미가 있을 때의 일반 장애 안내로 그대로 뒀다. e2e에 404 케이스를 추가했다.
+- **`NEXT_PUBLIC_CUSTOMER_WEB_ORIGIN`이 런타임 environment에만 있었다.** `NEXT_PUBLIC_*` 변수는 **Next.js 빌드 시점에 클라이언트 번들에 구워지므로** 런타임 환경변수로는 아무것도 바뀌지 않는다. 그대로 두면 배포된 관리자의 미디어 미리보기·콘텐츠 미리보기·저장 초안 링크가 전부 로컬 개발 주소 `http://127.0.0.1:4000`을 가리킬 뻔했다. admin Dockerfile에 build arg를 추가하고 compose build args에 배포 도메인을 넣었다.
+- **터널 비밀값은 저장소에 없다.** `.gitignore`가 `infra/secrets/tunnel.env`·`compose.env`·`*.env`를 무시하고 예제만 살려두며, `git check-ignore`이 무시됨을 확인했다.
+- **서버에서 `docker compose up`을 실행하지 않았다.** compose 유효성을 `docker compose config`로 검사하지도 않았고 컨테이너 빌드도 돌지 않았다. 읽기 확인(마이그레이션 순서·additive 여부·파일 인코딩)과 로컬 타입·테스트 검증만 했다. 인프라 파일 11개는 전부 UTF-8 BOM 없음·잘못된 시퀀스 0건이었고, 터미널 코드 페이지로 인해 콘솔에서만 글자가 깨져 보였다.
+- API `mvnw` `WebsiteMediaIntegrationTest` **26건**·인접 `AvailabilityIntegrationTest`·`HotelCatalogQueryIntegrationTest`·`InventoryQueryIntegrationTest` **22건**·`GuestRequestIntegrationTest` **22건**이 종료 코드 0이다. 관리자 `tsc --noEmit`·`eslint`(경고 0건)·고객 웹 `tsc --noEmit`·`tsx` 검증 스크립트 **25건**도 종료 코드 0이다. 라이브 DB·compose 재빌드·터널·브라우저 확인은 실행하지 않았다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-26-deploy-tunnel-fixes.md)을 따른다.
+- **다음 작업은 서버에서 실제 기동이다.** `.\infra\scripts\deploy-zorin.ps1 -Push -Up`으로 첫 기동하고 `verify-deployment.sh`로 헬스체크와 터널 경유 도메인을 검사한다. 앞선 5번 `공통 정책 관리` 남은 항목(환불 규칙, 지점별 정책, 정책 변경의 감사 이력 통합)은 배포가 끝난 뒤에 이어한다.
+
+## 본사 직원 계정 관리 - 삭제·본인 계정 수정 (2026-09-25)
+
+- `admin-menu-roadmap.md` 3번 `직원 계정 관리`의 **마지막 남은 항목**을 구현했다. 1번·2번 영역이 끝나 로드맵 순서(1 → 2 → 3 → 5 → 4 → 7 → 6 → 8)에 따라 3번을 마무리했다. 본사는 직원을 만들고 역할·소속 지점을 바꾸고 비밀번호를 재발급하고 비활성할 수 있었지만 **잘못 만든 계정이나 퇴사가 확정된 계정을 지울 수단이 없었다.** 비활성은 로그인을 막을 뿐 직원 목록에 계속 나타났다. 직원도 **본인 이름을 직접 고칠 수단이 없었다.**
+- `DELETE /api/staff/staff/{staffId}`가 직원 계정을 영구 삭제한다. `HQ_ADMIN`만 허용하고 지점 직원은 403, 잘못된 세션은 401, 멱원 키 누락은 400, 없는 직원은 404다. **삭제는 "행을 지우는" 것이 아니라 "식별자를 영구적으로 비우는" 것**이다. `staff_member` 행을 남겨두고 이메일을 `deleted-<uuid>@deleted.local` 자리 표시자로, 표시 이름을 `삭제된 직원`으로, 비밀번호를 빈 문자열로, 역할을 `REMOVED`로, 지점을 `null`로, `active`를 `false`로 바꾸고 세션을 지운다. 감사 이력·예약 변경 승인·콘텐츠 발행 이력 20개 표의 참조가 끊기지 않는다.
+- **진행 중인 예약 변경 요청이나 정산 실행이 있으면 409 `STAFF_DELETION_CONFLICT`로 거부하고 아무것도 비우지 않는다.** 삭제는 되돌릴 수 없으므로 모든 충돌 검사를 삭제 앞에 둔다. **본인 계정도 409 `STAFF_SELF_MODIFICATION_FORBIDDEN`**이다. 비활성·역할 수정과 같은 예외를 재사용한다.
+- `PATCH /api/staff/staff/me`가 **본인**의 표시 이름과 비밀번호를 바꾼다. 전 역할이 쓸 수 있다. **역할·소속 지점은 본사 전용 권한이라 받지 않는다.** 본인 계정 수정이 역할을 바꾸면 본인 권한을 올리는 것이 가능해진다. **비밀번호를 바꿀 때는 현재 비밀번호 확인이 필수**이고 틀리면 400 `STAFF_PASSWORD_MISMATCH`다. **비밀번호를 바꾸면 현재 세션 하나만 남기고 나머지를 끊는다.** `token_hash` 기반이라 현재 세션은 유지된다.
+- 멱원은 두 갈래로 동작한다. 같은 `Idempotency-Key` 재호출은 200에 `deleted=false`·`changed=false`로 같은 결과를 돌려주고, 응답 유실 뒤 새 키로 같은 내용을 보내도 SHA-256 지문이 같아 같은 결과를 돌려준다. **삭제의 멱원 재호출은 계정 조회 앞에서 검사**해서 계정이 이미 비워졌으면 404로 착각하게 되는 것을 막는다. **삭제·본인 수정은 매번 새 멱원 키를 쓴다.**
+- V64 additive 마이그레이션이 `role`의 `CHECK`에 `REMOVED`를 추가하고 `staff_member_hotel_scope_check`에 `REMOVED` 가지를 추가한다. **기존 행은 모두 활성 역할이므로 값을 바꾸지 않는다.**
+- 관리자 `/dashboard/staff`의 직원 표에 `삭제` 열과 확인 대화상자를 추가했고, 전 역할이 쓰는 `내 계정` (`/dashboard/me`) 화면을 추가했다. `nav.ts`의 **`운영` 그룹**에 넣어서 지점 직원도 본인 계정을 고칠 수 있게 했다. 서버 검증 실패 시 대화상자를 닫지 않고 이유를 보여준다.
+- API `mvnw -Dtest=StaffAccountIntegrationTest` **75건**(기존 47 + 신규 28)이 종료 코드 0이고, 인접 5개 suite **87건**도 종료 코드 0이다. 관리자 `tsc --noEmit`·고객 웹 `tsc --noEmit`·`eslint`(경고 3건, 기존 패턴)이 종료 코드 0이다. Playwright `staff-accounts` **14건**(기존 13 + 신규 4)·`staff-self-account` **7건**(신규)·인접 4개 suite **15건**이 종료 코드 0이다. 라이브 DB·compose 재빌드·브라우저 확인은 실행하지 않았다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-25-hq-staff-delete-self-update.md)을 따른다.
+- **3번 `직원 계정 관리` 영역이 완료됐다.** 1번·2번·3번 영역이 끝났으므로 로드맵 순서에 따라 다음은 5번 `공통 정책 관리`의 남은 항목(환불 규칙, 지점별 정책, 정책 변경의 감사 이력 통합)이다.
+
+## 본사 재고·가격 - 재고 일괄 업로드(CSV) (2026-09-24)
+
+- `admin-menu-roadmap.md` 2번 `재고·가격`의 **마지막 남은 항목**을 구현했다. 본사가 여러 날짜의 재고를 바꾸려면 `PATCH .../inventory` 대화상자를 날짜 범위마다 다시 띄워야 했고, 대화상자는 **표시된 전체 숙박일을 하나의 같은 총량값으로 덮어버려서** "주말은 6실, 평일은 8실, 공사 주간은 0실" 같은 날짜별 차등을 한 번에 반영할 수 없었다.
+- `GET /api/staff/hotels/{hotelId}/inventory/export`가 객실 유형별 일자 재고를 CSV로 내려준다. SELECT만 사용하고 재고를 변경하지 않는다. `POST /api/staff/hotels/{hotelId}/inventory/import`가 CSV 본문을 받아 여러 객실 유형의 여러 날짜 재고를 한 번에 바꾼다. `HQ_ADMIN`만 허용하고 지점 직원은 403, 잘못된 세션은 401, 멱원 키 누락은 400, 없는 지점은 404다.
+- **내보낸 CSV를 그대로 다시 올릴 수 있다.** 열 순서가 같고 헤더 행을 무시한다. **총량 열만 반영한다.** `보류`·`확정`·`잔여`·`판매 상태`는 읽기 전용이어서 올려도 무시한다. 업로드가 이 값을 바꾸면 확정 예약과 재고가 어긋난다.
+- **한 파일의 모든 행을 한 트랜잭션에 처리한다.** 100행 중 99행만 성공하고 1행이 409로 거부되면 본사가 어느 날짜까지 반영됐는지 알 수 없으므로 전부 성공하거나 전부 실패한다. 총량은 0 이상 1,000 이하, 시드되지 않은 일자는 404 `INVENTORY_DAY_NOT_FOUND`, 확정·보류 건수 아래로 내리면 409 `INVENTORY_CAPACITY_CONFLICT`로 **아무것도 바꾸지 않는다**. 형식 오류는 400 `INVENTORY_IMPORT_FORMAT`이고 행 수 제한은 1,000행이다.
+- 멱원은 두 갈래로 동작한다. 같은 `Idempotency-Key` 재호출은 200에 `created=false`로 같은 결과를 돌려주고, 응답 유실 뒤 새 키로 같은 파일을 보내도 SHA-256 지문이 같아 같은 결과를 돌려준다. **새 마이그레이션이 없다.** `inventory_command` 표를 재사용하고 CSV 본문 전체가 요청 지문의 입력이 된다.
+- 관리자 `/dashboard/inventory`에 `CSV 내보내기`·`CSV 업로드` 버튼을 추가했다. 내보내기는 UTF-8 BOM을 붙여 엑셀이 한글을 깨지지 않게 읽는다(감사 이력·운영 통계와 같은 패턴). 업로드 대화상자는 파일을 고르면 **본문을 미리 보여주고 올릴 행 수를 센 뒤** 올릴 수 있게 한다. **업로드는 매번 새 멱원 키를 쓴다.** 서버 검증 실패 시 대화상자를 닫지 않고 이유를 보여준다.
+- API `mvnw -Dtest=InventoryImportIntegrationTest` **17건**, 인접 suite **48건**(재고 쓰기 16·재고 조회 9·판매 중지 17·가용성 6)이 종료 코드 0이다. 관리자 `tsc --noEmit`·`eslint`(경고 2건, 기존 패턴)·Playwright `inventory-viewer` **24건**(기존 19 + 신규 5)이 종료 코드 0이다. 라이브 DB·compose 재빌드·브라우저 확인은 실행하지 않았다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-24-hq-inventory-import.md)을 따른다.
+- **2번 `재고·가격` 영역이 완료됐다.** 1번·2번 영역이 끝났으므로 다음은 3번 `직원 계정 관리`의 삭제·본인 계정 수정이다.
+
+## 본사 재고·가격 - 판매 중지 구간 설정 (2026-09-24)
+
+- `admin-menu-roadmap.md` 2번 `재고·가격`의 남은 항목 중 "판매 중지 구간 설정"을 구현했다. 본사가 특정 날짜의 판매를 멈추는 유일한 수단은 **해당 일자의 총량을 0으로 내리는 것**이었는데, 원래 총량을 잃어버리고, 매진과 중지를 구분할 수 없고, 확정 예약이 있는 날짜는 409로 막혀서 **중지 자체가 불가능했다**.
+- `PATCH /api/staff/hotels/{hotelId}/room-types/{roomTypeId}/sales-status`가 날짜 구간의 판매 상태를 바꾼다. `HQ_ADMIN`만 허용하고 지점 직원은 403, 잘못된 세션은 401, 멱원 키 누락은 400, 없는 지점·다른 지점의 유형·없는 유형은 404다. 본문은 `fromDate`·`toDate`·`status`(`OPEN`·`STOPPED`)이고, 역순은 400, 기간은 최대 92일이다.
+- **총량은 건드리지 않는다.** `capacity`·`held`·`confirmed`를 그대로 둬서 재개하면 중지 전과 같은 재고가 돌아온다. 이것이 총량 0으로 내리는 것과의 핵심 차이다. **중지한 구간에 확정·보류된 예약이 있어도 중지할 수 있다.** 총량 0은 409 `INVENTORY_CAPACITY_CONFLICT`로 거부되지만, 중지는 신규 판매만 막고 기존 예약을 그대로 둔다. 지점 전체 중지(`PATCH .../active`)와 같은 원칙이다.
+- **중지한 일자는 고객 `GET /api/availability`에서 빠진다.** `AvailabilityService` 검색 쿼리에 `NOT EXISTS (... status = 'STOPPED')`를 붙였다. 예약할 수 없다는 것이지 오류가 아니다. `GET .../sales-status`가 중지 구간을 돌려주고, 재고 조회의 각 일자에 `salesStatus`가 추가돼서 직원 화면이 "매진"과 "중지"를 구분한다.
+- 멱원은 두 갈래로 동작한다. 같은 `Idempotency-Key` 재호출은 200에 `created=false`로 같은 구간을 돌려주고, 응답 유실 뒤 새 키로 같은 내용을 보내도 SHA-256 지문이 같아 같은 결과를 돌려준다. 동시에 들어오면 유일 인덱스에 걸려 먼저 들어간 쪽의 결과를 돌려준다.
+- V63 additive 마이그레이션이 `room_type_sales_status`·`room_type_sales_status_command` 표를 만든다. **기존 표를 변경하지 않는다.** 중지 상태가 없으므로 모든 날짜가 `OPEN`이고 라이브 고객 가용성도 바뀌지 않는다.
+- 관리자 `재고·가격` (`/dashboard/inventory`)의 그리드에 `판매 중지` 열을 추가하고, **매진(빨강)과 중지(주황)를 다른 색으로 구분**했다. `판매 중지` 대화상자는 현재 보이는 범위로 날짜를 미리 채우고, 현재 중지 구간과 `판매 재개` 버튼을 보여준다. **중지·재개는 매번 새 멱원 키를 쓴다.** 서버 검증 실패 시 대화상자를 닫지 않고 이유를 보여준다.
+- API `mvnw -Dtest=SalesStatusIntegrationTest` **17건**·**전체 719건**(실패 0, 건너뜀 3)·인접 6개 suite **111건**이 종료 코드 0이다. 관리자 `tsc --noEmit`·`eslint`(경고 2건, 기존 패턴)·Playwright `inventory-viewer` **19건**(기존 12 + 신규 7)·인접 3개 suite **59건**이 종료 코드 0이다. 라이브 DB·compose 재빌드·브라우저 확인은 실행하지 않았다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-24-hq-sales-status.md)을 따른다.
+- **2번 `재고·가격`의 남은 항목**: 없음. 재고 일괄 업로드(CSV)로 2번 영역이 완료됐다.
+
+## 본사 지점 관리 - 두 번째 요금제 등록·수정 (2026-09-24)
+
+- `admin-menu-roadmap.md` 1번 `지점·객실 유형 관리`의 마지막 남은 항목을 구현했다. 객실 유형 하나에 **요금제가 무조건 1개**였다. 유형을 만들 때 `기본 요금제`가 깔리는 것이 전부고, 본사가 요금제를 직접 만들거나 고칠 수단이 없어서 **같은 객실을 조식 포함·미포함으로 따로 팔 수 없었고**, 취소 규정이 다른 요금을 만들 수도 없었다.
+- `POST /api/staff/hotels/{hotelId}/room-types/{roomTypeId}/rate-plans`가 새 요금제를 만든다. `HQ_ADMIN`만 허용하고 지점 직원은 403, 잘못된 세션은 401, 멱원 키 누락은 400, 없는 지점·다른 지점의 유형·없는 유형은 404다. 본문은 `name`(1~100자)·`breakfastIncluded`·`policyVersion`(1~50자)·`defaultRateKrw`(0~10,000,000원)·`fromDate`(선택)·`days`(1~92, 기본값 90)이고 위반은 400이다.
+- **요금제 행과 일자별 금액을 같은 트랜잭션에 심는다.** 실패하면 요금제 행도 롤백돼서 "요금제는 있는데 금액이 없어 오퍼가 안 나오는" 상태가 생기지 않는다. **재고는 심지 않는다.** 재고는 객실 유형 단위(`inventory_day`의 PK가 `room_type_id` + `stay_date`)이고 요금제가 같은 재고를 공유하므로, 요금제 생성이 재고를 만들면 유형의 재고를 덮어쓴다.
+- **재고가 없는 날짜는 409 `RATE_PLAN_INVENTORY_DAY_NOT_FOUND`로 거부한다.** 재고가 없는 날짜의 금액을 만들면 고객에게 보여주지도 못하는 요금제가 생긴다. **조식·정책 버전은 예약의 계약 조건이라 이름만 바꿀 수 있다.** 계약 조건이 다른 요금제가 필요하면 새 요금제를 만드는 것이 맞다. 이것이 "두 번째 요금제"를 만드는 이유다.
+- `PATCH .../rate-plans/{ratePlanId}`가 이름만 바꾼다. **이름 중복은 같은 유형 안에서만 검사**하고 다른 유형·다른 지점의 같은 이름은 허용하며, 위반은 409 `RATE_PLAN_NAME_CONFLICT`다. 요청한 요금제가 유형에 속하지 않으면 404 `RATE_PLAN_NOT_FOUND`다. `GET .../rate-plans`가 유형의 전체 요금제를 돌려주고 `PATCH .../rates`·`GET .../rates`가 선택적 `ratePlanId`를 받아서 명시하지 않으면 기본 요금제를 쓴다.
+- 멱원은 두 갈래로 동작한다. 같은 `Idempotency-Key` 재호출은 200에 `created=false`로 같은 요금제를 돌려주고, 응답 유실 뒤 새 키로 같은 내용을 보내도 SHA-256 지문이 같아 같은 결과를 돌려준다. **멱원 재호출은 이름 중복 검사 앞에서 검사한다.**
+- V62 additive 마이그레이션이 `rate_plan_command` 표를 만들고 `rate_plan.created_at`을 추가한다. `rp.id`는 UUID라 삽입 순서를 알 수 없으므로 기본 요금제를 고를 때 `created_at`을 기준으로 삼는다. **기존 행은 마이그레이션이 `now()`로 채우므로 기존 동작을 바꾸지 않는다.**
+- 관리자 `호텔 및 객실` (`/dashboard/hotels`)의 객실 유형 표에 **요금제 열**을 추가하고, 유형 표 아래에 각 유형의 요금제를 나열했다. `요금제 추가`·`이름 변경` 대화상자는 기본 요금제의 조건을 미리 채운다. **생성·수정은 매번 새 멱원 키를 쓴다.** 서버 검증 실패 시 대화상자를 닫지 않고 이유를 보여준다.
+- API `mvnw -Dtest=RatePlanCommandIntegrationTest` **35건**이 종료 코드 0이고, 인접 8개 suite **175건**도 종료 코드 0이다. 관리자 `tsc --noEmit`·`eslint`(경고 3건, 기존 패턴)·Playwright `hotel-catalog` **29건**(기존 24 + 신규 5)이 종료 코드 0이다. 라이브 DB·compose 재빌드·브라우저 확인은 실행하지 않았다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-24-hq-rate-plan.md)을 따른다.
+- **1번 `지점·객실 유형 관리` 영역이 완료됐다.** 다음은 2번 `재고·가격`의 판매 중지 구간 설정·재고 일괄 업로드, 3번 `직원 계정 관리`의 삭제·본인 계정 수정이다.
+
+## 본사 지점 관리 - 객실 유형 삭제 (2026-09-23)
+
+- `admin-menu-roadmap.md` 1번 `지점·객실 유형 관리`의 남은 항목 중 "객실 유형 삭제"를 구현했다. 본사가 유형을 만들고 수정할 수 있었지만 **지울 수단이 없어서** 잘못 만든 유형이나 더 이상 팔지 않는 유형이 카탈로그·재고·보고서 화면에 계속 나타났다.
+- `DELETE /api/staff/hotels/{hotelId}/room-types/{roomTypeId}`가 유형을 지운다. `HQ_ADMIN`만 허용하고 지점 직원은 403, 잘못된 세션은 401, 멱원 키 누락은 400, 없는 유형·다른 지점의 유형은 404다.
+- **진행 중인 판매·예약·배정이 있으면 409 `ROOM_TYPE_DELETION_CONFLICT`로 거부하고 아무것도 지우지 않는다.** 확정 예약·진행 중인 예약 변경 요청·보류 재고·배정된 실제 객실 4가지를 모두 센다. **에러 메시지가 어느 조건이 막았는지 알려준다.** 인원·조식·재고 `PATCH`가 취한 것과 같은 기준이다.
+- **종료된 예약·요금제는 `room_type_id` 참조만 끊고 보존한다.** `reservation.rate_plan_id`·`reservation.room_type_id`가 NOT NULL이라 행을 지울 수 없다. **남은 요금제·예약은 고객 검색에 나타나지 않는다.** `AvailabilityService`·`InventoryQueryService`·`HotelCatalogQueryService`가 모두 `room_type`에서 시작해 join하므로 유형이 없으면 함께 빠진다.
+- 멱원은 두 갈래로 동작한다. 같은 `Idempotency-Key` 재호출은 200에 `deleted=false`로 같은 결과를 돌려주고, 응답 유실 뒤 새 키로 같은 내용을 보내도 SHA-256 지문이 같아 같은 결과를 돌려준다. **멱원 재호출은 유형 조회 앞에서 검사한다.** 유형이 이미 지워졌으면 404로 착각하게 된다.
+- V61 additive 마이그레이션이 `room_type_command.deleted_room_type_name`을 추가하고 `room_type_command`·`rate_plan`·`reservation`의 `room_type_id` NOT NULL을 해제한다. **기존 행은 모두 값을 가지고 있어 빈 값을 만들지 않는다.**
+- 관리자 `호텔 및 객실` (`/dashboard/hotels`)의 객실 유형 표에 `삭제` 열과 확인 대화상자를 추가했다. 삭제는 매번 새 멱원 키를 쓴다. 서버가 409를 내면 대화상자를 닫지 않고 이유를 보여준다.
+- API `mvnw -Dtest=RoomTypeDeletionIntegrationTest` **17건**이 종료 코드 0이고, 인접 9개 suite **185건**·예약·가용성·카탈로그 suite **88건**도 종료 코드 0이다. 관리자 `tsc --noEmit`·`eslint`(경고 3건, 기존 패턴)·Playwright `hotel-catalog` **24건**(기존 22 + 신규 2)·인접 5개 suite 61건이 종료 코드 0이다. 라이브 DB·compose 재빌드·브라우저 확인은 실행하지 않았다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-23-hq-room-type-delete.md)을 따른다.
+
+## 본사 지점 관리 - 지점 판매 중지·재개 (2026-09-22)
+
+- `admin-menu-roadmap.md` 1번 `지점·객실 유형 관리`의 남은 항목 중 "지점 판매 중지"를 구현했다. **본사가 리모델 공사나 브랜드 정비로 한 지점의 예약 접수를 멈출 수단이 없었다.** `hotel` 표에 판매 상태 칼럼이 없었으므로 점검 기간인 지점도 고객 `GET /api/hotels`·`GET /api/availability`에 계속 나타났다. 재고를 0으로 내리는 임시 방편은 가능하지만 **재고 0은 "매진"이지 "판매하지 않는다"가 아니므로** 본사가 의도를 가지고 중지·재개할 수 있는 상태가 필요했다.
+- `PATCH /api/staff/hotels/{hotelId}/active`가 지점의 판매를 중지·재개한다. `HQ_ADMIN`만 허용하고 지점 직원은 403, 잘못된 세션은 401, 멱원 키 누락은 400, `active` 필드 누락은 400, 없는 지점은 404다.
+- **중지는 고객 `GET /api/hotels`·`GET /api/availability`에서 지점을 빼는 것이다.** `HotelController.list()`가 `where active`로 걸러주고 `AvailabilityService`가 `active`가 아닌 지점에 빈 오퍼를 내려준다. 예약할 수 없다는 것이지 오류가 아니다.
+- **이미 확정된 예약은 그대로 둔다.** 중지가 예약을 취소하면 본사가 고객에게 알리지 않은 채 환불 의무가 생기므로, 중지는 신규 판매에만 적용한다. 취소는 전용 API가 있다. **직원은 중지한 지점도 본다.** 다시 판매하려면 상태를 알아야 하므로 고객 화면과 다르다.
+- **중지한 지점의 객실 유형에 본사가 여전히 요금·재고를 바꿀 수 있다.** 본사는 점검 기간에도 가격·재고를 정비해야 하므로, 중지가 쓰기 권한에 영향을 주지 않는다. **판매 재개는 재고를 다시 심지 않는다.** 중지는 `inventory_day`·`rate_day`를 건드리지 않으므로 재개하면 중지 전과 같은 재고가 돌아온다.
+- 멱원은 두 갈래로 동작한다. 같은 `Idempotency-Key` 재호출은 200에 `changed=false`로 같은 결과를 돌려주고, 응답 유실 뒤 새 키로 같은 내용을 보내도 `staff_id`·지점·`active`의 SHA-256 지문이 같아 같은 결과를 돌려준다. **이미 같은 상태면 DB를 건드리지 않고 멱원 기록만 남긴다.** 지점 행을 `select ... for update`로 잡아 동시 전환을 직렬화한다.
+- V60 additive 마이그레이션이 `hotel.active BOOLEAN NOT NULL DEFAULT TRUE`를 추가한다. **기존 3개 지점은 모두 활성이므로 기존 동작을 변경하지 않는다.** `hotel_command` 표를 재사용해 `kind='ACTIVATE'`를 썼다. V59·V60 모두 아직 커밋되지 않은 상태다.
+- 관리자 `호텔 및 객실` (`/dashboard/hotels`)의 지점 표에 `판매` 열과 `판매 중지`·`판매 재개` 버튼을 추가했다. **중지·재개는 매번 새 멱원 키를 쓴다.** 재시도가 같은 키를 재사용하지 않게 해서 네트워크 장애 뒤 다시 눌러도 중복 전환이 생기지 않는다. 실패 안내는 표 위에 남기고 상태는 바꾸지 않는다.
+- API `mvnw -Dtest=HotelActivationIntegrationTest` **14건**이 종료 코드 0이고, 인접 9개 suite **193건**도 종료 코드 0다. 관리자 `tsc --noEmit`·`eslint`(경고 3건, 기존 패턴)·Playwright `hotel-catalog` **22건**(기존 20 + 신규 2)·인접 6개 suite 68건이 종료 코드 0이다. 라이브 DB·compose 재빌드·브라우저 확인은 실행하지 않았다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-22-hq-hotel-activation.md)을 따른다.
+
+## 본사 지점 관리 - 지점 수정 (2026-09-22)
+
+- `admin-menu-roadmap.md` 1번 `지점·객실 유형 관리`의 남은 항목 중 "지점 수정"을 구현했다. 본사가 지점 이름을 잘못 만들거나 브랜드가 바뀌었을 때 고칠 수단이 없었다. 생성 API가 이름 중복을 409로 막고 있어서 **수정 수단이 없으면 한 번 잘못 만든 지점 이름을 바로잡을 방법이 아예 없었다.**
+- `PATCH /api/staff/hotels/{hotelId}`가 지점의 이름·지역·시간대를 바꾼다. `HQ_ADMIN`만 허용하고 지점 직원은 403, 잘못된 세션은 401, 멱원 키 누락은 400, 없는 지점은 404다. **세 필드 모두 선택**이고 보내지 않은 필드는 현재 값을 유지한다. 빈 본문은 400이라 빈 PATCH가 지점을 초기화하지 않는다.
+- **이름을 바꿀 때만 다른 지점과의 중복을 검사한다.** 자기 자신의 현재 이름은 제외하고, 대소문자 구분 없이 중복이면 409 `HOTEL_NAME_CONFLICT`다. **시간대는 `ZoneId.of`로 검증**하고 실패하면 400이다. 시간대는 재고 시드 시작일·취소 마감 시각·운영 상태 전환의 기준이다.
+- **이미 지나간 날짜는 다시 계산하지 않는다.** `inventory_day`·`rate_day`·`reservation`이 날짜를 `LocalDate`로 저장하므로 시간대를 바꿔도 행이 이동하지 않는다. 새 시간대는 그 이후의 판정부터 적용된다.
+- 멱원은 두 갈래로 동작한다. 같은 `Idempotency-Key` 재호출은 200에 `changed=false`로 같은 결과를 돌려주고, 응답 유실 뒤 새 키로 같은 내용을 보내도 SHA-256 지문이 같아 같은 결과를 돌려준다. **실제로 바뀌는 값이 없으면 DB를 건드리지 않고 멱원 기록만 남긴다.**
+- V59가 이전 작업과 함께 아직 커밋되지 않은 상태이므로 제자리에서 수정했다. `kind`(`CREATE`·`UPDATE`) 칼럼과 이력용 `previous_*` 칼럼을 추가하고 유일 인덱스에 `kind`를 포함했다. **테스트 DB에서만 체크섬 불일치가 났고** `flyway_schema_history`의 version 59 행과 `hotel_command` 표를 지워서 다시 적용했다. 라이브 DB에는 영향이 없다.
+- 관리자 `호텔 및 객실` (`/dashboard/hotels`)의 지점을 선택기 버튼에서 **표**로 바꿨다. 이름·지역·시간대와 수정 버튼을 보여준다. 수정 대화상자는 현재값으로 미리 채우고 서버 검증 실패 시 닫지 않는다.
+- API `mvnw -Dtest=HotelUpdateIntegrationTest` **14건**이 종료 코드 0이고, 인접 8개 suite **193건**도 종료 코드 0이다. 관리자 `tsc --noEmit`·`eslint`(경고 3건, 기존 패턴)·Playwright `hotel-catalog` **20건**(기존 17 + 신규 3)·인접 6개 suite 68건이 종료 코드 0이다. 라이브 DB·compose 재빌드·브라우저 확인은 실행하지 않았다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-22-hq-hotel-update.md)을 따른다.
+
+## 본사 지점 관리 - 지점 생성·지점 목록 조회 (2026-09-22)
+
+- `admin-menu-roadmap.md` 1번 `지점·객실 유형 관리`의 남은 항목 중 "지점 생성"을 구현했다. 본사가 지점을 만들 수단이 전혀 없었다. 지점 행은 마이그레이션과 개발용 시드만 만들었다.
+- 부수 결함: **관리자 화면의 지점 선택기가 3개 UUID를 하드코딩**하고 있었다. 서버에 지점이 생기거나 사라져도 화면이 따라가지 못했고, 환경마다 UUID가 다르면 선택기가 빈 상태로 남아 카탈로그·재고·보고서 화면이 동작하지 않았다.
+- `POST /api/staff/hotels`가 새 지점을 만든다. `HQ_ADMIN`만 허용하고 지점 직원은 403, 잘못된 세션은 401, 멱원 키 누락은 400이다. **지점 행만 만들고 객실 유형·요금·재고를 심지 않는다.** 객실 유형 추가가 이미 기본 요금제와 90일분 일자 요금·재고를 같은 트랜잭션에 심으므로 시드는 그 동작에 맡긴다.
+- **이름은 대소문자 구분 없이 중복을 거부한다.** 409 `HOTEL_NAME_CONFLICT`다. 지점 이름은 지점을 식별하는 라벨이므로 중복을 허용하지 않는다. 삭제·이름 변경 수단이 아직 없으므로 의도하지 않은 중복 생성이 들어가면 두 지점을 구분할 방법이 없다.
+- **시간대를 서버가 검증한다.** `ZoneId.of`로 파싱해 보고 실패하면 400이다. 시간대는 재고 시드 시작일(지점 현지 날짜)과 취소 마감 시각의 기준이므로 잘못된 값을 저장하면 나중에 고칠 수 없다.
+- 멱원은 두 갈래로 동작한다. 같은 `Idempotency-Key` 재호출은 200에 `created=false`로 같은 지점을 돌려주고, 응답 유실 뒤 새 키로 같은 내용을 보내도 `staff_id`·이름·지역·시간대의 SHA-256 지문이 같아 같은 결과를 돌려준다.
+- `GET /api/staff/hotels`가 지점 목록을 돌려준다. SELECT만 사용한다. `HQ_ADMIN`만 허용하고 지점 직원은 403, 잘못된 세션은 401이다. V59 additive 마이그레이션이 `hotel_command` 표를 만든다. 기존 표를 변경하지 않는다.
+- 관리자 `호텔 및 객실` (`/dashboard/hotels`)의 **지점 선택기를 하드코딩에서 서버 조회로 바꿨다.** 지점이 추가되면 선택기에 바로 나타난다. `지점 추가` 버튼과 대화상자를 추가했고, 빈 지점을 만들면 "객실 유형이 없으므로 고객 검색에 나타나지 않습니다"라고 안내한다. 서버 검증 실패 시 대화상자를 닫지 않는다.
+- API `mvnw -Dtest=HotelCreateIntegrationTest` **13건**이 종료 코드 0이고, 인접 영역 객실 유형 27건·재고 16건·요금 20건·고객 요청 22건·감사 16건·운영 통계 18건·직원 계정 47건도 종료 코드 0이다. 관리자 `tsc --noEmit`·`eslint`(경고만, 기존 패턴)·Playwright `hotel-catalog` **17건**(기존 13 + 신규 4)이 종료 코드 0이다. 라이브 DB·compose 재빌드·브라우저 확인은 실행하지 않았다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-22-hq-hotel-create.md)을 따른다.
+
+## 본사·지점 고객 요청 관리 - 접수·조회·상태 변경 (2026-09-22)
+
+- `admin-menu-roadmap.md` 6번 `고객 요청 관리`의 1차를 구현했다. 고객이 호텔에 보낼 수 있는 채널이 아예 없어서 예약 변경·취소가 아닌 모든 문의가 전화로만 들어왔다.
+- `POST /api/hotels/{hotelId}/guest-requests`가 고객의 요청을 받는다. **예약 변경·취소는 전용 API가 있으므로 받지 않는다.** 객실 요청·편의 요청·환불 문의·일반 문의·기타 5종만 허용하고 나머지는 400이다. 멱원 키가 필수이고, **재호출은 200에 `created=false`로 같은 요청을 돌려준다.** 가격·재고·예약 상태를 바꾸지 않는다.
+- `GET /api/staff/guest-requests`가 요청 목록을 돌려준다. **본사는 지점 필터가 없으면 전 지점을 읽고**, 지점 직원은 무조건 자기 지점만 읽는다. 지점 직원이 다른 지점을 명시적으로 요청하면 403이다. `status` 필터, `limit` 1~100, `offset` 0 이상이고 위반은 400이다. SELECT만 사용한다.
+- `GET /api/staff/guest-requests/{requestId}`가 연락처·내용·처리 이력을 돌려주고 `POST /api/staff/guest-requests/{requestId}/transition`이 처리 상태를 `OPEN`→`IN_PROGRESS`→`RESOLVED`→`CLOSED`로 바꾼다. 멱원은 두 갈래로 동작한다. 같은 `Idempotency-Key` 재호출은 200으로 같은 결과를 돌려주고, 이미 같은 상태면 값을 바꾸지 않고 멱원 기록만 남겨서 재시도가 같은 결과를 돌려주게 한다.
+- V58 additive 마이그레이션이 `guest_request`·`guest_request_event` 표와 `guest_request_detail` 뷰를 만든다. 기존 표를 변경하지 않는다.
+- 관리자 `/dashboard/guest-requests`에 상태 필터·요청 표·검토 대화상자·상태 변경 대화상자를 추가했다. `nav.ts`의 `운영` 그룹에 `고객 요청`을 넣었고 `HQ_ADMIN`·`BRANCH_STAFF`만 본다. 본사·지점 직원이 처리하므로 7번 감사 메뉴와 달리 본사 전용이 아니다. 서버 검증 실패 시 대화상자를 닫지 않고 안내를 보여준다.
+- 고객 웹에 `/contact`·`/en/contact` 요청 접수 폼을 추가했다. 고객 웹은 세션 기반이 아니므로 접수는 인증 없이 받고, 직원만 조회·처리할 수 있다.
+- API `mvnw -Dtest=GuestRequestIntegrationTest` **22건**이 종료 코드 0이고, 인접 영역 감사 16건·운영 통계 18건·직원 계정 47건도 종료 코드 0이다. 관리자 `tsc --noEmit`·`eslint`(경고만, 기존 패턴)·Playwright `guest-requests` **7건**·인접 suite 49건이 종료 코드 0이다. 고객 웹 `tsc --noEmit`과 `tsx` 검증 스크립트 25건이 종료 코드 0이다. 라이브 DB·compose 재빌드·브라우저 확인은 실행하지 않았다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-22-guest-requests.md)을 따른다.
+- **후속 항목**: 담당자 지정 UI(`transition` 본문은 `assignTo`를 받지만 화면이 안 쓴다), 요청 유형별 알림, 고객 요청 이력의 감사 메뉴(7번) 통합, `priority` 노출.
+
+## 본사 감사 이력 - 개인정보 마스킹·CSV 내보내기 (2026-09-22)
+
+- `admin-menu-roadmap.md` 7번 `감사·이력 조회`의 남은 항목 중 "개인정보 마스킹 옵션"과 "CSV 내보내기"를 구현했다. 감사 이력은 처리 추적을 위해 고객 이름·이메일을 보여주는데, 본사가 화면을 공유하거나 캡처하면 개인정보가 그대로 퍼졌다.
+- `GET /api/staff/audit?masked=true`가 고객 이름·이메일을 가린다. 응답의 `masked` 필드로 상태를 알려주고 기본값은 `false`다. 식별자(예약 id·객실 번호·금액·처리 직원)는 그대로 둬서 추적성을 유지한다. `GUEST_UPDATE`의 `summary` 안에도 이름·이메일이 중복으로 들어 있어 같이 가린다.
+- SELECT만 사용하고 마이그레이션이 필요 없다. `HQ_ADMIN`만 호출 가능하고 지점 직원은 403, 잘못된 세션은 401이다.
+- 관리자 `/dashboard/audit`에 `개인정보 마스킹` 토글과 `CSV 내보내기` 버튼을 추가했다. CSV는 브라우저에서 파일로 내려주고 UTF-8 BOM을 붙여 엑셀이 한글을 깨지지 않게 읽는다.
+- API `mvnw -Dtest=AuditIntegrationTest` **16건**(기존 12 + 신규 4), 관리자 `tsc --noEmit`·`eslint`(경고만, 기존 패턴)·Playwright `audit` **9건**(기존 7 + 신규 2)이 종료 코드 0이다. 라이브 DB·compose 재빌드·브라우저 확인은 실행하지 않았다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-22-hq-audit-masking-csv.md)을 따른다.
+
+## 본사 운영 통계 - 객실 유형별 매출·CSV 내보내기 (2026-09-22)
+
+- `admin-menu-roadmap.md` 4번 `운영 통계·리포트`의 남은 항목 중 "객실 유형별 상세 매출"과 "CSV 내보내기"를 구현했다. 지점별 합계만 있어서 어느 객실 유형이 매출을 만드는지 알 수 없었고, 보고서를 공유하려면 화면을 캡처해야 했다.
+- `GET /api/staff/reports/operations/room-types?hotelId=...`가 한 지점의 객실 유형별 예약·취소·노쇼·매출·매출 비중을 반환한다. SELECT만 사용한다. `hotelId`는 필수이고 빠지면 400, 없는 지점은 404, 역순 기간·93일 초과는 400, 기간 생략이면 최근 7일이다.
+- 매출 집계는 지점별 보고서와 같은 기준으로 취소·노쇼가 아닌 예약의 금액만 인정한다. 지점 매출이 0원이면 비중을 계산하지 않고 0이다.
+- 관리자 `/dashboard/reports`에 객실 유형별 대상 지점 선택기와 객실 유형별 매출 표를 추가했다. `CSV 내보내기`는 브라우저에서 파일로 내려주고 UTF-8 BOM을 붙여 엑셀이 한글을 깨지지 않게 읽는다.
+- API `mvnw -Dtest=OperationsReportIntegrationTest` **18건**(기존 10 + 신규 8), 관리자 `tsc --noEmit`·`eslint`(경고만, 기존 패턴)·Playwright `operations-report` **8건**(기존 6 + 신규 2)이 종료 코드 0이다. 라이브 DB·compose 재빌드·브라우저 확인은 실행하지 않았다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-22-hq-reports-room-type-revenue.md)을 따른다.
+
+## 본사 공통 정책 - 예약 변경 승인 TTL 런타임 변경 (2026-09-22)
+
+- `admin-menu-roadmap.md` 5번 `공통 정책 관리`에서 남은 "승인 TTL 런타임 변경"을 구현했다. 지점이 본사 승인이 필요한 예약 변경을 요청하면 `approval_expires_at`에 승인 만료 시각이 저장되는데, 이 시간을 결정하는 `reservation.change.approval-ttl`이 `application.yml`에 고정돼 재배포하지 않으면 바꿀 수 없었다.
+- `PUT /api/staff/policies/change-approval-ttl`이 승인 TTL을 바꾼다. `HQ_ADMIN`만 허용하고 지점 직원은 403, 잘못된 세션은 401, 멱원 키 누락은 400이다. 60초 이상 7일(604,800초) 이하이고 위반은 400이다.
+- **진행 중인 변경 요청은 영향을 받지 않는다.** `approval_expires_at`은 요청 생성 시점에 한 번 저장되므로 TTL을 바꿔도 이미 만들어진 요청의 만료 시각은 그대로다. 신규 요청부터 새 TTL이 적용된다.
+- 멱원은 두 갈래로 동작한다. 같은 `Idempotency-Key` 재호출은 200에 `created=false`로 같은 revision을 돌려주고, 응답 유실 뒤 새 키로 같은 내용을 보내도 `staff_id`·정책 키·`value_seconds`의 SHA-256 지문이 같아 같은 결과를 돌려준다.
+- V57 additive 마이그레이션이 `policy_revision.value_seconds`를 추가한다. 기존 행은 모두 NULL이므로 기존 동작을 변경하지 않는다.
+- 관리자 `/dashboard/policies`의 예약 변경 승인 카드에 `본사 승인 대기 시간` 행과 `TTL 변경` 대화상자를 추가했다. 본사는 시간 단위로 입력하고 저장은 초 단위다. 서버 검증 실패 시 대화상자를 닫지 않고 안내를 보여준다.
+- API `mvnw -Dtest=PolicyIntegrationTest` **30건**(기존 22 + 신규 8), 인접 `ReservationChangeApprovalIntegrationTest` 3건, 관리자 `tsc --noEmit`·`eslint`(경고만, 기존 패턴)·Playwright `policies` **13건**(기존 11 + 신규 2)이 종료 코드 0이다. 라이브 DB·compose 재빌드·브라우저 확인은 실행하지 않았다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-22-hq-policy-approval-ttl.md)을 따른다.
+
+## 본사 직원 계정 - 비활성·재활성 (2026-09-22)
+
+- `admin-menu-roadmap.md` 3번 `직원 계정 관리`에서 남은 "비활성"을 구현했다. 퇴사하거나 권한을 회수해야 하는 직원의 계정을 끌 수단이 없었다. 삭제하면 감사 이력이 참조하는 직원 행이 사라지므로 비활성을 먼저 구현했다.
+- `PATCH /api/staff/staff/{staffId}/active`가 활성 상태를 바꾼다. `HQ_ADMIN`만 허용하고 지점 직원은 403, 잘못된 세션은 401, 없는 직원은 404, 멱원 키 누락은 400이다.
+- **비활성은 즉시 효력이 있다.** 비밀번호가 맞아도 로그인을 403으로 거부하고, 세션 조회 SQL에 `AND m.active`를 붙여 남겨둔 세션도 401로 만료시키며, 비활성과 동시에 `delete from staff_session`으로 세션을 지운다.
+- **본인 계정은 본인이 비활성할 수 없다.** 409 `STAFF_SELF_MODIFICATION_FORBIDDEN`로 거부한다. 역할 수정과 같은 예외를 재사용한다.
+- 멱원은 두 갈래로 동작한다. 같은 `Idempotency-Key` 재호출은 200에 `created=false`로 같은 결과를 돌려주고, 응답 유실 뒤 새 키로 같은 내용을 보내도 `staff_id`·`modified_by`·`active`의 SHA-256 지문이 같아 같은 결과를 돌려준다. 이미 같은 상태면 값을 바꾸지 않고 멱원 기록만 남겨서 재시도가 200으로 같은 결과를 돌려주게 했다.
+- V56 additive 마이그레이션이 `staff_member.active BOOLEAN NOT NULL DEFAULT TRUE`를 추가한다. 기존 행은 모두 활성이므로 기존 동작을 변경하지 않는다.
+- 관리자 `/dashboard/staff`의 직원 표에 `활성` 열과 `비활성`·`재활성` 버튼을 추가했다. 비활성·재활성은 매번 새 멱원 키를 쓴다. 서버 검증 실패 시 표 위에 안내를 보여주고 상태를 바꾸지 않는다.
+- API `mvnw -Dtest=StaffAccountIntegrationTest` **47건**(기존 35 + 신규 12), 인접 영역 객실 유형 27건·요금 20건·재고 16건, 관리자 `tsc --noEmit`·`eslint`(경고만, 기존 패턴)·Playwright `staff-accounts` **17건**·`inventory-viewer` 14건·`hotel-catalog` 13건이 종료 코드 0이다. 라이브 DB·compose 재빌드·브라우저 확인은 실행하지 않았다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-22-hq-staff-deactivate.md)을 따른다.
+
+## 본사 재고·가격 - 객실 유형별 일자 요금 개별 변경 (2026-09-20)
+
+- `admin-menu-roadmap.md` 1번·2번 메뉴에 공통으로 남은 "일자별 요금 개별 변경"을 구현했다. 기본 요금을 바꿀 수는 있었지만 **전체 일자를 같은 폭으로 옮기는 방식뿐**이어서 주말·계절 차등을 직접 만들거나 특정 날짜의 가격만 바꿀 수단이 없었다.
+- `GET /api/staff/hotels/{hotelId}/room-types/{roomTypeId}/rates`가 일자별 금액을 돌려주고(`from`·`to` 필터, 최대 92일), `PATCH .../rates`가 날짜별 금액을 덮어쓴다. `HQ_ADMIN`만 허용하고 지점 직원은 403, 잘못된 세션은 401, 없는 지점·다른 지점의 유형·없는 유형은 404다.
+- **새 가격을 만들지 않는다.** `rate_day` 행이 없는 날짜는 404 `RATE_DAY_NOT_FOUND`, 요금제가 없는 유형은 404 `ROOM_TYPE_RATE_PLAN_NOT_FOUND`다. 금액은 0원 이상 10,000,000원 이하, 한 요청 92일 위반은 400이다.
+- 멱원은 두 갈래로 동작한다. 같은 `Idempotency-Key` 재호출은 200에 `created=false`로 같은 결과를 돌려주고, 응답 유실 뒤 새 키로 같은 내용을 보내도 `staff_id`·지점·유형·요금제·일자·금액의 SHA-256 지문이 같아 같은 결과를 돌려준다. 재호출은 요청했던 일자만 돌려준다. 이미 확정된 예약의 금액은 건드리지 않는다.
+- 관리자 `/dashboard/inventory`의 그리드에 `요금 조정` 열과 대화상자를 추가했다. 대화상자를 열면 서버에서 현재 일자별 요금을 읽어 칸별로 미리 채우고, **바뀐 날짜만 서버에 보낸다.** 서버 검증 실패 시 대화상자를 닫지 않고 안내를 보여준다.
+- API 전체 suite **556건**(실패 0, 건너뜀 3), 관리자 `tsc --noEmit`·`eslint`(경고 3건, 기존 패턴)·Playwright `inventory-viewer` **14건**·인접 suite 28건이 종료 코드 0이다. 라이브 DB·compose 재빌드·브라우저 확인은 실행하지 않았다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-20-hq-rate-day-adjust.md)을 따른다.
+
+## 본사 직원 계정 - 역할·소속 지점 수정 (2026-09-20)
+
+- `admin-menu-roadmap.md` 3번 `직원 계정 관리`에서 남은 다음 항목인 "역할 변경·지점 재할당"을 구현했다. 본사가 직원의 역할을 바꾸거나 지점을 옮길 수단이 전혀 없었다.
+- `PATCH /api/staff/staff/{staffId}`가 역할과 소속 지점을 바꾼다. `HQ_ADMIN`만 허용하고 지점 직원은 403, 잘못된 세션은 401, 없는 직원은 404, 없는 지점은 404다.
+- **역할과 지점의 짝은 서버가 최종 판단한다.** 본사 역할은 지점을 가질 수 없고, `BRANCH_STAFF`는 지점이 필수다. 위반은 400이고 값을 바꾸지 않는다. 역할을 본사 역할로 올리면 지점을 비우고, 지점 직원으로 내리면 요청한 지점을 채운다.
+- **본인 계정의 변경은 409 `STAFF_SELF_MODIFICATION_FORBIDDEN`로 거부한다.** 본사 관리자가 실수로 본인 권한을 내려 본사 메뉴에 다시 들어오지 못하는 것을 막는다.
+- 멱원은 두 갈래로 동작한다. 같은 `Idempotency-Key` 재호출은 200에 `created=false`로 같은 결과를 돌려주고, 응답 유실 뒤 새 키로 같은 내용을 보내도 `staff_id`·`modified_by`·역할·지점의 SHA-256 지문이 같아 같은 결과를 돌려준다. 세션은 `token_hash` 기반이라 역할을 바꿔도 기존 세션이 즉시 만료되지 않는다.
+- 관리자 `/dashboard/staff`의 직원 표에 `역할·지점` 열과 수정 버튼·대화상자를 추가했다. 본사만 버튼이 보이고, 대화상자는 현재 역할·소속 지점으로 미리 채운다. 서버 검증 실패 시 대화상자를 닫지 않고 안내를 보여준다.
+- API `mvnw -Dtest=StaffAccountIntegrationTest` **35건**(기존 22 + 신규 13), 관리자 `tsc --noEmit`·`eslint`(경고 2건 `react-hooks/set-state-in-effect`, 기존 패턴)·Playwright `staff-accounts` **13건**이 종료 코드 0이다. 라이브 DB·compose 재빌드·브라우저 확인은 실행하지 않았다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-20-hq-staff-role-hotel-update.md)을 따른다.
+
+## 본사 재고·가격 - 객실 유형별 일자 총량 조정 (2026-09-20)
+
+- `admin-menu-roadmap.md` 2번 `재고·가격`의 첫 쓰기 동작을 구현했다. 본사가 일자 재고를 볼 수만 있었고, 객실 유형을 추가해 심은 총량을 바꿀 수단이 없었다.
+- `PATCH /api/staff/hotels/{hotelId}/inventory`가 객실 유형의 일자 총량을 바꾼다. `HQ_ADMIN`만 허용하고 지점 직원은 403, 잘못된 세션은 401, 없는 지점·다른 지점의 유형·없는 유형은 404다.
+- **총량을 내릴 때는 서버가 강하게 검증한다.** 해당 일자의 확정·보류 건수 아래로 내리면 409 `INVENTORY_CAPACITY_CONFLICT`로 거부하고 재고를 바꾸지 않는다. 재고는 음수가 될 수 없기 때문이다. 총량 0은 판매 중지와 같고, 확정·보류가 없는 일자만 허용한다.
+- 시드되지 않은 일자는 재고 행이 없어서 404 `INVENTORY_DAY_NOT_FOUND`다. 총량 범위 0~1,000, 한 요청 92일 위반은 400이다.
+- 멱원은 두 갈래로 동작한다. 같은 `Idempotency-Key` 재호출은 200에 `created=false`로 같은 결과를 돌려주고, 응답 유실 뒤 새 키로 같은 내용을 보내도 `staff_id`·지점·유형·일자·총량의 SHA-256 지문이 같아 같은 결과를 돌려준다. 재호출은 요청했던 일자만 돌려줘서 다른 날짜의 재고가 바뀐 뒤에도 응답이 달라지지 않는다.
+- 관리자 `/dashboard/inventory`의 그리드에 `총량 조정` 열과 대화상자를 추가했다. 총량 입력은 `type="text"` + `inputMode="numeric"`을 썼다. 브라우저가 `max` 초과로 폼 제출을 막으면 서버 검증 응답이 도달하지 않으므로(공통 정책·객실 유형 화면에서 이미 같은 문제가 있었다) 범위 판단은 서버에 뒀다. 서버 검증 실패 시 대화상자를 닫지 않고 안내를 보여준다.
+- API **전체 522건**(실패 1, 건너뜀 3)이다. 실패 1건은 `TossSettlementIntegrationTest.resumes_failed_page_without_deleting_previous_snapshot`이고, 작업 트리를 비우고 HEAD에서 따로 실행하면 통과하므로 이 변경과 무관한 비결정적 실패다. 재고 쓰기 16건은 종료 코드 0이다. 관리자 `tsc --noEmit`·`eslint`(경고 2건 `react-hooks/set-state-in-effect`, 기존 패턴)·Playwright `inventory-viewer` 10건·`hotel-catalog` 13건이 종료 코드 0이다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-20-hq-inventory-adjust.md)을 따른다.
+
+## 관리자 호텔 및 객실 - 한글 깨짐 원인과 조식·기본 요금 입력 (2026-09-20)
+
+- 사용자가 "관리자 페이지 호텔 및 객실 페이지에서 한글이 깨졌다"고 보고했다. **소스 파일에는 깨진 글자가 없었다.** 터미널(Windows PowerShell) 코드 페이지가 한글을 표시하지 못해서 콘솔에서만 글자가 깨져 보였다. `.tmp/hangul-check.cjs`로 UTF-8 코드포인트를 직접 점검해 파일은 0건 수정했다.
+- 같은 화면의 실제 결함을 함께 고쳤다. **조식 포함 여부와 기본 요금 입력이 아예 없었다.** 객실 유형을 추가하면 조식이 항상 `false`로 고정됐고, 본사가 수정 화면에서 현재 조식 여부·요금을 볼 수도 없었다.
+- `POST /api/staff/hotels/{hotelId}/room-types`가 `breakfastIncluded`·`defaultRateKrw`를 받아 기본 요금제와 90일분 일자 요금·재고를 심는다. 값은 `room_type.seed_breakfast_included`·`seed_default_rate_krw`에 보관된다.
+- `PATCH /api/staff/hotels/{hotelId}/room-types/{roomTypeId}`가 조식 포함 여부와 기본 요금을 바꾼다. 둘 다 null이면 변경하지 않는다. **조식 포함 여부는 확정 예약이 현재 조건으로 예약돼 있으면 409 `ROOM_TYPE_BREAKFAST_CONFLICT`로 거부**한다. 예약은 `rate_plan_id`만 가지므로 계약 내용이 달라지면 안 되기 때문이다. 기본 요금은 일자별 금액 전체를 같은 폭으로 옮겨서 주말·계절 차등을 보존한다. 요금제가 없는 유형은 404 `ROOM_TYPE_RATE_PLAN_NOT_FOUND`다.
+- `GET /api/staff/hotels/{hotelId}/room-types/{roomTypeId}/defaults`가 수정 화면에 미리 채울 현재값을 돌려준다. SELECT만 사용한다. 카탈로그 본문의 객실 유형에도 `breakfastIncluded`·`defaultRateKrw`가 추가됐다.
+- 요금 입력은 `type="text"` + `inputMode="numeric"`을 썼다. 브라우저가 `max` 초과로 폼 제출을 막으면 서버 검증 응답이 도달하지 않으므로(공통 정책 화면에서 이미 같은 문제가 있었다) 범위 판단은 서버에 뒀다.
+- API **전체 506건**(건너뜀 3)이 종료 코드 0이고, 관리자 `tsc --noEmit`·`eslint`(경고 2건)·Playwright `hotel-catalog` 15건·전체 회귀 **182 passed**가 종료 코드 0이다. 라이브에서 본사 세션으로 생성 201 `breakfastIncluded=true defaultRateKrw=95000`·수정 200·같은 키 재호출 200 `created=false`·음수·초과 요금 400·`defaults` 200을 확인했고, 고객 `GET /api/availability` 응답에 새 유형이 `remaining=8 total=330000 breakfastIncluded=true`로 포함됐다. 검증용 유형은 삭제해 라이브를 원래 4종으로 복원했다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-20-hq-room-type-breakfast-rate.md)을 따른다.
 
 ## 본사 객실 유형 - 이름·최대 인원 수정 (2026-09-20)
 

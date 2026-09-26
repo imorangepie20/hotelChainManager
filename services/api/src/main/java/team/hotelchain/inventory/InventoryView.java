@@ -14,11 +14,14 @@ public record InventoryView(
             List<InventoryDay> days) {
     }
 
+    // salesStatus는 총량과 별개다. STOPPED여도 capacity는 그대로여서
+    // 재개하면 중지 전과 같은 재고가 돌아온다.
     public record InventoryDay(
             LocalDate stayDate,
             int capacity,
             int held,
             int confirmed,
-            int remaining) {
+            int remaining,
+            String salesStatus) {
     }
 }

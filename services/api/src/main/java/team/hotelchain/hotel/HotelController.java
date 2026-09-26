@@ -19,10 +19,11 @@ public class HotelController {
 
     @GetMapping
     public List<HotelSummary> list() {
-        return jdbc.query(
-                "select id, name, region, timezone from hotel order by name",
-                (rs, rowNumber) -> new HotelSummary(
-                        rs.getObject("id", java.util.UUID.class),
-                        rs.getString("name"), rs.getString("region"), rs.getString("timezone")));
+                // 판매 중지한 지점은 고객에게 보이지 않는다. 예약 화면에서 선택할 수 없어야 한다.
+                return jdbc.query(
+                        "select id, name, region, timezone from hotel where active order by name",
+                        (rs, rowNumber) -> new HotelSummary(
+                                rs.getObject("id", java.util.UUID.class),
+                                rs.getString("name"), rs.getString("region"), rs.getString("timezone"), true));
     }
 }

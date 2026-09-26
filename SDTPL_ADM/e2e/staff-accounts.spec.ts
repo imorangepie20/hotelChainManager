@@ -21,12 +21,15 @@ const ACCOUNTS_BODY = JSON.stringify([
   },
 ]);
 
-function seedStaffScript(role: "HQ_ADMIN" | "BRANCH_STAFF") {
+function seedStaffScript(
+  role: "HQ_ADMIN" | "BRANCH_STAFF",
+  id = "test",
+) {
   const staff =
     role === "HQ_ADMIN"
-      ? { id: "test", email: "hq@example.com", displayName: "본사 관리자", role, hotelId: null }
+      ? { id, email: "hq@example.com", displayName: "본사 관리자", role, hotelId: null }
       : {
-          id: "test",
+          id,
           email: "sokcho@example.com",
           displayName: "속초 직원",
           role,
@@ -270,4 +273,166 @@ test("does not offer password reset to branch staff", async ({ page }) => {
 
   await expect(page.getByText("직원 관리는 본사 관리자만 할 수 있습니다.")).toBeVisible();
   await expect(page.getByTestId("reset-password-staff-10000000-0000-0000-0000-000000000001")).toHaveCount(0);
+});
+
+// 삭제한 직원은 서버가 돌려주는 목록에서 빠진다.
+function deletedAccountsBody() {
+  const accounts = JSON.parse(ACCOUNTS_BODY) as Array<{
+    [key: string]: unknown;
+  }>;
+  return JSON.stringify(accounts.slice(0, 1));
+}
+
+// /api/staff/staff(목록 GET)과 /api/staff/staff/{id}(DELETE)를 한
+// 핸들러가 잡는다. glob의 *는 /를 넘지 못하므로 컬렉션과 하위 경로를
+// 함께 쓸 때는 중괄호 확장을 쓴다.
+function deletionListHandler(
+  listBody: () => string,
+  deleteResponse: (route: import("@playwright/test").Route) => Promise<void>,
+) {
+  return async (route: import("@playwright/test").Route) => {
+    const url = route.request().url();
+    // /api/staff/me는 url이 /api/staff/staff로 끝나지 않아 여기에 들지 않는다.
+    if (url.endsWith("/api/staff/staff")) {
+      if (route.request().method() !== "GET") {
+        await route.fulfill({
+          status: 405,
+          contentType: "application/json",
+          body: JSON.stringify({}),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: listBody(),
+      });
+      return;
+    }
+    // /api/staff/staff/{id}의 DELETE만 잡는다. 비밀번호 재발급 등
+    // 다른 하위 경로 POST·PATCH는 이 핸들러가 응답하지 않는다.
+    if (
+      url.includes("/api/staff/staff/") &&
+      route.request().method() === "DELETE"
+    ) {
+      await deleteResponse(route);
+      return;
+    }
+    await route.fulfill({
+      status: 405,
+      contentType: "application/json",
+      body: JSON.stringify({}),
+    });
+  };
+}
+
+// 삭제는 매번 새 멱원 키를 쓰는 본사 전용 동작이다.
+test("deletes an account and removes it from the list", async ({ page }) => {
+  await page.addInitScript(seedStaffScript("HQ_ADMIN"));
+  let deleted = false;
+  await page.route(
+    "**/api/staff/staff{,/**}",
+    deletionListHandler(
+      () => (deleted ? deletedAccountsBody() : ACCOUNTS_BODY),
+      async (route) => {
+        deleted = true;
+        await route.fulfill({
+          status: 201,
+          contentType: "application/json",
+          body: JSON.stringify({
+            staffId: "staff-20000000-0000-0000-0000-000000000002",
+            email:
+              "deleted-staff-20000000-0000-0000-0000-000000000002@deleted.local",
+            displayName: "삭제된 직원",
+            deleted: true,
+            remainingStaff: 1,
+          }),
+        });
+      },
+    ),
+  );
+
+  await page.goto("/dashboard/staff");
+  await expect(page.getByText("직원 2명")).toBeVisible();
+
+  // 목록의 id 앞에 delete-staff- 접두어가 붙는다.
+  await page
+    .getByTestId("delete-staff-staff-20000000-0000-0000-0000-000000000002")
+    .click();
+
+  await expect(page.getByText("이 작업은 되돌릴 수 없다")).toBeVisible();
+  await page.getByTestId("delete-staff-submit").click();
+
+  await expect(deleted).toBe(true);
+  // 삭제된 직원은 목록에서 빠진다.
+  await expect(page.getByText("직원 1명")).toBeVisible();
+  await expect(page.getByTestId("delete-staff-notice")).toContainText(
+    "남은 직원은 1명입니다",
+  );
+});
+
+test("keeps the delete dialog open when a conflict blocks deletion", async ({ page }) => {
+  await page.addInitScript(seedStaffScript("HQ_ADMIN"));
+  // message를 주지 않아 클라이언트가 코드별 한국어 안내로 넘어가는지 확인한다.
+  await page.route(
+    "**/api/staff/staff{,/**}",
+    deletionListHandler(() => ACCOUNTS_BODY, async (route) => {
+      await route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({ code: "STAFF_DELETION_CONFLICT" }),
+      });
+    }),
+  );
+
+  await page.goto("/dashboard/staff");
+  await expect(page.getByText("직원 2명")).toBeVisible();
+  await page
+    .getByTestId("delete-staff-staff-20000000-0000-0000-0000-000000000002")
+    .click();
+  await page.getByTestId("delete-staff-submit").click();
+
+  await expect(page.getByTestId("delete-staff-form-error")).toContainText(
+    "진행 중인 예약 변경 요청이나 정산 실행이 있어 삭제할 수 없습니다",
+  );
+  // 서버 검증 실패 시 대화상자를 닫지 않는다.
+  await expect(page.getByTestId("delete-staff-submit")).toBeVisible();
+  // 직원은 여전히 2명이다.
+  await expect(page.getByText("직원 2명")).toBeVisible();
+});
+
+test("explains when deleting your own account is refused", async ({ page }) => {
+  await page.addInitScript(
+    seedStaffScript("HQ_ADMIN", "staff-10000000-0000-0000-0000-000000000001"),
+  );
+  await page.route(
+    "**/api/staff/staff{,/**}",
+    deletionListHandler(() => ACCOUNTS_BODY, async (route) => {
+      await route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({ code: "STAFF_SELF_MODIFICATION_FORBIDDEN" }),
+      });
+    }),
+  );
+
+  await page.goto("/dashboard/staff");
+  await expect(page.getByText("직원 2명")).toBeVisible();
+  await page
+    .getByTestId("delete-staff-staff-10000000-0000-0000-0000-000000000001")
+    .click();
+  await page.getByTestId("delete-staff-submit").click();
+
+  await expect(page.getByTestId("delete-staff-form-error")).toContainText(
+    "본인 계정은 삭제할 수 없습니다",
+  );
+  await expect(page.getByText("직원 2명")).toBeVisible();
+});
+
+test("keeps the delete button away from branch staff", async ({ page }) => {
+  await page.addInitScript(seedStaffScript("BRANCH_STAFF"));
+  await page.goto("/dashboard/staff");
+
+  await expect(page.getByText("직원 관리는 본사 관리자만 할 수 있습니다.")).toBeVisible();
+  await expect(page.getByTestId("delete-staff-staff-10000000-0000-0000-0000-000000000001")).toHaveCount(0);
 });

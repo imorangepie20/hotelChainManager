@@ -1,16 +1,20 @@
 import type { LucideIcon } from "lucide-react";
-import { Bot, Boxes, CalendarDays, ClipboardCheck, Globe, History, Hotel, LayoutDashboard, ScrollText, TrendingUp, Users, Wallet } from "lucide-react";
+import { Bot, Boxes, CalendarDays, ClipboardCheck, Globe, History, Hotel, Inbox, LayoutDashboard, ScrollText, TrendingUp, UserCog, Users, Wallet } from "lucide-react";
 
 export type NavItem = { title: string; href: string; icon?: LucideIcon };
 export type NavGroup = { label: string; items: NavItem[] };
 export type StaffRole = "HQ_ADMIN" | "HQ_EDITOR" | "HQ_PUBLISHER" | "BRANCH_STAFF";
 
+// 전 역할이 본인 계정을 고칠 수 있다. 본사 관리 그룹이 아닌
+// 운영 그룹에 넣어서 지점 직원도 메뉴를 본다.
 const operationsGroup: NavGroup = {
   label: "운영",
   items: [
     { title: "운영 대시보드", href: "/dashboard/default", icon: LayoutDashboard },
     { title: "예약 관리", href: "/dashboard/reservations", icon: CalendarDays },
     { title: "오늘의 운영", href: "/dashboard/operations", icon: ClipboardCheck },
+    { title: "고객 요청", href: "/dashboard/guest-requests", icon: Inbox },
+    { title: "내 계정", href: "/dashboard/me", icon: UserCog },
   ],
 };
 
