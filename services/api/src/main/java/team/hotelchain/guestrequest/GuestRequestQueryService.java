@@ -163,9 +163,17 @@ public class GuestRequestQueryService {
     private GuestRequestView toView(RequestRow request) {
         List<GuestRequestView.EventView> events = jdbc.query("""
                 select e.id, e.event_type, e.from_status, e.to_status,
-                       coalesce(s.display_name, '시스템') as actor_display_name, e.note, e.created_at
+                       e.from_assigned_to, e.to_assigned_to,
+                       previous_assignee.display_name as from_assigned_display_name,
+                       next_assignee.display_name as to_assigned_display_name,
+                       e.from_priority, e.to_priority,
+                       case when e.event_type = 'CREATED' then '고객'
+                            else coalesce(s.display_name, '시스템') end as actor_display_name,
+                       e.note, e.created_at
                   from guest_request_event e
                   left join staff_member s on s.id = e.actor_staff_id
+                  left join staff_member previous_assignee on previous_assignee.id = e.from_assigned_to
+                  left join staff_member next_assignee on next_assignee.id = e.to_assigned_to
                  where e.request_id = ?
                  order by e.created_at, e.id
                 """, (rs, rowNumber) -> new GuestRequestView.EventView(
@@ -173,6 +181,12 @@ public class GuestRequestQueryService {
                         rs.getString("event_type"),
                         rs.getString("from_status"),
                         rs.getString("to_status"),
+                        rs.getObject("from_assigned_to", UUID.class),
+                        rs.getObject("to_assigned_to", UUID.class),
+                        rs.getString("from_assigned_display_name"),
+                        rs.getString("to_assigned_display_name"),
+                        rs.getString("from_priority"),
+                        rs.getString("to_priority"),
                         rs.getString("actor_display_name"),
                         rs.getString("note"),
                         rs.getTimestamp("created_at").toInstant()),

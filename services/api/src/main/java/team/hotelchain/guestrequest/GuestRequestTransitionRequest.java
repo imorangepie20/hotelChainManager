@@ -14,5 +14,7 @@ public record GuestRequestTransitionRequest(
 
         UUID assignTo,
 
+        String priority,
+
         String resolutionNote) {
 }

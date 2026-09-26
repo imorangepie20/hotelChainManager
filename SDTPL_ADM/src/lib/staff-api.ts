@@ -3583,6 +3583,7 @@ export type AuditEventType =
   | "ROOM_OPERATIONAL_TRANSITION"
   | "CHECKED_IN_ROOM_MOVE"
   | "CHANGE_REQUEST_EVENT"
+  | "GUEST_REQUEST_EVENT"
   | "POLICY_CHANGE";
 
 export const auditEventLabels: Record<AuditEventType, string> = {
@@ -3594,6 +3595,7 @@ export const auditEventLabels: Record<AuditEventType, string> = {
   ROOM_OPERATIONAL_TRANSITION: "객실 운영 상태",
   CHECKED_IN_ROOM_MOVE: "투숙 중 객실 이동",
   CHANGE_REQUEST_EVENT: "예약 변경 요청",
+  GUEST_REQUEST_EVENT: "고객 요청 이력",
   POLICY_CHANGE: "정책 변경",
 };
 
@@ -3619,18 +3621,17 @@ export type AuditEvents = {
   masked: boolean;
 };
 
-export async function getAuditEvents(
-  token: string,
-  filters: {
-    reservationId?: string;
-    hotelId?: string;
-    from?: string;
-    to?: string;
-    masked?: boolean;
-    limit?: number;
-    offset?: number;
-  } = {},
-): Promise<AuditEvents> {
+export type AuditEventFilters = {
+  reservationId?: string;
+  hotelId?: string;
+  from?: string;
+  to?: string;
+  masked?: boolean;
+  limit?: number;
+  offset?: number;
+};
+
+function auditQuery(filters: AuditEventFilters) {
   const searchParams = new URLSearchParams();
   if (filters.reservationId)
     searchParams.set("reservationId", filters.reservationId);
@@ -3640,8 +3641,14 @@ export async function getAuditEvents(
   if (filters.masked) searchParams.set("masked", "true");
   if (filters.limit) searchParams.set("limit", String(filters.limit));
   if (filters.offset) searchParams.set("offset", String(filters.offset));
-  const query = searchParams.size ? `?${searchParams}` : "";
-  const response = await fetch(`/api/staff/audit${query}`, {
+  return searchParams.size ? `?${searchParams}` : "";
+}
+
+export async function getAuditEvents(
+  token: string,
+  filters: AuditEventFilters = {},
+): Promise<AuditEvents> {
+  const response = await fetch(`/api/staff/audit${auditQuery(filters)}`, {
     headers: { "X-Staff-Session": token },
   });
   if (!response.ok) {
@@ -3653,6 +3660,28 @@ export async function getAuditEvents(
     );
   }
   return (await response.json()) as AuditEvents;
+}
+
+export async function downloadAuditEventsXlsx(
+  token: string,
+  filters: AuditEventFilters = {},
+): Promise<{ blob: Blob; filename: string }> {
+  const response = await fetch(
+    `/api/staff/audit/export.xlsx${auditQuery(filters)}`,
+    { headers: { "X-Staff-Session": token } },
+  );
+  if (!response.ok) {
+    const error = (await response.json().catch(() => ({}))) as ApiErrorPayload;
+    throw new StaffApiError(
+      error.message ?? auditFailureMessage(response.status),
+      response.status,
+      error.code,
+    );
+  }
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1]
+    ?? `audit-events-${filters.offset ?? 0}.xlsx`;
+  return { blob: await response.blob(), filename };
 }
 
 function auditFailureMessage(status: number) {
@@ -3689,9 +3718,18 @@ export function buildAuditEventsCsv(view: AuditEvents): string {
   ]);
   return [header, ...rows]
     .map((cells) =>
-      cells.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(","),
+      cells
+        .map((cell) =>
+          `"${safeSpreadsheetText(String(cell)).replaceAll('"', '""')}"`,
+        )
+        .join(","),
     )
     .join("\r\n");
+}
+
+function safeSpreadsheetText(value: string) {
+  const first = value.trimStart().at(0);
+  return first && "=+-@".includes(first) ? `'${value}` : value;
 }
 
 // 본사가 지점별 운영 통계를 읽기 전용으로 확인한다. 매출은 취소·노쇼를 제외한다.
@@ -3941,7 +3979,13 @@ export type GuestRequestEvent = {
   id: string;
   eventType: string;
   fromStatus: GuestRequestStatus | null;
-  toStatus: GuestRequestStatus;
+  toStatus: GuestRequestStatus | null;
+  fromAssignedTo?: string | null;
+  toAssignedTo?: string | null;
+  fromAssignedDisplayName?: string | null;
+  toAssignedDisplayName?: string | null;
+  fromPriority?: string | null;
+  toPriority?: string | null;
   actorDisplayName: string;
   note: string | null;
   createdAt: string;

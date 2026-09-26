@@ -13,20 +13,26 @@ const EVENT_TYPES = [
 ];
 
 function sampleEvents(count: number) {
-  return Array.from({ length: count }, (_, index) => ({
-    eventType: EVENT_TYPES[index % EVENT_TYPES.length],
-    createdAt: `2026-09-20T10:${String(index).padStart(2, "0")}:00+09:00`,
-    staffEmail: "hq@example.test",
-    staffDisplayName: "본사 관리자",
-    staffRole: "HQ_ADMIN",
-    hotelId: "11000000-0000-0000-0000-000000000001",
-    hotelName: "속초 지점",
-    reservationId:
-      index % 2 === 0 ? "56000000-0000-0000-0000-000000000001" : null,
-    guestName: index % 2 === 0 ? "감사 고객" : null,
-    roomNumber: index % 3 === 0 ? "102" : null,
-    summary: `감사 요약 ${index}`,
-  }));
+  return Array.from({ length: count }, (_, index) => {
+    const eventType = EVENT_TYPES[index % EVENT_TYPES.length];
+    const customerCreated = eventType === "GUEST_REQUEST_EVENT";
+    return {
+      eventType,
+      createdAt: `2026-09-20T10:${String(index).padStart(2, "0")}:00+09:00`,
+      staffEmail: customerCreated ? "" : "hq@example.test",
+      staffDisplayName: customerCreated ? "고객" : "본사 관리자",
+      staffRole: customerCreated ? "CUSTOMER" : "HQ_ADMIN",
+      hotelId: "11000000-0000-0000-0000-000000000001",
+      hotelName: "속초 지점",
+      reservationId:
+        index % 2 === 0 ? "56000000-0000-0000-0000-000000000001" : null,
+      guestName: index % 2 === 0 ? "감사 고객" : null,
+      roomNumber: index % 3 === 0 ? "102" : null,
+      summary: customerCreated
+        ? "고객 요청 abcdef12 생성 / 유형 ROOM_REQUEST / 우선순위 NORMAL"
+        : `감사 요약 ${index}`,
+    };
+  });
 }
 
 const EVENTS_BODY = (count: number, offset: number, masked = false) =>
@@ -132,6 +138,10 @@ test("labels event types in korean", async ({ page }) => {
   ]) {
     await expect(page.getByRole("cell", { name: label })).toBeVisible();
   }
+  await expect(page.getByRole("cell", { name: "고객", exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("cell", { name: /고객 요청 abcdef12 생성/ }),
+  ).toBeVisible();
 });
 
 test("moves to the next page", async ({ page }) => {
@@ -237,16 +247,25 @@ test("asks the server to mask personal information", async ({ page }) => {
 
 test("exports the visible events as csv", async ({ page }) => {
   await page.addInitScript(seedStaffScript("HQ_ADMIN"));
+  const events = sampleEvents(2);
+  events[0].eventType = "GUEST_REQUEST_EVENT";
+  events[0].summary = "고객 요청 abcdef12 상태 OPEN → IN_PROGRESS";
   await page.route("**/api/staff/audit*", (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: EVENTS_BODY(2, 0),
+      body: JSON.stringify({
+        events,
+        totalCount: 2,
+        limit: 20,
+        offset: 0,
+        masked: false,
+      }),
     }),
   );
 
   await page.goto("/dashboard/audit");
-  await expect(page.getByText("감사 이력 25건")).toBeVisible();
+  await expect(page.getByText("감사 이력 2건")).toBeVisible();
 
   const download = page.waitForEvent("download");
   await page.getByTestId("audit-csv").click();
@@ -256,10 +275,48 @@ test("exports the visible events as csv", async ({ page }) => {
   for await (const chunk of stream) chunks.push(Buffer.from(chunk));
   const text = Buffer.concat(chunks).toString("utf8");
 
-  expect(text).toContain("발생 시각");
-  expect(text).toContain("예약자 정정");
+  expect(received.suggestedFilename()).toBe("audit-events-0.csv");
+  expect(text.startsWith("\uFEFF")).toBe(true);
+  const lines = text.slice(1).split("\r\n");
+  expect(lines).toHaveLength(3);
+  expect(lines[0]).toBe(
+    '"발생 시각","유형","처리 직원","처리 직원 이메일","역할","지점","예약 id","고객","객실","내용"',
+  );
+  expect(lines[1].split(",")).toHaveLength(10);
+  expect(lines[2].split(",")).toHaveLength(10);
+  expect(text.replaceAll("\r\n", "")).not.toContain("\n");
+  expect(text).toContain("고객 요청 이력");
   expect(text).toContain("본사 관리자");
-  expect(text).toContain("감사 요약 0");
+  expect(text).toContain("고객 요청 abcdef12 상태 OPEN → IN_PROGRESS");
+});
+
+test("neutralizes spreadsheet formulas in csv cells", async ({ page }) => {
+  await page.addInitScript(seedStaffScript("HQ_ADMIN"));
+  const [event] = sampleEvents(1);
+  await page.route("**/api/staff/audit*", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        events: [{ ...event, staffDisplayName: "=1+1", summary: "@위험" }],
+        totalCount: 1,
+        limit: 20,
+        offset: 0,
+        masked: false,
+      }),
+    }),
+  );
+
+  await page.goto("/dashboard/audit");
+  const download = page.waitForEvent("download");
+  await page.getByTestId("audit-csv").click();
+  const stream = await (await download).createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+  const text = Buffer.concat(chunks).toString("utf8");
+
+  expect(text).toContain("'=1+1");
+  expect(text).toContain("'@위험");
 });
 
 test("exports xlsx with the current page and masking filters", async ({ page }) => {
@@ -280,7 +337,7 @@ test("exports xlsx with the current page and masking filters", async ({ page }) 
       contentType:
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       headers: {
-        "Content-Disposition": 'attachment; filename="audit-events-masked-0.xlsx"',
+        "Content-Disposition": 'attachment; filename="audit-events-masked-20.xlsx"',
       },
       body: Buffer.from("PK-test-xlsx"),
     });
@@ -291,15 +348,16 @@ test("exports xlsx with the current page and masking filters", async ({ page }) 
   await expect.poll(() => page.getByTestId("audit-masked").textContent()).toContain(
     "마스킹 켜짐",
   );
+  await page.getByRole("button", { name: "다음 페이지" }).click();
 
   const download = page.waitForEvent("download");
   await page.getByTestId("audit-xlsx").click();
   const received = await download;
 
-  expect(received.suggestedFilename()).toBe("audit-events-masked-0.xlsx");
+  expect(received.suggestedFilename()).toBe("audit-events-masked-20.xlsx");
   expect(exportQuery).toContain("masked=true");
   expect(exportQuery).toContain("limit=20");
-  expect(exportQuery).not.toContain("offset=");
+  expect(exportQuery).toContain("offset=20");
 });
 
 test("keeps audit controls usable at 390px", async ({ page }) => {

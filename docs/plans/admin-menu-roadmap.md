@@ -1,6 +1,6 @@
 # 관리자(Admin) 메뉴 로드맵
 
-> 최종 갱신: 2026-09-27 (환불 규칙·지점별 정책·감사 통합 완료).
+> 최종 갱신: 2026-09-27 (고객 요청 감사 통합·XLSX 완료).
 
 ## 현재 메뉴 (`SDTPL_ADM/src/lib/nav.ts`)
 | 그룹 | 메뉴 | 경로 | 권한 | 상태 |
@@ -66,14 +66,14 @@
 - 고객의 예약 변경·취소 요청과 일반 문의를 받고 처리 상태를 표시.
 - 현재: `POST /api/hotels/{hotelId}/guest-requests`가 고객의 객실·편의 요청·환불 문의·일반 문의를 받는다. 예약 변경·취소는 전용 API가 있으므로 이 API에서 처리하지 않는다. `GET /api/staff/guest-requests`가 본사는 전 지점을, 지점 직원은 자기 지점만 돌려주고 `GET /api/staff/guest-requests/{requestId}`가 연락처·내용·처리 이력을 돌려준다. `POST /api/staff/guest-requests/{requestId}/transition`이 처리 상태를 `OPEN`→`IN_PROGRESS`→`RESOLVED`→`CLOSED`로 바꾼다. 멱원은 두 갈래로 동작한다. `고객 요청` (`/dashboard/guest-requests`) 메뉴가 상태 필터·표·검토 대화상자·상태 변경 대화상자를 보여준다. 고객 웹 `/contact`·`/en/contact`가 요청 접수 폼을 제공한다.
 - **후보 메뉴**: `고객 요청` (`/dashboard/guest-requests`) — **1차 구현됨**
-- 남음: 담당자 지정 UI(현재는 상태 전환만 있다, `transition` 본문은 `assignTo`를 받는다), 요청 유형별 알림, 고객 요청 이력의 감사 메뉴(7번) 통합, `priority` 노출.
+- 남음: 담당자·우선순위 지정 UI(서버 `transition` 본문은 `assignTo`·`priority`를 받는다), 요청 유형별 알림.
 
 ### 7. 감사·이력 조회 (HQ_ADMIN)
 
 - V29~V37 감사 테이블(예약자 정정·인원·객실 재배정·일정 변경·취소·운영 상태 전환)의 통합 조회.
-  - 현재: `GET /api/staff/audit`가 `POLICY_CHANGE`를 포함한 9종 감사 이력을 발생 시각 내림차순으로 반환하고 `GET /api/staff/audit?masked=true`가 고객 이름·이메일과 `GUEST_UPDATE` 요약의 개인정보를 가린다. 정책 감사에는 체인·지점, SET·INHERIT, 처리 직원과 변경 시각이 포함된다. `감사 이력` (`/dashboard/audit`) 메뉴가 유형별 표·더 보기 페이지 이동·개인정보 마스킹 토글·CSV 내보내기를 보여준다. SELECT만 사용한다.
-- **후보 메뉴**: `감사 이력` (`/dashboard/audit`) — **1차 + 개인정보 마스킹 + CSV 내보내기 구현됨**
-- 남음: Excel(xlsx) 내보내기(CSV만 있다), 고객 요청 이력(6번 메뉴와 겹침).
+  - 현재: `GET /api/staff/audit`가 `POLICY_CHANGE`·`GUEST_REQUEST_EVENT`를 포함한 10종 감사 이력을 발생 시각 내림차순과 원본 UUID 보조키로 반환한다. 고객 요청 생성·담당자·우선순위·상태 변경을 포함하며 제목·본문·연락처·처리 메모는 요약에 넣지 않는다. `masked=true`는 기존 고객 이름·이메일과 `GUEST_UPDATE` 요약 개인정보를 가린다. `GET /api/staff/audit/export.xlsx`는 같은 필터·마스킹·현재 페이지를 기존 CSV와 같은 10개 열로 내려준다. `감사 이력` (`/dashboard/audit`) 메뉴가 유형별 표·페이지 이동·개인정보 마스킹 토글·CSV/XLSX 내보내기를 보여준다. 조회와 내보내기는 SELECT만 사용한다.
+- **후보 메뉴**: `감사 이력` (`/dashboard/audit`) — **고객 요청 통합 + 개인정보 마스킹 + CSV/XLSX 구현됨**
+- 남음: 없음.
 
 ### 8. AI 도우미 운영 (HQ_ADMIN)
 

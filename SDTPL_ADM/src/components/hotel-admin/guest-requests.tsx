@@ -58,6 +58,28 @@ function dateTime(value: string) {
   return parsed.toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
 }
 
+function eventChange(event: GuestRequestDetail["events"][number]) {
+  if (event.eventType === "CREATED") {
+    return `요청 생성 · 우선순위 ${event.toPriority ?? "NORMAL"}`;
+  }
+  if (event.eventType === "ASSIGNED") {
+    return `담당자 ${event.fromAssignedDisplayName ?? "미지정"} → ${event.toAssignedDisplayName ?? "미지정"}`;
+  }
+  if (event.eventType === "PRIORITY_CHANGED") {
+    return `우선순위 ${event.fromPriority ?? "없음"} → ${event.toPriority ?? "없음"}`;
+  }
+  if (event.fromStatus || event.toStatus) {
+    const from = event.fromStatus
+      ? guestRequestStatusLabels[event.fromStatus]
+      : "시작";
+    const to = event.toStatus
+      ? guestRequestStatusLabels[event.toStatus]
+      : "상태 없음";
+    return `${from} → ${to}`;
+  }
+  return event.eventType === "NOTE_ADDED" ? "메모 추가" : event.eventType;
+}
+
 export function GuestRequests() {
   const [staff, setStaff] = useState<StaffPrincipal | null>(null);
   const [requests, setRequests] = useState<GuestRequestSummary[]>([]);
@@ -439,7 +461,7 @@ export function GuestRequests() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>시각</TableHead>
-                      <TableHead>전환</TableHead>
+                      <TableHead>변경</TableHead>
                       <TableHead>처리 직원</TableHead>
                       <TableHead>비고</TableHead>
                     </TableRow>
@@ -450,19 +472,7 @@ export function GuestRequests() {
                         <TableCell className="whitespace-nowrap tabular-nums">
                           {dateTime(event.createdAt)}
                         </TableCell>
-                        <TableCell>
-                          {event.fromStatus
-                            ? guestRequestStatusLabels[
-                                event.fromStatus as GuestRequestStatus
-                              ]
-                            : "시작"}{" "}
-                          →{" "}
-                          {
-                            guestRequestStatusLabels[
-                              event.toStatus as GuestRequestStatus
-                            ]
-                          }
-                        </TableCell>
+                        <TableCell>{eventChange(event)}</TableCell>
                         <TableCell>{event.actorDisplayName}</TableCell>
                         <TableCell className="max-w-[30ch] break-words text-sm">
                           {event.note ?? "-"}

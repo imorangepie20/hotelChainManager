@@ -9,6 +9,7 @@ import java.util.UUID;
 
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 import team.hotelchain.staff.StaffAccessService;
@@ -38,7 +39,7 @@ public class AuditQueryService {
         this.access = access;
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public AuditEventsView list(String token, AuditQueryFilters filters) {
         access.requireHeadquarters(token);
         validate(filters);
@@ -56,7 +57,7 @@ public class AuditQueryService {
         rows.add(filters.offset());
         List<AuditEventView> events = jdbc.query(
                 "select " + COLUMNS + " from (" + unionAll() + ") a" + where
-                        + " order by created_at desc, event_type, reservation_id nulls last"
+                        + " order by created_at desc, event_type, source_event_id"
                         + " limit ? offset ?",
                 this::mapEvent, rows.toArray());
 
@@ -127,14 +128,14 @@ public class AuditQueryService {
     private String unionAll() {        return String.join("\nunion all\n", List.of(
                 guestChanges(), partyChanges(), roomReassignments(), stayChanges(),
                 cancellations(), roomOperationalTransitions(), checkedInRoomMoves(),
-                changeRequestEvents(), policyChanges()));
+                changeRequestEvents(), guestRequestEvents(), policyChanges()));
     }
 
     // 취소·환불 정책 revision도 통합 감사 이력에 노출한다. 멱원 키와 요청 해시는
     // 운영 화면에 노출하지 않고 scope와 사람이 읽을 수 있는 규칙 요약만 제공한다.
     private String policyChanges() {
         return """
-                select 'POLICY_CHANGE' as event_type, p.created_at,
+                select 'POLICY_CHANGE' as event_type, p.id::text as source_event_id, p.created_at,
                        s.email as staff_email, s.display_name as staff_display_name, s.role as staff_role,
                        p.hotel_id::text as hotel_id, coalesce(h.name, '체인 전체') as hotel_name,
                        cast(null as text) as reservation_id, cast(null as text) as guest_name,
@@ -160,7 +161,7 @@ public class AuditQueryService {
     // 예약자 정정. 이전 이름·이메일 → 새 이름·이메일
     private String guestChanges() {
         return """
-                select 'GUEST_UPDATE' as event_type, c.created_at,
+                select 'GUEST_UPDATE' as event_type, c.id::text as source_event_id, c.created_at,
                        s.email as staff_email, s.display_name as staff_display_name, s.role as staff_role,
                        rt.hotel_id::text as hotel_id, h.name as hotel_name,
                        c.reservation_id::text as reservation_id, r.guest_name as guest_name,
@@ -178,7 +179,7 @@ public class AuditQueryService {
     // 투숙 인원 변경. 이전 성인·아동 → 새 성인·아동
     private String partyChanges() {
         return """
-                select 'PARTY_UPDATE' as event_type, c.created_at,
+                select 'PARTY_UPDATE' as event_type, c.id::text as source_event_id, c.created_at,
                        s.email as staff_email, s.display_name as staff_display_name, s.role as staff_role,
                        rt.hotel_id::text as hotel_id, h.name as hotel_name,
                        c.reservation_id::text as reservation_id, r.guest_name as guest_name,
@@ -196,7 +197,7 @@ public class AuditQueryService {
     // 배정 객실 변경. 이전 객실 번호 → 새 객실 번호
     private String roomReassignments() {
         return """
-                select 'ROOM_REASSIGNMENT' as event_type, c.created_at,
+                select 'ROOM_REASSIGNMENT' as event_type, c.id::text as source_event_id, c.created_at,
                        s.email as staff_email, s.display_name as staff_display_name, s.role as staff_role,
                        rt.hotel_id::text as hotel_id, h.name as hotel_name,
                        c.reservation_id::text as reservation_id, r.guest_name as guest_name,
@@ -213,7 +214,7 @@ public class AuditQueryService {
     // 숙박 조건 변경. 이전 날짜·객실 유형·총액 → 새 날짜·객실 유형·총액
     private String stayChanges() {
         return """
-                select 'STAY_CHANGE' as event_type, c.created_at,
+                select 'STAY_CHANGE' as event_type, c.id::text as source_event_id, c.created_at,
                        s.email as staff_email, s.display_name as staff_display_name, s.role as staff_role,
                        rt.hotel_id::text as hotel_id, h.name as hotel_name,
                        c.reservation_id::text as reservation_id, r.guest_name as guest_name,
@@ -235,7 +236,7 @@ public class AuditQueryService {
     // 직원 예약 취소. 환불액과 취소 후 예약 상태
     private String cancellations() {
         return """
-                select 'CANCELLATION' as event_type, c.created_at,
+                select 'CANCELLATION' as event_type, c.id::text as source_event_id, c.created_at,
                        s.email as staff_email, s.display_name as staff_display_name, s.role as staff_role,
                        rt.hotel_id::text as hotel_id, h.name as hotel_name,
                        c.reservation_id::text as reservation_id, r.guest_name as guest_name,
@@ -253,7 +254,7 @@ public class AuditQueryService {
     // 실제 객실 운영 상태 전환. 이전 상태·사유 → 새 상태·사유
     private String roomOperationalTransitions() {
         return """
-                select 'ROOM_OPERATIONAL_TRANSITION' as event_type, e.created_at,
+                select 'ROOM_OPERATIONAL_TRANSITION' as event_type, e.id::text as source_event_id, e.created_at,
                        s.email as staff_email, s.display_name as staff_display_name, s.role as staff_role,
                        p.hotel_id::text as hotel_id, h.name as hotel_name,
                        cast(null as text) as reservation_id, cast(null as text) as guest_name,
@@ -270,7 +271,7 @@ public class AuditQueryService {
     // 투숙 중 객실 이동. 이전 객실 → 새 객실과 이동 사유
     private String checkedInRoomMoves() {
         return """
-                select 'CHECKED_IN_ROOM_MOVE' as event_type, c.created_at,
+                select 'CHECKED_IN_ROOM_MOVE' as event_type, c.id::text as source_event_id, c.created_at,
                        s.email as staff_email, s.display_name as staff_display_name, s.role as staff_role,
                        rt.hotel_id::text as hotel_id, h.name as hotel_name,
                        c.reservation_id::text as reservation_id, r.guest_name as guest_name,
@@ -288,7 +289,7 @@ public class AuditQueryService {
     // 예약 변경 요청의 상태 전환. actor_staff_id가 없는 자동 전환은 건너뛴다.
     private String changeRequestEvents() {
         return """
-                select 'CHANGE_REQUEST_EVENT' as event_type, e.created_at,
+                select 'CHANGE_REQUEST_EVENT' as event_type, e.id::text as source_event_id, e.created_at,
                        s.email as staff_email, s.display_name as staff_display_name, s.role as staff_role,
                        req.hotel_id::text as hotel_id, h.name as hotel_name,
                        req.reservation_id::text as reservation_id, r.guest_name as guest_name,
@@ -301,6 +302,46 @@ public class AuditQueryService {
                   join reservation r on r.id = req.reservation_id
                   join hotel h on h.id = req.hotel_id
                  where e.actor_staff_id is not null
+                """;
+    }
+
+    // 고객 요청 생성과 담당자·우선순위·상태 변경. 제목·본문·연락처·처리 메모는
+    // 감사 요약에 넣지 않아 마스킹 여부와 무관하게 개인정보·자유 입력을 노출하지 않는다.
+    private String guestRequestEvents() {
+        return """
+                select 'GUEST_REQUEST_EVENT' as event_type, e.id::text as source_event_id, e.created_at,
+                       coalesce(actor.email, '') as staff_email,
+                       coalesce(actor.display_name, '고객') as staff_display_name,
+                       coalesce(actor.role, 'CUSTOMER') as staff_role,
+                       req.hotel_id::text as hotel_id, h.name as hotel_name,
+                       req.reservation_id::text as reservation_id, req.guest_name as guest_name,
+                       cast(null as text) as room_number,
+                       case e.event_type
+                           when 'CREATED' then
+                               '고객 요청 ' || left(req.id::text, 8) || ' 생성 / 유형 ' || req.request_type
+                               || ' / 우선순위 ' || coalesce(e.to_priority, 'NORMAL')
+                           when 'ASSIGNED' then
+                               '고객 요청 ' || left(req.id::text, 8) || ' 담당자 '
+                               || coalesce(previous_assignee.display_name, '미지정') || ' → '
+                               || coalesce(next_assignee.display_name, '미지정')
+                           when 'PRIORITY_CHANGED' then
+                               '고객 요청 ' || left(req.id::text, 8) || ' 우선순위 '
+                               || coalesce(e.from_priority, '없음') || ' → ' || coalesce(e.to_priority, '없음')
+                           when 'STATUS_CHANGED' then
+                               '고객 요청 ' || left(req.id::text, 8) || ' 상태 '
+                               || coalesce(e.from_status, '없음') || ' → ' || coalesce(e.to_status, '없음')
+                           when 'CLOSED' then
+                               '고객 요청 ' || left(req.id::text, 8) || ' 종료 / 상태 '
+                               || coalesce(e.from_status, '없음') || ' → ' || coalesce(e.to_status, 'CLOSED')
+                           else '고객 요청 ' || left(req.id::text, 8) || ' ' || e.event_type
+                       end as summary
+                  from guest_request_event e
+                  join guest_request req on req.id = e.request_id
+                  join hotel h on h.id = req.hotel_id
+                  left join staff_member actor on actor.id = e.actor_staff_id
+                  left join staff_member previous_assignee on previous_assignee.id = e.from_assigned_to
+                  left join staff_member next_assignee on next_assignee.id = e.to_assigned_to
+                 where e.event_type in ('CREATED', 'ASSIGNED', 'PRIORITY_CHANGED', 'STATUS_CHANGED', 'CLOSED')
                 """;
     }
 

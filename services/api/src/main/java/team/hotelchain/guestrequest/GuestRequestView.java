@@ -34,6 +34,12 @@ public record GuestRequestView(
             String eventType,
             String fromStatus,
             String toStatus,
+            UUID fromAssignedTo,
+            UUID toAssignedTo,
+            String fromAssignedDisplayName,
+            String toAssignedDisplayName,
+            String fromPriority,
+            String toPriority,
             String actorDisplayName,
             String note,
             Instant createdAt) {

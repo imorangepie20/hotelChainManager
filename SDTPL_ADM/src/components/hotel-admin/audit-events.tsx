@@ -23,6 +23,7 @@ import {
 import {
   auditEventLabels,
   buildAuditEventsCsv,
+  downloadAuditEventsXlsx,
   getAuditEvents,
   StaffApiError,
   type AuditEvent,
@@ -31,6 +32,7 @@ import {
 } from "@/lib/staff-api";
 
 const PAGE_SIZE = 20;
+const MAX_OFFSET = 10_000;
 
 function eventLabel(eventType: string) {
   return auditEventLabels[eventType as AuditEventType] ?? eventType;
@@ -49,6 +51,7 @@ export function AuditEvents() {
   const [offset, setOffset] = useState(0);
   const [masked, setMasked] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
   const requestGeneration = useRef(0);
   const mounted = useRef(false);
@@ -136,14 +139,48 @@ export function AuditEvents() {
     URL.revokeObjectURL(url);
   }
 
-  function gotoPage(next: number) {
-    const page = Math.max(0, next);
-    if (page === offset) return;
-    setOffset(page);
+  async function downloadXlsx() {
+    if (!sessionToken || events.length === 0) return;
+    setExporting(true);
+    setError("");
+    try {
+      const file = await downloadAuditEventsXlsx(sessionToken, {
+        limit: PAGE_SIZE,
+        offset,
+        masked,
+      });
+      const url = URL.createObjectURL(file.blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = file.filename;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (cause) {
+      setError(
+        cause instanceof StaffApiError
+          ? cause.message
+          : "감사 이력 XLSX를 내려받지 못했습니다.",
+      );
+    } finally {
+      setExporting(false);
+    }
   }
 
-  const lastPage = Math.max(0, Math.ceil(totalCount / PAGE_SIZE) - 1);
-  const pageIndex = Math.min(offset, lastPage);
+  function gotoPage(next: number) {
+    const page = Math.max(0, next);
+    const nextOffset = page * PAGE_SIZE;
+    if (nextOffset === offset) return;
+    setOffset(nextOffset);
+  }
+
+  const lastPage = Math.max(
+    0,
+    Math.min(
+      Math.ceil(totalCount / PAGE_SIZE) - 1,
+      Math.floor(MAX_OFFSET / PAGE_SIZE),
+    ),
+  );
+  const pageIndex = Math.min(Math.floor(offset / PAGE_SIZE), lastPage);
 
   return (
     <div className="flex flex-col gap-4">
@@ -154,7 +191,7 @@ export function AuditEvents() {
             감사 이력
           </h2>
           <p className="mt-1 max-w-[72ch] text-sm text-muted-foreground">
-            예약자 정정·인원·객실 재배정·일정 변경·취소·운영 상태 전환 이력을
+            예약·객실 운영과 고객 요청의 생성·담당자·우선순위·상태 변경 이력을
             읽기 전용으로 확인한다.
           </p>
         </div>
@@ -191,6 +228,16 @@ export function AuditEvents() {
           >
             <Download className="h-4 w-4" aria-hidden />
             CSV 내보내기
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void downloadXlsx()}
+            disabled={!isHeadquarters || events.length === 0 || exporting}
+            data-testid="audit-xlsx"
+          >
+            <Download className="h-4 w-4" aria-hidden />
+            {exporting ? "XLSX 준비 중" : "XLSX 내보내기"}
           </Button>
         </div>
       </div>
@@ -242,7 +289,7 @@ export function AuditEvents() {
                 <TableRow>
                   <TableHead>발생 시각</TableHead>
                   <TableHead>유형</TableHead>
-                  <TableHead>처리 직원</TableHead>
+                  <TableHead>행위자</TableHead>
                   <TableHead>지점</TableHead>
                   <TableHead>예약</TableHead>
                   <TableHead>객실</TableHead>
@@ -250,9 +297,9 @@ export function AuditEvents() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {events.map((event) => (
+                {events.map((event, index) => (
                   <TableRow
-                    key={`${event.eventType}-${event.createdAt}-${event.staffEmail}`}
+                    key={`${offset + index}-${event.eventType}-${event.createdAt}`}
                   >
                     <TableCell className="whitespace-nowrap tabular-nums">
                       {dateTime(event.createdAt)}

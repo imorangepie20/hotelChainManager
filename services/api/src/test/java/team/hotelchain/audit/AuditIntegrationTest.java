@@ -7,6 +7,7 @@ import java.io.ByteArrayInputStream;
 import java.time.LocalDate;
 import java.util.UUID;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.hamcrest.Matchers;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.junit.jupiter.api.AfterEach;
@@ -39,10 +40,12 @@ class AuditIntegrationTest {
     @Autowired JdbcTemplate jdbc;
     @Autowired StaffAccessService staffAccess;
     @Autowired WebApplicationContext context;
+    @Autowired ObjectMapper objectMapper;
 
     private MockMvc mvc;
     private String hqToken;
     private String sokchoToken;
+    private UUID hqStaffId;
 
     @BeforeEach
     void seed() {
@@ -56,6 +59,7 @@ class AuditIntegrationTest {
 
         BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
         UUID hqId = UUID.randomUUID();
+        hqStaffId = hqId;
         UUID sokchoId = UUID.randomUUID();
         jdbc.update("insert into staff_member (id, email, display_name, password_hash, role, hotel_id) values (?, ?, ?, ?, ?, ?)",
                 hqId, HQ_EMAIL, "headquarters-admin", encoder.encode("hq-password"), "HQ_ADMIN", null);
@@ -224,6 +228,49 @@ class AuditIntegrationTest {
     }
 
     @Test
+    void sameTimestampEventsDoNotDuplicateAcrossPages() throws Exception {
+        UUID[] requests = {
+                UUID.fromString("a1000000-0000-0000-0000-000000000001"),
+                UUID.fromString("b1000000-0000-0000-0000-000000000002"),
+                UUID.fromString("c1000000-0000-0000-0000-000000000003") };
+        UUID[] events = {
+                UUID.fromString("01000000-0000-0000-0000-000000000001"),
+                UUID.fromString("02000000-0000-0000-0000-000000000002"),
+                UUID.fromString("03000000-0000-0000-0000-000000000003") };
+        for (int index = 0; index < requests.length; index++) {
+            jdbc.update("""
+                    insert into guest_request
+                        (id, hotel_id, request_type, subject, body, guest_name, guest_email,
+                         status, priority, idempotency_key, request_hash, created_at, updated_at)
+                    values (?, ?, 'OTHER', '제목', '본문', '고객', 'guest@example.com',
+                            'OPEN', 'NORMAL', ?, ?, now(), now())
+                    """, requests[index], SOKCHO, "stable-page-" + index, ("d" + index).repeat(32));
+            jdbc.update("""
+                    insert into guest_request_event
+                        (id, request_id, event_type, from_status, to_status, to_priority, created_at)
+                    values (?, ?, 'CREATED', null, 'OPEN', 'NORMAL',
+                            date_trunc('second', now()) + interval '1 minute')
+                    """, events[index], requests[index]);
+        }
+
+        String first = mvc.perform(MockMvcRequestBuilders.get("/api/staff/audit")
+                        .header("X-Staff-Session", hqToken).param("limit", "2").param("offset", "0"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        String second = mvc.perform(MockMvcRequestBuilders.get("/api/staff/audit")
+                        .header("X-Staff-Session", hqToken).param("limit", "2").param("offset", "2"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+
+        var summaries = new java.util.ArrayList<String>();
+        objectMapper.readTree(first).get("events").forEach(node -> summaries.add(node.get("summary").asText()));
+        objectMapper.readTree(second).get("events").forEach(node -> summaries.add(node.get("summary").asText()));
+        org.assertj.core.api.Assertions.assertThat(summaries).hasSize(4);
+        for (UUID request : requests) {
+            org.assertj.core.api.Assertions.assertThat(summaries.stream()
+                    .filter(summary -> summary.contains(request.toString().substring(0, 8))).count()).isEqualTo(1);
+        }
+    }
+
+    @Test
     void unknownHotelIsNotFound() throws Exception {
         mvc.perform(MockMvcRequestBuilders.get("/api/staff/audit")
                 .header("X-Staff-Session", hqToken)
@@ -292,7 +339,7 @@ class AuditIntegrationTest {
     }
 
     @Test
-    void customerCreatedGuestRequestAppearsWithoutLeakingMessageOrContact() throws Exception {
+    void guestRequestLifecycleAppearsWithoutLeakingMessageOrContact() throws Exception {
         UUID requestId = UUID.randomUUID();
         jdbc.update("""
                 insert into guest_request
@@ -307,17 +354,44 @@ class AuditIntegrationTest {
                     (id, request_id, event_type, from_status, to_status, actor_staff_id, note, created_at)
                 values (?, ?, 'CREATED', null, 'OPEN', null, null, now() - interval '30 second')
                 """, UUID.randomUUID(), requestId);
+        jdbc.update("""
+                insert into guest_request_event
+                    (id, request_id, event_type, from_assigned_to, to_assigned_to,
+                     actor_staff_id, note, created_at)
+                values (?, ?, 'ASSIGNED', null, ?, ?, '=비밀 메모', now() - interval '20 second')
+                """, UUID.randomUUID(), requestId, hqStaffId, hqStaffId);
+        jdbc.update("""
+                insert into guest_request_event
+                    (id, request_id, event_type, from_priority, to_priority,
+                     actor_staff_id, note, created_at)
+                values (?, ?, 'PRIORITY_CHANGED', 'NORMAL', 'HIGH', ?, '+비밀 메모', now() - interval '10 second')
+                """, UUID.randomUUID(), requestId, hqStaffId);
+        jdbc.update("""
+                insert into guest_request_event
+                    (id, request_id, event_type, from_status, to_status,
+                     actor_staff_id, note, created_at)
+                values (?, ?, 'STATUS_CHANGED', 'OPEN', 'IN_PROGRESS', ?, '@비밀 메모', now())
+                """, UUID.randomUUID(), requestId, hqStaffId);
 
         mvc.perform(MockMvcRequestBuilders.get("/api/staff/audit")
                 .header("X-Staff-Session", hqToken)
                 .param("masked", "true")
                 .param("limit", "20"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.totalCount").value(9))
+                .andExpect(jsonPath("$.totalCount").value(12))
+                .andExpect(jsonPath("$.events[?(@.eventType == 'GUEST_REQUEST_EVENT')]", Matchers.hasSize(4)))
                 .andExpect(jsonPath("$.events[?(@.eventType == 'GUEST_REQUEST_EVENT')].staffRole")
                         .value(Matchers.hasItem("CUSTOMER")))
+                .andExpect(jsonPath("$.events[?(@.eventType == 'GUEST_REQUEST_EVENT')].staffRole")
+                        .value(Matchers.hasItem("HQ_ADMIN")))
                 .andExpect(jsonPath("$.events[?(@.eventType == 'GUEST_REQUEST_EVENT')].summary")
                         .value(Matchers.hasItem(Matchers.containsString("생성"))))
+                .andExpect(jsonPath("$.events[?(@.eventType == 'GUEST_REQUEST_EVENT')].summary")
+                        .value(Matchers.hasItem(Matchers.containsString("담당자"))))
+                .andExpect(jsonPath("$.events[?(@.eventType == 'GUEST_REQUEST_EVENT')].summary")
+                        .value(Matchers.hasItem(Matchers.containsString("우선순위 NORMAL → HIGH"))))
+                .andExpect(jsonPath("$.events[?(@.eventType == 'GUEST_REQUEST_EVENT')].summary")
+                        .value(Matchers.hasItem(Matchers.containsString("상태 OPEN → IN_PROGRESS"))))
                 .andExpect(jsonPath("$.events[?(@.eventType == 'GUEST_REQUEST_EVENT')].summary")
                         .value(Matchers.everyItem(Matchers.not(Matchers.containsString("비밀")))))
                 .andExpect(jsonPath("$.events[?(@.eventType == 'GUEST_REQUEST_EVENT')].summary")
@@ -326,14 +400,22 @@ class AuditIntegrationTest {
 
     @Test
     void xlsxExportUsesTheSameOrderedRowsAsAuditQuery() throws Exception {
+        int requestsBefore = jdbc.queryForObject("select count(*) from guest_request", Integer.class);
+        int eventsBefore = jdbc.queryForObject("select count(*) from guest_request_event", Integer.class);
+        int commandsBefore = jdbc.queryForObject("select count(*) from guest_request_transition_command", Integer.class);
         byte[] bytes = mvc.perform(MockMvcRequestBuilders.get("/api/staff/audit/export.xlsx")
                         .header("X-Staff-Session", hqToken)
+                        .param("hotelId", SOKCHO.toString())
                         .param("masked", "true")
                         .param("limit", "2")
                         .param("offset", "2"))
                 .andExpect(status().isOk())
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
                         .string("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                        .string("Cache-Control", "no-store"))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                        .string("Content-Disposition", "attachment; filename=\"audit-events-masked-2.xlsx\""))
                 .andReturn().getResponse().getContentAsByteArray();
 
         try (var workbook = WorkbookFactory.create(new ByteArrayInputStream(bytes))) {
@@ -345,7 +427,18 @@ class AuditIntegrationTest {
                     .isEqualTo("객실 운영 상태");
             org.assertj.core.api.Assertions.assertThat(sheet.getRow(1).getCell(2).getCellType())
                     .isEqualTo(org.apache.poi.ss.usermodel.CellType.STRING);
+            org.assertj.core.api.Assertions.assertThat(sheet.getRow(2).getCell(1).getStringCellValue())
+                    .isEqualTo("예약 취소");
         }
+        org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject(
+                "select count(*) from guest_request", Integer.class)).isEqualTo(requestsBefore);
+        org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject(
+                "select count(*) from guest_request_event", Integer.class)).isEqualTo(eventsBefore);
+        org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject(
+                "select count(*) from guest_request_transition_command", Integer.class)).isEqualTo(commandsBefore);
+
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/audit/export.xlsx"))
+                .andExpect(status().isUnauthorized());
     }
 
     private void seedReservation(UUID hqId) {

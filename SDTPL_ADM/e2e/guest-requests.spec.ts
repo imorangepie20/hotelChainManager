@@ -199,9 +199,33 @@ test("opens a request and transitions its status", async ({ page }) => {
             eventType: "CREATED",
             fromStatus: null,
             toStatus: "OPEN",
-            actorDisplayName: "시스템",
+            fromPriority: null,
+            toPriority: "NORMAL",
+            actorDisplayName: "고객",
             note: null,
             createdAt: "2026-09-22T10:00:00Z",
+          },
+          {
+            id: "77000000-0000-0000-0000-000000000002",
+            eventType: "ASSIGNED",
+            fromStatus: null,
+            toStatus: null,
+            fromAssignedDisplayName: null,
+            toAssignedDisplayName: "속초 직원",
+            actorDisplayName: "본사 관리자",
+            note: null,
+            createdAt: "2026-09-22T10:01:00Z",
+          },
+          {
+            id: "77000000-0000-0000-0000-000000000003",
+            eventType: "PRIORITY_CHANGED",
+            fromStatus: null,
+            toStatus: null,
+            fromPriority: "NORMAL",
+            toPriority: "HIGH",
+            actorDisplayName: "본사 관리자",
+            note: null,
+            createdAt: "2026-09-22T10:02:00Z",
           },
         ],
       }),
@@ -214,6 +238,9 @@ test("opens a request and transitions its status", async ({ page }) => {
   await expect(page.getByText("높은 층의 객실")).toBeVisible();
   await expect(page.getByText("guest@example.com")).toBeVisible();
   await expect(page.getByText("01012345678")).toBeVisible();
+  await expect(page.getByText("요청 생성 · 우선순위 NORMAL")).toBeVisible();
+  await expect(page.getByText("담당자 미지정 → 속초 직원")).toBeVisible();
+  await expect(page.getByText("우선순위 NORMAL → HIGH")).toBeVisible();
 
   await page.getByTestId("guest-request-transition-IN_PROGRESS").click();
   await page
