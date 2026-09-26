@@ -1308,7 +1308,7 @@ test("edits a landing block and requires saving before publishing", async ({ pag
   await page.getByLabel("검색 결과 설명").fill("동해와 설악을 바라보는 속초 오션 호텔의 객실과 예약 정보를 확인하세요.");
   await expect(page.getByText("속초 오션 호텔 | STAY HANEUL", { exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "미리보기" }).click();
+  await page.getByRole("button", { name: "미리보기", exact: true }).click();
   await expect(page.getByRole("dialog").getByRole("heading", { name: "속초 새 문구" })).toBeVisible();
   await expect(page.getByRole("dialog").getByAltText("속초 해안")).toHaveAttribute(
     "src",
@@ -1358,8 +1358,17 @@ test("creates, saves, and enables publishing a structured content page", async (
 
   await page.getByRole("button", { name: "+ 페이지" }).click();
   const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("combobox", { name: "콘텐츠 유형" })).toContainText(
+    "브랜드",
+  );
   await dialog.getByRole("combobox", { name: "상위 섹션" }).click();
   await page.getByRole("option", { name: "브랜드" }).click();
+  await expect(dialog.getByRole("combobox", { name: "상위 섹션" })).toContainText(
+    "브랜드",
+  );
+  await expect(dialog.getByRole("combobox", { name: "상위 섹션" })).not.toContainText(
+    BRAND_SECTION,
+  );
   await dialog.getByLabel("메뉴 이름").fill("브랜드 이야기");
   await dialog.getByLabel("주소 슬러그").fill("story");
   await dialog.getByLabel("메뉴 순서").fill("10");
@@ -1408,13 +1417,16 @@ test("creates typed pages with scoped references", async ({ page }) => {
 
   await dialog.getByLabel("콘텐츠 유형").click();
   await page.getByRole("option", { name: "객실" }).click();
+  await expect(dialog.getByLabel("콘텐츠 유형")).toContainText("객실");
   await dialog.getByLabel("상위 섹션").click();
   await expect(page.getByRole("option", { name: "브랜드" })).toHaveCount(0);
   await page.getByRole("option", { name: "설악산 객실" }).click();
+  await expect(dialog.getByLabel("상위 섹션")).toContainText("설악산 객실");
   await dialog.getByLabel("객실 유형").click();
   await expect(page.getByRole("option", { name: "포레스트 스위트" })).toBeVisible();
   await expect(page.getByRole("option", { name: "오션 스위트" })).toHaveCount(0);
   await page.getByRole("option", { name: "포레스트 스위트" }).click();
+  await expect(dialog.getByLabel("객실 유형")).toContainText("포레스트 스위트");
   await dialog.getByLabel("메뉴 이름").fill("설악 포레스트 스위트");
   await dialog.getByLabel("주소 슬러그").fill("forest-suite");
 
@@ -1787,7 +1799,7 @@ test("edits rich content blocks and previews them in customer order", async ({ p
   await page.getByLabel("갤러리 1 제목").fill("객실 갤러리");
   await page.getByLabel("사양 표 1 제목").fill("객실 사양");
   await page.getByLabel("FAQ 1 제목").fill("자주 묻는 질문");
-  await page.getByRole("button", { name: "미리보기" }).click();
+  await page.getByRole("button", { name: "미리보기", exact: true }).click();
   const preview = page.getByRole("dialog", { name: "일반 페이지 미리보기" });
   await expect(preview).toContainText("객실 갤러리");
   await expect(preview).toContainText("객실 사양");

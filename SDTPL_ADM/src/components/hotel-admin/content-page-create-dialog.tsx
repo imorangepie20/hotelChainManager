@@ -49,5 +49,199 @@ export function ContentPageCreateDialog({ token, sections, catalog, onCreated }:
   useEffect(() => { setParentId(""); setHotelId(null); setRoomTypeId(""); setTargetHotelIds([]); setError(""); }, [kind]);
   function toggleTarget(hotel: string, checked: boolean) { setTargetHotelIds((current) => checked ? [...current, hotel] : current.filter((id) => id !== hotel)); }
   async function create() { if (invalid) return; setBusy(true); setError(""); try { const document = await createWebsitePage(token, { parentId, contentKind: kind, hotelId, connections, page: { slug, menuLabel, menuVisible, menuOrder }, content: defaultContent(kind, menuLabel, hotelId, roomTypeId || null) }); onCreated(document); setOpen(false); } catch (cause) { setError(cause instanceof Error ? cause.message : "페이지를 만들지 못했습니다."); } finally { setBusy(false); } }
-  return <Dialog open={open} onOpenChange={setOpen}><Button type="button" onClick={() => setOpen(true)}><Plus /> + 페이지</Button><DialogContent><DialogHeader><DialogTitle>콘텐츠 페이지 만들기</DialogTitle><DialogDescription>콘텐츠 유형과 소유 범위를 먼저 정하면, 안전한 초안이 생성됩니다.</DialogDescription></DialogHeader><div className="grid gap-4"><label className="grid gap-1 text-sm font-medium">콘텐츠 유형<Select value={kind} onValueChange={(value) => setKind(value as PageKind)}><SelectTrigger aria-label="콘텐츠 유형"><SelectValue /></SelectTrigger><SelectContent>{kinds.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectContent></Select></label><label className="grid gap-1 text-sm font-medium">상위 섹션<Select value={parentId} onValueChange={(value) => { const parent = sectionsForKind.find((section) => section.id === value); setParentId(value ?? ""); if (selectedKind.requiresHotel) setHotelId(parent?.hotelId ?? null); setRoomTypeId(""); }}><SelectTrigger aria-label="상위 섹션"><SelectValue placeholder="섹션을 선택하세요" /></SelectTrigger><SelectContent>{sectionsForKind.map((section) => <SelectItem key={section.id} value={section.id}>{section.label}</SelectItem>)}</SelectContent></Select></label>{selectedKind.requiresHotel && <p className="text-sm text-muted-foreground">{selectedHotel ? `${selectedHotel.name} 지점 범위로 생성합니다.` : "지점 섹션을 선택해 주세요."}</p>}{kind === "GUIDE" && <label className="grid gap-1 text-sm font-medium">소유 지점<Select value={hotelId ?? "none"} onValueChange={(value) => setHotelId(value === "none" ? null : value)}><SelectTrigger aria-label="소유 지점"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">체인 공통</SelectItem>{catalog.hotels.map((hotel) => <SelectItem key={hotel.id} value={hotel.id}>{hotel.name}</SelectItem>)}</SelectContent></Select></label>}{kind === "ROOM" && <label className="grid gap-1 text-sm font-medium">객실 유형<Select value={roomTypeId} onValueChange={(value) => setRoomTypeId(value ?? "")} disabled={!selectedHotel}><SelectTrigger aria-label="객실 유형"><SelectValue placeholder="객실 유형을 선택하세요" /></SelectTrigger><SelectContent>{selectedHotel?.roomTypes.map((room) => <SelectItem key={room.id} value={room.id}>{room.name}</SelectItem>)}</SelectContent></Select></label>}{kind === "PROMOTION" && <fieldset className="grid gap-2"><legend className="text-sm font-medium">대상 지점</legend>{catalog.hotels.map((hotel) => <label key={hotel.id} className="flex items-center gap-2 text-sm"><Checkbox checked={targetHotelIds.includes(hotel.id)} onCheckedChange={(checked) => toggleTarget(hotel.id, checked === true)} />{hotel.name}</label>)}{promotionMissingTargets && <p className="text-sm text-destructive">대상 지점을 하나 이상 선택해 주세요.</p>}</fieldset>}<label className="grid gap-1 text-sm font-medium">메뉴 이름<Input aria-label="메뉴 이름" value={menuLabel} onChange={(event) => setMenuLabel(event.target.value)} /></label><label className="grid gap-1 text-sm font-medium">주소 슬러그<Input aria-label="주소 슬러그" value={slug} onChange={(event) => setSlug(event.target.value)} /></label><label className="flex items-center gap-2 text-sm font-medium"><Checkbox aria-label="메뉴에 노출" checked={menuVisible} onCheckedChange={(value) => setMenuVisible(value === true)} />메뉴에 노출</label><label className="grid gap-1 text-sm font-medium">메뉴 순서<Input aria-label="메뉴 순서" type="number" min={0} value={menuOrder} onChange={(event) => setMenuOrder(Math.max(0, Number(event.target.value) || 0))} /></label>{error && <p role="alert" className="text-sm text-destructive">{error}</p>}</div><DialogFooter><Button type="button" variant="outline" onClick={() => setOpen(false)}>취소</Button><Button type="button" disabled={busy || invalid} onClick={() => void create()}>{busy ? "만드는 중" : "페이지 만들기"}</Button></DialogFooter></DialogContent></Dialog>;
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <Button type="button" onClick={() => setOpen(true)}>
+        <Plus /> + 페이지
+      </Button>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>콘텐츠 페이지 만들기</DialogTitle>
+          <DialogDescription>
+            콘텐츠 유형과 소유 범위를 먼저 정하면, 안전한 초안이 생성됩니다.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4">
+          <label className="grid gap-1 text-sm font-medium">
+            콘텐츠 유형
+            <Select
+              items={kinds.map((item) => ({ label: item.label, value: item.value }))}
+              value={kind}
+              onValueChange={(value) => setKind(value as PageKind)}
+            >
+              <SelectTrigger aria-label="콘텐츠 유형">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {kinds.map((item) => (
+                  <SelectItem key={item.value} value={item.value}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </label>
+          <label className="grid gap-1 text-sm font-medium">
+            상위 섹션
+            <Select
+              items={sectionsForKind.map((section) => ({
+                label: section.label,
+                value: section.id,
+              }))}
+              value={parentId}
+              onValueChange={(value) => {
+                const parent = sectionsForKind.find((section) => section.id === value);
+                setParentId(value ?? "");
+                if (selectedKind.requiresHotel) setHotelId(parent?.hotelId ?? null);
+                setRoomTypeId("");
+              }}
+            >
+              <SelectTrigger aria-label="상위 섹션">
+                <SelectValue placeholder="섹션을 선택하세요" />
+              </SelectTrigger>
+              <SelectContent>
+                {sectionsForKind.map((section) => (
+                  <SelectItem key={section.id} value={section.id}>
+                    {section.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </label>
+          {selectedKind.requiresHotel && (
+            <p className="text-sm text-muted-foreground">
+              {selectedHotel
+                ? `${selectedHotel.name} 지점 범위로 생성합니다.`
+                : "지점 섹션을 선택해 주세요."}
+            </p>
+          )}
+          {kind === "GUIDE" && (
+            <label className="grid gap-1 text-sm font-medium">
+              소유 지점
+              <Select
+                items={[
+                  { label: "체인 공통", value: "none" },
+                  ...catalog.hotels.map((hotel) => ({
+                    label: hotel.name,
+                    value: hotel.id,
+                  })),
+                ]}
+                value={hotelId ?? "none"}
+                onValueChange={(value) => setHotelId(value === "none" ? null : value)}
+              >
+                <SelectTrigger aria-label="소유 지점">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">체인 공통</SelectItem>
+                  {catalog.hotels.map((hotel) => (
+                    <SelectItem key={hotel.id} value={hotel.id}>
+                      {hotel.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </label>
+          )}
+          {kind === "ROOM" && (
+            <label className="grid gap-1 text-sm font-medium">
+              객실 유형
+              <Select
+                items={(selectedHotel?.roomTypes ?? []).map((room) => ({
+                  label: room.name,
+                  value: room.id,
+                }))}
+                value={roomTypeId}
+                onValueChange={(value) => setRoomTypeId(value ?? "")}
+                disabled={!selectedHotel}
+              >
+                <SelectTrigger aria-label="객실 유형">
+                  <SelectValue placeholder="객실 유형을 선택하세요" />
+                </SelectTrigger>
+                <SelectContent>
+                  {selectedHotel?.roomTypes.map((room) => (
+                    <SelectItem key={room.id} value={room.id}>
+                      {room.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </label>
+          )}
+          {kind === "PROMOTION" && (
+            <fieldset className="grid gap-2">
+              <legend className="text-sm font-medium">대상 지점</legend>
+              {catalog.hotels.map((hotel) => (
+                <label key={hotel.id} className="flex items-center gap-2 text-sm">
+                  <Checkbox
+                    checked={targetHotelIds.includes(hotel.id)}
+                    onCheckedChange={(checked) =>
+                      toggleTarget(hotel.id, checked === true)
+                    }
+                  />
+                  {hotel.name}
+                </label>
+              ))}
+              {promotionMissingTargets && (
+                <p className="text-sm text-destructive">
+                  대상 지점을 하나 이상 선택해 주세요.
+                </p>
+              )}
+            </fieldset>
+          )}
+          <label className="grid gap-1 text-sm font-medium">
+            메뉴 이름
+            <Input
+              aria-label="메뉴 이름"
+              value={menuLabel}
+              onChange={(event) => setMenuLabel(event.target.value)}
+            />
+          </label>
+          <label className="grid gap-1 text-sm font-medium">
+            주소 슬러그
+            <Input
+              aria-label="주소 슬러그"
+              value={slug}
+              onChange={(event) => setSlug(event.target.value)}
+            />
+          </label>
+          <label className="flex items-center gap-2 text-sm font-medium">
+            <Checkbox
+              aria-label="메뉴에 노출"
+              checked={menuVisible}
+              onCheckedChange={(value) => setMenuVisible(value === true)}
+            />
+            메뉴에 노출
+          </label>
+          <label className="grid gap-1 text-sm font-medium">
+            메뉴 순서
+            <Input
+              aria-label="메뉴 순서"
+              type="number"
+              min={0}
+              value={menuOrder}
+              onChange={(event) => setMenuOrder(Math.max(0, Number(event.target.value) || 0))}
+            />
+          </label>
+          {error && (
+            <p role="alert" className="text-sm text-destructive">
+              {error}
+            </p>
+          )}
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+            취소
+          </Button>
+          <Button
+            type="button"
+            disabled={busy || invalid}
+            onClick={() => void create()}
+          >
+            {busy ? "만드는 중" : "페이지 만들기"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
 }
