@@ -25,7 +25,10 @@
 - `npx tsc --noEmit`: 통과.
 - `npx playwright test e2e/hotel-operations-overview.spec.ts e2e/staff-reservation-change-approval.spec.ts e2e/staff-reservations.spec.ts`: Chromium 14건 통과.
 - 테스트 환경 SQL 적용: 98개 예약, 12개 변경 요청을 멱등 upsert했다.
-- 실제 인증 API: 세 지점 모두 도착 1건, 출발 1건, 객실 배정 필요 1건을 확인했다. 청소 필요 수와 배포 후 화면은 최종 배포 검증에서 다시 확인한다.
+- 실제 인증 API: 세 지점 모두 도착 1건, 출발 1건, 객실 배정 필요 1건, 청소 필요 1건을 확인했다.
+- 테스트 환경 배포: 관리자 이미지를 재빌드했고 admin·api·web·postgres가 healthy다.
+- 실제 관리자 390×844: 본사 운영 현황과 속초 지점의 네 수치가 표시되고 문서 가로 넘침이 없음을 확인했다.
+- 실제 `/dashboard/reservations`: 오류 경계 문구가 없고 예약 콘텐츠가 표시되며 브라우저 page error·console error가 0건임을 확인했다.
 
 ## 미검증·제약
 
