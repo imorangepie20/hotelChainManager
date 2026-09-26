@@ -33,10 +33,10 @@ test('신규 SDK는 서버 주문만 사용하며 이중 클릭과 모바일 키
   await expect(page.getByRole('button', { name: '테스트 결제', exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '결제 실패 시험', exact: true })).toHaveCount(0)
   const button = page.getByRole('button', { name: '토스 테스트 결제', exact: true })
+  expect(await button.evaluate(el => el.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44)
   await button.focus(); await page.keyboard.press('Enter'); await page.keyboard.press('Enter')
   await expect.poll(() => page.evaluate(() => (window as unknown as { sdkInput: unknown }).sdkInput)).toEqual({ key: 'test_ck_fixture', options: { customerKey: 'ANONYMOUS' }, input: { method: 'CARD', amount: { currency: 'KRW', value: 120000 }, orderId: 'test-order', orderName: '호텔 예약 테스트 결제', successUrl: checkout.successUrl, failUrl: checkout.failUrl } })
   expect(requests).toBe(1)
-  expect(await button.evaluate(el => el.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44)
   expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false)
 })
 

@@ -114,6 +114,7 @@ test('영문 fake 결제는 완료와 새로고침에서 서버 예약 상태를
   await page.getByRole('button', { name: /스탠다드 시티 Select/ }).click()
   await page.getByLabel('Guest name').fill('Test Guest')
   await page.getByLabel('Email').fill('test@example.com')
+  await page.getByLabel('Phone number').fill('010-1234-5678')
   await page.getByRole('checkbox').check()
   await page.getByRole('button', { name: 'Continue to payment' }).click()
   await page.getByRole('button', { name: 'Complete test payment' }).click()

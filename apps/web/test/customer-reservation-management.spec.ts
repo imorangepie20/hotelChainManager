@@ -87,8 +87,8 @@ test('예약 변경 결제는 기존·변경 예약과 서버 상태를 함께 �
     return route.fulfill({ status: 404, json: { code: 'NOT_FOUND', message: '없음' } })
   })
   await page.goto(`/reservation-change-payment#${token}`)
-  await expect(page.getByRole('term', { name: '기존 예약' })).toBeVisible()
-  await expect(page.getByRole('term', { name: '변경 예약' })).toBeVisible()
+  await expect(page.getByText('기존 예약', { exact: true })).toBeVisible()
+  await expect(page.getByText('변경 예약', { exact: true })).toBeVisible()
   await expect(page.getByText('추가 결제 100,000원')).toBeVisible()
   await expect(page).toHaveURL(/\/reservation-change-payment$/)
 })
@@ -117,12 +117,22 @@ test('같은 날짜와 금액의 객실·요금제 변경도 지연된 상세와
   let summaryReads = 0
   let reservationReads = 0
   let previewReads = 0
-  await page.route(`**/api/reservations/${id}/change-summary`, route => route.fulfill({ json: {
-    reservationId: id, status: ++summaryReads === 1 ? 'APPLYING' : 'COMPLETED', checkIn: confirmed.checkIn, checkOut: confirmed.checkOut,
+  let completionReleased = false
+  let releaseCompletion!: () => void
+  const completionGate = new Promise<void>(resolve => {
+    releaseCompletion = () => { completionReleased = true; resolve() }
+  })
+  await page.route(`**/api/reservations/${id}/change-summary`, async route => {
+    summaryReads += 1
+    if (summaryReads > 1) await completionGate
+    return route.fulfill({ json: {
+    reservationId: id, status: summaryReads === 1 ? 'APPLYING' : 'COMPLETED', checkIn: confirmed.checkIn, checkOut: confirmed.checkOut,
     roomTypeName: '디럭스 오션', ratePlanName: '룸 온리', differenceKrw: 0, currency: 'KRW', expiresAt: '2026-09-20T10:00:00Z', refundStatus: null,
-  } }))
+    } })
+  })
   await page.route(`**/api/reservations/${id}`, async route => {
-    if (++reservationReads === 1) return route.fulfill({ json: confirmed })
+    reservationReads += 1
+    if (!completionReleased) return route.fulfill({ json: confirmed })
     await new Promise(resolve => setTimeout(resolve, 50))
     return route.fulfill({ json: { ...confirmed, roomTypeName: '디럭스 오션', ratePlanName: '룸 온리' } })
   })
@@ -132,6 +142,8 @@ test('같은 날짜와 금액의 객실·요금제 변경도 지연된 상세와
   } }) })
   await page.goto(`/reservations/${id}`)
   await expect(page.getByRole('heading', { name: '스탠다드 시티' })).toBeVisible()
+  await expect.poll(() => summaryReads).toBe(2)
+  releaseCompletion()
   await expect(page.getByRole('heading', { name: '변경 완료' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '디럭스 오션' })).toBeVisible()
   await expect(page.getByText(/예상 환불액 ₩360,000/)).toBeVisible()
