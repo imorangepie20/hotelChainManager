@@ -2,6 +2,7 @@ export type TossCheckout = {
   orderId: string; amountKrw: number; currency: string; clientKey: string
   successUrl: string; failUrl: string; environmentLabel: string
 }
+export type TossPaymentProvider = 'toss-test' | 'toss-live'
 export type ConfirmationInput = { paymentKey: string; orderId: string; amountKrw: number }
 export type TossStatus = { reservationId: string; orderId: string | null; status: string; paymentStatus: string }
 export type TossReturn = { kind: 'success'; input: ConfirmationInput } | { kind: 'fail' | 'invalid' | 'none' }
@@ -58,10 +59,14 @@ export function captureTossReturn(location: Pick<Location, 'pathname' | 'search'
   try { return { kind: 'success', input: toConfirmationInput(params) } } catch { return { kind: 'invalid' } }
 }
 
-export function validateTossCheckout(checkout: TossCheckout, origin: string) {
+export function validateTossCheckout(checkout: TossCheckout, origin: string, expectedProvider?: TossPaymentProvider) {
   if (!/^(?:test|live)_(?:gck|ck)_.+/.test(checkout.clientKey) || !Number.isSafeInteger(checkout.amountKrw)
     || checkout.amountKrw <= 0 || checkout.currency !== 'KRW' || !/^[A-Za-z0-9_-]{1,160}$/.test(checkout.orderId)) {
     throw new Error('유효한 토스 결제 설정이 아닙니다.')
+  }
+  const expectedKeyPrefix = expectedProvider === 'toss-test' ? 'test_' : expectedProvider === 'toss-live' ? 'live_' : null
+  if (expectedKeyPrefix && !checkout.clientKey.startsWith(expectedKeyPrefix)) {
+    throw new Error('결제 모드와 토스 클라이언트 키 환경이 일치하지 않습니다.')
   }
   for (const [value, result] of [[checkout.successUrl, 'success'], [checkout.failUrl, 'fail']]) {
     const url = new URL(value)
@@ -107,10 +112,10 @@ function loadTossSdk(): Promise<TossFactory> {
   return sdkPromise
 }
 
-export async function requestTossCheckout(checkout: TossCheckout, locale: 'ko' | 'en' = 'ko') {
+export async function requestTossCheckout(checkout: TossCheckout, locale: 'ko' | 'en' = 'ko', expectedProvider?: TossPaymentProvider) {
   let stage: CheckoutStage = 'CONFIG'
   try {
-    validateTossCheckout(checkout, window.location.origin)
+    validateTossCheckout(checkout, window.location.origin, expectedProvider)
     stage = 'SDK'
     const sdk = await loadTossSdk()
     stage = 'PAYMENT_WINDOW'

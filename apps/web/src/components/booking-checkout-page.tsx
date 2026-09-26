@@ -143,7 +143,8 @@ export function BookingCheckoutPage({ locale = 'ko' }: Props) {
         await api.pay(reservation.id, access.managementToken, `booking-payment-${reservation.id}`, 'SUCCESS')
         window.location.assign(`${locale === 'en' ? '/en' : ''}/booking/complete`)
       } else {
-        await requestTossCheckout(localizedTossCheckout(await api.tossCheckout(reservation.id, access.managementToken, crypto.randomUUID()), locale), locale)
+        if (paymentMode !== 'toss-test' && paymentMode !== 'toss-live') throw new Error('PAYMENT_PROVIDER_DISABLED')
+        await requestTossCheckout(localizedTossCheckout(await api.tossCheckout(reservation.id, access.managementToken, crypto.randomUUID()), locale), locale, paymentMode)
       }
     } catch (reason) {
       setState('PAYMENT_READY')

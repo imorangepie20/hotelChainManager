@@ -80,8 +80,9 @@ export function ReservationChangePaymentPage({ locale = 'ko', returned }: Props)
     try {
       if (paymentActions(provider).toss) {
         const checkout = await api.tossChangeCheckout()
+        if (provider !== 'toss-test' && provider !== 'toss-live') throw new Error('PAYMENT_PROVIDER_DISABLED')
         sessionStorage.setItem('tossChangeStarted', '1')
-        await requestTossCheckout(localizedTossCheckout(checkout, locale), locale)
+        await requestTossCheckout(localizedTossCheckout(checkout, locale), locale, provider)
       } else {
         const result = await api.reservationChangeCheckout(); window.location.assign(result.checkoutUrl)
       }
