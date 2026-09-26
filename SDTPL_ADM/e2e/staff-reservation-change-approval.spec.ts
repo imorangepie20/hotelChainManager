@@ -253,3 +253,17 @@ test("requires a rejection reason and restores focus when the dialog closes", as
   expect(rejectionBodies).toEqual([{ version: 3, reason: "객실 운영 계획과 맞지 않습니다." }]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
+
+test("keeps the reservations page available when a pending request has no quote", async ({ page }) => {
+  await mockSession(page, "HQ_ADMIN");
+  await page.route("**/api/staff/reservation-change-requests?*", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify([changeRequest({ quote: null })]),
+  }));
+
+  await page.goto("/dashboard/reservations");
+
+  await expect(page.getByTestId("reservation-change-quote-unavailable")).toBeVisible();
+  await expect(page.getByRole("region", { name: "승인 대기" }).getByRole("button", { name: /변경 요청 검토/ })).toBeDisabled();
+  await expect(page.locator("body")).not.toContainText("This page couldn’t load");
+});

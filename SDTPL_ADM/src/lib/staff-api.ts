@@ -277,7 +277,7 @@ export type ReservationChangeRequestView = {
   adults: number;
   children: number;
   approvalExpiresAt: string;
-  quote: ReservationChangeQuote;
+  quote: ReservationChangeQuote | null;
   approval: ReservationChangeApproval | null;
   actions: string[];
   events: ReservationChangeEvent[];

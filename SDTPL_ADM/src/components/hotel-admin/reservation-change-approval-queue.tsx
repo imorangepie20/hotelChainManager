@@ -119,6 +119,8 @@ export function ReservationChangeApprovalQueue() {
     }
   }
 
+  const selectedQuote = selected?.quote ?? null;
+
   return (
     <Card role="region" aria-label="승인 대기" className="min-w-0">
       <CardHeader className="border-b">
@@ -143,8 +145,14 @@ export function ReservationChangeApprovalQueue() {
                 <TableRow key={request.id}>
                   <TableCell><span className="block font-medium">{request.hotelName ?? hotelNames[request.hotelId] ?? "지점"}</span><span className="block text-xs text-muted-foreground">{requestGuestName(request)}</span></TableCell>
                   <TableCell><span className="block">{displayDate(request.targetCheckIn)}</span><span className="text-xs text-muted-foreground">~ {displayDate(request.targetCheckOut)}</span></TableCell>
-                  <TableCell className="text-right font-medium tabular-nums">{money(request.quote.differenceKrw, request.quote.currency)}</TableCell>
-                  <TableCell className="text-right"><Button variant="outline" onClick={() => setSelected(request)} aria-label={`${requestGuestName(request)} 변경 요청 검토`}>검토</Button></TableCell>
+                  <TableCell className="text-right font-medium tabular-nums">
+                    {request.quote ? money(request.quote.differenceKrw, request.quote.currency) : (
+                      <span data-testid="reservation-change-quote-unavailable" className="text-muted-foreground">
+                        금액 정보 없음
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-right"><Button variant="outline" disabled={!request.quote} onClick={() => setSelected(request)} aria-label={`${requestGuestName(request)} 변경 요청 검토`}>검토</Button></TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -153,7 +161,7 @@ export function ReservationChangeApprovalQueue() {
       </CardContent>
 
       <Dialog open={Boolean(selected)} onOpenChange={(open) => { if (!open && !confirmation && !saving) setSelected(null); }}>
-        {selected && (
+        {selected && selectedQuote && (
           <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-2xl">
             <DialogHeader>
               <DialogTitle>{requestGuestName(selected)} 고객 변경 요청</DialogTitle>
@@ -164,14 +172,14 @@ export function ReservationChangeApprovalQueue() {
               <Condition title="변경 조건" checkIn={selected.targetCheckIn} checkOut={selected.targetCheckOut} roomType={selected.targetRoomTypeName ?? selected.targetRoomTypeId} ratePlan={selected.targetRatePlanName ?? selected.targetRatePlanId} />
             </div>
             <dl className="grid gap-3 rounded-xl bg-muted/60 p-4 sm:grid-cols-3">
-              <Detail label="기존 금액" value={money(selected.quote.previousTotalKrw, selected.quote.currency)} />
-              <Detail label="변경 금액" value={money(selected.quote.totalKrw, selected.quote.currency)} />
-              <Detail label="차액" value={money(selected.quote.differenceKrw, selected.quote.currency)} />
+              <Detail label="기존 금액" value={money(selectedQuote.previousTotalKrw, selectedQuote.currency)} />
+              <Detail label="변경 금액" value={money(selectedQuote.totalKrw, selectedQuote.currency)} />
+              <Detail label="차액" value={money(selectedQuote.differenceKrw, selectedQuote.currency)} />
             </dl>
             <div className="overflow-x-auto rounded-xl border">
               <Table>
                 <TableHeader><TableRow><TableHead>숙박일</TableHead><TableHead className="text-right">일별 요금</TableHead></TableRow></TableHeader>
-                <TableBody>{selected.quote.nightlyPrices.map((night) => <TableRow key={night.date}><TableCell>{displayDate(night.date)}</TableCell><TableCell className="text-right tabular-nums">{money(night.amount, selected.quote.currency)}</TableCell></TableRow>)}</TableBody>
+                <TableBody>{selectedQuote.nightlyPrices.map((night) => <TableRow key={night.date}><TableCell>{displayDate(night.date)}</TableCell><TableCell className="text-right tabular-nums">{money(night.amount, selectedQuote.currency)}</TableCell></TableRow>)}</TableBody>
               </Table>
             </div>
             <ReservationChangeTimeline events={selected.events} />

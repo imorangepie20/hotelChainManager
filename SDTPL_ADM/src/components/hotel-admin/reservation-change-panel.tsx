@@ -135,7 +135,7 @@ export function ReservationChangePanel({
         const next = await getReservationChangeRequest(token, activeRequest.id);
         if (!current) return;
         setActiveRequest(next);
-        if (next.status === "COMPLETED" && completedNotification.current !== next.id) {
+        if (next.status === "COMPLETED" && next.quote && completedNotification.current !== next.id) {
           completedNotification.current = next.id;
           onLegacyUpdated({
             reservationId: next.reservationId,
@@ -344,6 +344,7 @@ export function ReservationChangePanel({
   }
 
   const linkDisplay = describeReservationChangeLink(activeRequest?.status ?? null, Boolean(customerUrl), customerLinkState);
+  const activeQuote = activeRequest?.quote ?? null;
   if (activeRequest && (!terminalStatuses.has(activeRequest.status) || linkDisplay.keepVisible)) {
     return (
       <section aria-labelledby="reservation-change-title" className="space-y-4 border-b pb-4">
@@ -363,8 +364,8 @@ export function ReservationChangePanel({
           </div>
           <dl className="grid gap-3 text-sm sm:grid-cols-2">
             <Detail label="변경 일정" value={`${displayDate(activeRequest.targetCheckIn)} ~ ${displayDate(activeRequest.targetCheckOut)}`} />
-            <Detail label="변경 금액" value={money(activeRequest.quote.totalKrw, activeRequest.quote.currency)} />
-            <Detail label="차액" value={differenceLabel({ ...activeRequest.quote, roomTypeId: "", roomTypeName: "", ratePlanId: "", ratePlanName: "", breakfastIncluded: false, remaining: 0 })} />
+            <Detail label="변경 금액" value={activeQuote ? money(activeQuote.totalKrw, activeQuote.currency) : "금액 정보 없음"} />
+            <Detail label="차액" value={activeQuote ? differenceLabel({ ...activeQuote, roomTypeId: "", roomTypeName: "", ratePlanId: "", ratePlanName: "", breakfastIncluded: false, remaining: 0 }) : "금액 정보 없음"} />
             <Detail label="승인 만료" value={displayDateTime(activeRequest.approvalExpiresAt)} />
           </dl>
         </div>

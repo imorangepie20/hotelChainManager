@@ -53,12 +53,21 @@ INSERT INTO reservation (
 SELECT md5('hcm-report-sample-reservation-' || code || '-' || day_offset || '-' || guest_no)::uuid,
        room_type_id,
        rate_plan_id,
-       created_date + 15 + guest_no,
-       created_date + 17 + guest_no,
+       CASE
+           WHEN day_offset = 0 AND guest_no = 1 THEN created_date
+           WHEN day_offset = 0 AND guest_no = 2 THEN created_date - 2
+           ELSE created_date + 15 + guest_no
+       END,
+       CASE
+           WHEN day_offset = 0 AND guest_no = 1 THEN created_date + 2
+           WHEN day_offset = 0 AND guest_no = 2 THEN created_date
+           ELSE created_date + 17 + guest_no
+       END,
        2,
        CASE WHEN guest_no % 3 = 0 THEN 1 ELSE 0 END,
        1,
        CASE
+           WHEN day_offset = 0 AND guest_no = 2 THEN 'CHECKED_IN'
            WHEN guest_no = 2 AND day_offset % 4 = 0 THEN 'CANCELLED'
            WHEN guest_no = 2 AND day_offset % 4 = 1 THEN 'NO_SHOW'
            WHEN guest_no = 3 AND day_offset % 3 = 0 THEN 'EXPIRED'
@@ -88,6 +97,71 @@ ON CONFLICT (id) DO UPDATE SET
     guest_email = EXCLUDED.guest_email,
     guest_phone = EXCLUDED.guest_phone,
     created_at = EXCLUDED.created_at;
+
+-- 운영 대시보드가 각 지점의 오늘 도착·출발·배정 필요·청소 필요를 실제 API로 보여주도록
+-- 테스트 객실 두 개와 오늘 출발 예약의 배정을 만든다.
+WITH room_seed(hotel_code, hotel_id, room_type_id, occupied_room_id, cleaning_room_id,
+               occupied_room_number, cleaning_room_number) AS (
+    VALUES
+        ('sokcho',
+         '11000000-0000-0000-0000-000000000001'::uuid,
+         '21000000-0000-0000-0000-000000000001'::uuid,
+         '41000000-0000-0000-0000-000000000001'::uuid,
+         '41000000-0000-0000-0000-000000000002'::uuid,
+         'T901', 'T902'),
+        ('seoraksan',
+         '11000000-0000-0000-0000-000000000002'::uuid,
+         '21000000-0000-0000-0000-000000000011'::uuid,
+         '41000000-0000-0000-0000-000000000011'::uuid,
+         '41000000-0000-0000-0000-000000000012'::uuid,
+         'T801', 'T802'),
+        ('jeju',
+         '11000000-0000-0000-0000-000000000003'::uuid,
+         '21000000-0000-0000-0000-000000000021'::uuid,
+         '41000000-0000-0000-0000-000000000021'::uuid,
+         '41000000-0000-0000-0000-000000000022'::uuid,
+         'T701', 'T702')
+), physical_room_seed AS (
+    SELECT hotel_id, room_type_id, occupied_room_id AS room_id,
+           occupied_room_number AS room_number, 'CLEAN' AS housekeeping_status
+      FROM room_seed
+    UNION ALL
+    SELECT hotel_id, room_type_id, cleaning_room_id AS room_id,
+           cleaning_room_number AS room_number, 'NEEDS_CLEANING' AS housekeeping_status
+      FROM room_seed
+)
+INSERT INTO physical_room (id, hotel_id, room_type_id, room_number, housekeeping_status)
+SELECT room_id, hotel_id, room_type_id, room_number, housekeeping_status
+  FROM physical_room_seed
+ON CONFLICT (id) DO UPDATE SET
+    hotel_id = EXCLUDED.hotel_id,
+    room_type_id = EXCLUDED.room_type_id,
+    room_number = EXCLUDED.room_number,
+    housekeeping_status = EXCLUDED.housekeeping_status;
+
+-- 같은 샘플을 UI에서 배정·이동한 뒤 다시 실행해도 오늘 도착은 미배정,
+-- 오늘 출발은 아래 고정 객실 한 개만 배정된 상태로 되돌린다.
+WITH hotel_seed(hotel_code) AS (
+    VALUES ('sokcho'), ('seoraksan'), ('jeju')
+)
+DELETE FROM reservation_room_assignment assignment
+ WHERE assignment.reservation_id IN (
+     SELECT md5('hcm-report-sample-reservation-' || hotel_code || '-0-' || guest_no)::uuid
+       FROM hotel_seed
+       CROSS JOIN (VALUES (1), (2)) AS guest(guest_no)
+ );
+
+WITH assignment_seed(hotel_code, physical_room_id) AS (
+    VALUES
+        ('sokcho', '41000000-0000-0000-0000-000000000001'::uuid),
+        ('seoraksan', '41000000-0000-0000-0000-000000000011'::uuid),
+        ('jeju', '41000000-0000-0000-0000-000000000021'::uuid)
+)
+INSERT INTO reservation_room_assignment (reservation_id, physical_room_id)
+SELECT md5('hcm-report-sample-reservation-' || hotel_code || '-0-2')::uuid,
+       physical_room_id
+  FROM assignment_seed
+ON CONFLICT (reservation_id, physical_room_id) DO NOTHING;
 
 -- 점유율 차트를 위해 세 지점의 지난 14일 재고에 확정 객실 수를 넣는다.
 WITH room_seed(room_type_id, capacity, confirmed) AS (
@@ -193,6 +267,63 @@ ON CONFLICT (id) DO UPDATE SET
     approval_expires_at = EXCLUDED.approval_expires_at,
     created_at = EXCLUDED.created_at,
     updated_at = EXCLUDED.updated_at;
+
+-- 승인 대기 표가 검토 가능한 정상 계약을 받도록 샘플 변경 요청마다 현재 견적을 연결한다.
+-- 날짜를 옮기되 샘플 차액은 0원으로 유지해 외부 결제·환불 흐름을 만들지 않는다.
+INSERT INTO reservation_change_quote (
+    id, request_id, revision, previous_total_krw, total_krw,
+    difference_krw, currency, rooms, created_at
+)
+SELECT md5('hcm-report-sample-quote-' || request.id)::uuid,
+       request.id,
+       1,
+       reservation.total_krw,
+       reservation.total_krw,
+       0,
+       reservation.currency,
+       request.rooms,
+       request.created_at
+  FROM reservation_change_request request
+  JOIN reservation ON reservation.id = request.reservation_id
+ WHERE request.idempotency_key LIKE 'report-sample-%'
+ON CONFLICT (id) DO UPDATE SET
+    request_id = EXCLUDED.request_id,
+    revision = EXCLUDED.revision,
+    previous_total_krw = EXCLUDED.previous_total_krw,
+    total_krw = EXCLUDED.total_krw,
+    difference_krw = EXCLUDED.difference_krw,
+    currency = EXCLUDED.currency,
+    rooms = EXCLUDED.rooms,
+    created_at = EXCLUDED.created_at;
+
+INSERT INTO reservation_change_quote_night (quote_id, stay_date, amount_krw)
+SELECT quote.id,
+       night.stay_date::date,
+       (quote.total_krw / (request.target_check_out - request.target_check_in))
+           + CASE
+                 WHEN night.ordinality <= quote.total_krw % (request.target_check_out - request.target_check_in)
+                 THEN 1
+                 ELSE 0
+             END
+  FROM reservation_change_request request
+  JOIN reservation_change_quote quote
+    ON quote.request_id = request.id
+   AND quote.id = md5('hcm-report-sample-quote-' || request.id)::uuid
+ CROSS JOIN LATERAL generate_series(
+     request.target_check_in,
+     request.target_check_out - 1,
+     interval '1 day'
+ ) WITH ORDINALITY AS night(stay_date, ordinality)
+ WHERE request.idempotency_key LIKE 'report-sample-%'
+ON CONFLICT (quote_id, stay_date) DO UPDATE SET
+    amount_krw = EXCLUDED.amount_krw;
+
+UPDATE reservation_change_request request
+   SET current_quote_id = quote.id
+  FROM reservation_change_quote quote
+ WHERE quote.request_id = request.id
+   AND quote.id = md5('hcm-report-sample-quote-' || request.id)::uuid
+   AND request.idempotency_key LIKE 'report-sample-%';
 
 COMMIT;
 

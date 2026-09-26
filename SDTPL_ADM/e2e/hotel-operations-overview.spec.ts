@@ -49,10 +49,10 @@ test("loads live daily metrics and switches from head office to Sokcho", async (
 
   await expect(page.getByRole("heading", { name: "호텔 운영 현황" })).toBeVisible();
   await expect(page.getByText("본사 오늘의 운영 현황")).toBeVisible();
-  await expect(page.getByRole("group", { name: "속초 지점 오늘 업무" })).toContainText("도착 2건");
-  await expect(page.getByRole("group", { name: "속초 지점 오늘 업무" })).toContainText("출발 1건");
-  await expect(page.getByRole("group", { name: "속초 지점 오늘 업무" })).toContainText("배정 필요 1건");
-  await expect(page.getByRole("group", { name: "속초 지점 오늘 업무" })).toContainText("청소 필요 1건");
+  await expect(page.getByRole("group", { name: "속초 지점 오늘 업무" })).toContainText(/도착\s*2건/);
+  await expect(page.getByRole("group", { name: "속초 지점 오늘 업무" })).toContainText(/출발\s*1건/);
+  await expect(page.getByRole("group", { name: "속초 지점 오늘 업무" })).toContainText(/배정 필요\s*1건/);
+  await expect(page.getByRole("group", { name: "속초 지점 오늘 업무" })).toContainText(/청소 필요\s*1건/);
 
   await page.getByRole("button", { name: "속초 지점" }).click();
 
@@ -88,6 +88,22 @@ test("shows a retryable error when daily operations cannot be loaded", async ({ 
 
   await page.goto("/dashboard/default");
 
-  await expect(page.getByRole("alert")).toContainText("오늘의 운영 데이터를 불러오지 못했습니다.");
+  await expect(page.getByRole("alert").filter({ hasText: "오늘의 운영 데이터를 불러오지 못했습니다." })).toBeVisible();
   await expect(page.getByRole("button", { name: "다시 시도" })).toBeVisible();
+});
+
+test("keeps successful hotel metrics when one hotel request fails", async ({ page }) => {
+  await page.route(`**/api/staff/hotels/${hotels.seoraksan}/operations?date=*`, (route) => route.fulfill({
+    status: 503,
+    contentType: "application/json",
+    body: JSON.stringify({ message: "설악산 점검 중" }),
+  }));
+  await page.addInitScript(() => window.localStorage.setItem("hotel-chain-staff-session", "test-session-token"));
+  await page.addInitScript(() => window.localStorage.setItem("hotel-chain-staff", JSON.stringify({ id: "test", email: "hq@example.com", displayName: "본사 관리자", role: "HQ_ADMIN", hotelId: null })));
+
+  await page.goto("/dashboard/default");
+
+  await expect(page.getByRole("group", { name: "속초 지점 오늘 업무" })).toContainText(/도착\s*2건/);
+  await expect(page.getByRole("group", { name: "제주 지점 오늘 업무" })).toContainText(/도착\s*1건/);
+  await expect(page.getByRole("alert").filter({ hasText: "일부 지점의 오늘 운영 데이터를 불러오지 못했습니다." })).toBeVisible();
 });

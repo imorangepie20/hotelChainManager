@@ -991,3 +991,5 @@
 - 2026-09-15: 고객이 예약 상세에서 날짜·객실·요금제·성인·아동을 직접 재견적하고 차액 결제·환불·0원 변경을 시작하는 셀프서비스 흐름을 추가했다. 서버가 관리 토큰, 변경 가능 조건, 최신 재고와 가격을 잠금 상태에서 재검증하며 고객 actor와 변경 전후 인원을 감사한다. 설계는 [고객 직접 예약 변경 설계](../superpowers/specs/2026-09-15-customer-self-service-reservation-change-design.md), 실행 단계는 [구현 계획](../superpowers/plans/2026-09-15-customer-self-service-reservation-change.md), 자동 검증과 사용자 브라우저 체크리스트는 [변경 기록](../changes/2026-09-15-customer-self-service-reservation-change.md)을 따른다. 브라우저와 실제 Toss 운영 결제 검증은 사용자가 수행한다.
 
 - 2026-09-15: Toss 운영 결제 1단계로 test/live 키·provider snapshot을 분리하고 라이브 신규 checkout kill switch, 고객 웹 라이브 위젯 경로, provider별 webhook 수신·재조회·중복 제거와 애플리케이션 속도 제한을 추가했다. 실제 키·외부 webhook·과금은 열지 않았다. 구현·검증 범위와 배포 전 확인은 [변경 기록](../changes/2026-09-15-toss-live-payment-core.md)을 따른다. 다음 단계는 정산 snapshot·대사·본사 읽기 전용 화면이다.
+
+- 2026-09-27: 관리자 첫 화면을 서울 오늘 기준 실제 도착·출발·객실 배정·청소 데이터에 연결했다. 테스트 샘플은 세 지점마다 오늘 업무 수치가 나타나도록 멱등하게 확장했다. 견적이 없는 샘플 승인 요청 때문에 예약 화면 전체가 중단되던 문제는 nullable 계약과 비활성 검토 상태로 방어했다. 상세 범위와 TDD 증거는 [변경 기록](../changes/2026-09-27-operations-dashboard-live-data.md)을 따른다.
