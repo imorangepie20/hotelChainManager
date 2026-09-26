@@ -9,6 +9,7 @@ const EVENT_TYPES = [
   "ROOM_OPERATIONAL_TRANSITION",
   "CHECKED_IN_ROOM_MOVE",
   "CHANGE_REQUEST_EVENT",
+  "GUEST_REQUEST_EVENT",
 ];
 
 function sampleEvents(count: number) {
@@ -86,7 +87,7 @@ test("reports audit events with staff and reservation context", async ({
     route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: EVENTS_BODY(8, 0),
+      body: EVENTS_BODY(9, 0),
     }),
   );
 
@@ -112,7 +113,7 @@ test("labels event types in korean", async ({ page }) => {
     route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: EVENTS_BODY(8, 0),
+      body: EVENTS_BODY(9, 0),
     }),
   );
 
@@ -127,6 +128,7 @@ test("labels event types in korean", async ({ page }) => {
     "객실 운영 상태",
     "투숙 중 객실 이동",
     "예약 변경 요청",
+    "고객 요청 이력",
   ]) {
     await expect(page.getByRole("cell", { name: label })).toBeVisible();
   }
@@ -150,6 +152,7 @@ test("moves to the next page", async ({ page }) => {
 
   await page.getByRole("button", { name: "다음 페이지" }).click();
 
+  await expect.poll(() => offset).toBe(20);
   await expect(page.getByTestId("audit-page")).toHaveText("2 / 2");
   await expect(
     page.getByRole("button", { name: "다음 페이지" }),
@@ -257,4 +260,64 @@ test("exports the visible events as csv", async ({ page }) => {
   expect(text).toContain("예약자 정정");
   expect(text).toContain("본사 관리자");
   expect(text).toContain("감사 요약 0");
+});
+
+test("exports xlsx with the current page and masking filters", async ({ page }) => {
+  await page.addInitScript(seedStaffScript("HQ_ADMIN"));
+  await page.route("**/api/staff/audit*", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: EVENTS_BODY(5, 0, true),
+    }),
+  );
+
+  let exportQuery = "";
+  await page.route("**/api/staff/audit/export.xlsx*", (route) => {
+    exportQuery = new URL(route.request().url()).search;
+    return route.fulfill({
+      status: 200,
+      contentType:
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      headers: {
+        "Content-Disposition": 'attachment; filename="audit-events-masked-0.xlsx"',
+      },
+      body: Buffer.from("PK-test-xlsx"),
+    });
+  });
+
+  await page.goto("/dashboard/audit");
+  await page.getByTestId("audit-masked").click();
+  await expect.poll(() => page.getByTestId("audit-masked").textContent()).toContain(
+    "마스킹 켜짐",
+  );
+
+  const download = page.waitForEvent("download");
+  await page.getByTestId("audit-xlsx").click();
+  const received = await download;
+
+  expect(received.suggestedFilename()).toBe("audit-events-masked-0.xlsx");
+  expect(exportQuery).toContain("masked=true");
+  expect(exportQuery).toContain("limit=20");
+  expect(exportQuery).not.toContain("offset=");
+});
+
+test("keeps audit controls usable at 390px", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.addInitScript(seedStaffScript("HQ_ADMIN"));
+  await page.route("**/api/staff/audit*", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: EVENTS_BODY(2, 0),
+    }),
+  );
+
+  await page.goto("/dashboard/audit");
+
+  await expect(page.getByTestId("audit-csv")).toBeVisible();
+  await expect(page.getByTestId("audit-xlsx")).toBeVisible();
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth <= 390),
+  ).toBe(true);
 });

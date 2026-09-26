@@ -58,6 +58,7 @@ class GuestRequestIntegrationTest {
     private String sokchoToken;
     private String jejuToken;
     private UUID hqStaffId;
+    private UUID sokchoStaffId;
 
     @BeforeEach
     void seed() {
@@ -82,8 +83,9 @@ class GuestRequestIntegrationTest {
         hqStaffId = UUID.randomUUID();
         jdbc.update("insert into staff_member (id, email, display_name, password_hash, role, hotel_id) values (?, ?, ?, ?, ?, ?)",
                 hqStaffId, HQ_EMAIL, "headquarters-admin", encoder.encode("hq-password"), "HQ_ADMIN", null);
+        sokchoStaffId = UUID.randomUUID();
         jdbc.update("insert into staff_member (id, email, display_name, password_hash, role, hotel_id) values (?, ?, ?, ?, ?, ?)",
-                UUID.randomUUID(), SOKCHO_EMAIL, "sokcho-staff", encoder.encode("branch-password"), "BRANCH_STAFF", SOKCHO);
+                sokchoStaffId, SOKCHO_EMAIL, "sokcho-staff", encoder.encode("branch-password"), "BRANCH_STAFF", SOKCHO);
         jdbc.update("insert into staff_member (id, email, display_name, password_hash, role, hotel_id) values (?, ?, ?, ?, ?, ?)",
                 UUID.randomUUID(), JEJU_EMAIL, "jeju-staff", encoder.encode("branch-password"), "BRANCH_STAFF", JEJU);
 
@@ -336,6 +338,76 @@ class GuestRequestIntegrationTest {
                 .content("{\"status\": \"RESOLVED\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("RESOLVED"));
+
+        Integer eventCount = jdbc.queryForObject(
+                "select count(*) from guest_request_event where request_id = ?::uuid",
+                Integer.class, id);
+        org.assertj.core.api.Assertions.assertThat(eventCount).isEqualTo(2);
+    }
+
+    @Test
+    void assignmentPriorityAndStatusChangesCreateSeparateEvents() throws Exception {
+        String id = submit("customer-key-audit-1", SOKCHO);
+
+        mvc.perform(MockMvcRequestBuilders.post("/api/staff/guest-requests/" + id + "/transition")
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "transition-audit-key-1")
+                .contentType("application/json")
+                .content("""
+                        {
+                          "status": "IN_PROGRESS",
+                          "assignTo": "%s",
+                          "priority": "HIGH",
+                          "resolutionNote": "처리 우선순위를 높였습니다."
+                        }
+                        """.formatted(sokchoStaffId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("IN_PROGRESS"))
+                .andExpect(jsonPath("$.priority").value("HIGH"))
+                .andExpect(jsonPath("$.assignedTo").value(sokchoStaffId.toString()));
+
+        var events = jdbc.queryForList("""
+                select event_type, from_status, to_status,
+                       from_assigned_to::text, to_assigned_to::text,
+                       from_priority, to_priority
+                  from guest_request_event
+                 where request_id = ?::uuid
+                 order by created_at, id
+                """, id);
+
+        org.assertj.core.api.Assertions.assertThat(events)
+                .extracting(row -> row.get("event_type"))
+                .containsExactly("CREATED", "ASSIGNED", "PRIORITY_CHANGED", "STATUS_CHANGED");
+        org.assertj.core.api.Assertions.assertThat(events.get(1))
+                .containsEntry("from_assigned_to", null)
+                .containsEntry("to_assigned_to", sokchoStaffId.toString());
+        org.assertj.core.api.Assertions.assertThat(events.get(2))
+                .containsEntry("from_priority", "NORMAL")
+                .containsEntry("to_priority", "HIGH");
+    }
+
+    @Test
+    void sameTransitionKeyWithDifferentPayloadIsRejectedWithoutAnotherEvent() throws Exception {
+        String id = submit("customer-key-audit-2", SOKCHO);
+
+        mvc.perform(MockMvcRequestBuilders.post("/api/staff/guest-requests/" + id + "/transition")
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "transition-audit-key-2")
+                .contentType("application/json")
+                .content("{\"status\": \"IN_PROGRESS\"}"))
+                .andExpect(status().isOk());
+
+        mvc.perform(MockMvcRequestBuilders.post("/api/staff/guest-requests/" + id + "/transition")
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "transition-audit-key-2")
+                .contentType("application/json")
+                .content("{\"status\": \"RESOLVED\"}"))
+                .andExpect(status().isConflict());
+
+        Integer eventCount = jdbc.queryForObject(
+                "select count(*) from guest_request_event where request_id = ?::uuid",
+                Integer.class, id);
+        org.assertj.core.api.Assertions.assertThat(eventCount).isEqualTo(2);
     }
 
     @Test

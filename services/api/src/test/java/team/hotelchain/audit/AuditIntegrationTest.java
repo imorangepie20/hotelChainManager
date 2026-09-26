@@ -3,10 +3,12 @@ package team.hotelchain.audit;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.io.ByteArrayInputStream;
 import java.time.LocalDate;
 import java.util.UUID;
 
 import org.hamcrest.Matchers;
+import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -289,6 +291,63 @@ class AuditIntegrationTest {
                 .andExpect(status().isForbidden());
     }
 
+    @Test
+    void customerCreatedGuestRequestAppearsWithoutLeakingMessageOrContact() throws Exception {
+        UUID requestId = UUID.randomUUID();
+        jdbc.update("""
+                insert into guest_request
+                    (id, hotel_id, request_type, subject, body, guest_name, guest_email, guest_phone,
+                     status, priority, idempotency_key, request_hash, created_at, updated_at)
+                values (?, ?, 'ROOM_REQUEST', '=비밀 제목', '+비밀 본문', '감사 고객',
+                        'private@example.com', '01099998888', 'OPEN', 'NORMAL',
+                        'audit-guest-created', ?, now() - interval '30 second', now() - interval '30 second')
+                """, requestId, SOKCHO, "c".repeat(64));
+        jdbc.update("""
+                insert into guest_request_event
+                    (id, request_id, event_type, from_status, to_status, actor_staff_id, note, created_at)
+                values (?, ?, 'CREATED', null, 'OPEN', null, null, now() - interval '30 second')
+                """, UUID.randomUUID(), requestId);
+
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/audit")
+                .header("X-Staff-Session", hqToken)
+                .param("masked", "true")
+                .param("limit", "20"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalCount").value(9))
+                .andExpect(jsonPath("$.events[?(@.eventType == 'GUEST_REQUEST_EVENT')].staffRole")
+                        .value(Matchers.hasItem("CUSTOMER")))
+                .andExpect(jsonPath("$.events[?(@.eventType == 'GUEST_REQUEST_EVENT')].summary")
+                        .value(Matchers.hasItem(Matchers.containsString("생성"))))
+                .andExpect(jsonPath("$.events[?(@.eventType == 'GUEST_REQUEST_EVENT')].summary")
+                        .value(Matchers.everyItem(Matchers.not(Matchers.containsString("비밀")))))
+                .andExpect(jsonPath("$.events[?(@.eventType == 'GUEST_REQUEST_EVENT')].summary")
+                        .value(Matchers.everyItem(Matchers.not(Matchers.containsString("01099998888")))));
+    }
+
+    @Test
+    void xlsxExportUsesTheSameOrderedRowsAsAuditQuery() throws Exception {
+        byte[] bytes = mvc.perform(MockMvcRequestBuilders.get("/api/staff/audit/export.xlsx")
+                        .header("X-Staff-Session", hqToken)
+                        .param("masked", "true")
+                        .param("limit", "2")
+                        .param("offset", "2"))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                        .string("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .andReturn().getResponse().getContentAsByteArray();
+
+        try (var workbook = WorkbookFactory.create(new ByteArrayInputStream(bytes))) {
+            var sheet = workbook.getSheetAt(0);
+            org.assertj.core.api.Assertions.assertThat(sheet.getPhysicalNumberOfRows()).isEqualTo(3);
+            org.assertj.core.api.Assertions.assertThat(sheet.getRow(0).getCell(0).getStringCellValue())
+                    .isEqualTo("발생 시각");
+            org.assertj.core.api.Assertions.assertThat(sheet.getRow(1).getCell(1).getStringCellValue())
+                    .isEqualTo("객실 운영 상태");
+            org.assertj.core.api.Assertions.assertThat(sheet.getRow(1).getCell(2).getCellType())
+                    .isEqualTo(org.apache.poi.ss.usermodel.CellType.STRING);
+        }
+    }
+
     private void seedReservation(UUID hqId) {
         jdbc.update("""
                 insert into reservation
@@ -426,6 +485,8 @@ class AuditIntegrationTest {
 
     private void clean() {
         jdbc.update("delete from staff_session");
+        jdbc.update("delete from guest_request_event");
+        jdbc.update("delete from guest_request");
         jdbc.update("delete from cancellation_policy_noop_command");
         jdbc.update("delete from cancellation_refund_rule");
         jdbc.update("delete from cancellation_policy_revision");
