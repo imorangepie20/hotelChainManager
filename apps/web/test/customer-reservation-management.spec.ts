@@ -15,7 +15,7 @@ async function mockApi(page: Page, reservation = confirmed, options: { preview?:
     if (url.pathname === '/api/hotels' || url.pathname === '/api/website/navigation') return route.fulfill({ json: [] })
     if (url.pathname === `/api/reservations/${id}`) return route.request().headers()['x-reservation-token'] === access.managementToken
       ? route.fulfill({ json: reservation }) : route.fulfill({ status: 404, json: { code: 'NOT_FOUND', message: '없음' } })
-    if (url.pathname === `/api/reservations/${id}/cancellation-preview`) return route.fulfill({ json: options.preview ?? { reservationId: id, status: 'CONFIRMED', cancellable: true, refundAmount: 360000, currency: 'KRW', cutoffAt: '2026-09-21T09:00:00.000Z', timezone: 'Asia/Seoul', unavailableReason: null } })
+    if (url.pathname === `/api/reservations/${id}/cancellation-preview`) return route.fulfill({ json: options.preview ?? { reservationId: id, status: 'CONFIRMED', cancellable: true, refundAmount: 360000, refundPercent: 100, currency: 'KRW', cutoffAt: '2026-09-21T09:00:00.000Z', timezone: 'Asia/Seoul', unavailableReason: null } })
     if (url.pathname === `/api/reservations/${id}/cancel`) return route.fulfill({ json: { status: 'CANCELLED', refundAmount: 360000 } })
     if (url.pathname === `/api/reservations/${id}/change-summary`) return route.fulfill({ json: options.change ? { differenceKrw: 100000, refundStatus: null, ...options.change } : null })
     if (url.pathname === '/api/reservation-change-payments/current') return options.change ? route.fulfill({ json: options.change }) : route.fulfill({ status: 404, json: { code: 'NOT_FOUND', message: '없음' } })
@@ -137,7 +137,7 @@ test('같은 날짜와 금액의 객실·요금제 변경도 지연된 상세와
     return route.fulfill({ json: { ...confirmed, roomTypeName: '디럭스 오션', ratePlanName: '룸 온리' } })
   })
   await page.route(`**/api/reservations/${id}/cancellation-preview`, route => { previewReads += 1; return route.fulfill({ json: {
-    reservationId: id, status: 'CONFIRMED', cancellable: true, refundAmount: confirmed.total,
+    reservationId: id, status: 'CONFIRMED', cancellable: true, refundAmount: confirmed.total, refundPercent: 100,
     currency: 'KRW', cutoffAt: '2026-09-23T09:00:00Z', timezone: 'Asia/Seoul', unavailableReason: null,
   } }) })
   await page.goto(`/reservations/${id}`)

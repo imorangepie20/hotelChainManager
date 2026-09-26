@@ -12,13 +12,6 @@ const POLICY_BODY = JSON.stringify({
   revision: 1,
 });
 
-const EMPTY_REVISIONS = JSON.stringify({
-  revisions: [],
-  totalCount: 0,
-  limit: 10,
-  offset: 0,
-});
-
 function seedStaffScript(role: "HQ_ADMIN" | "BRANCH_STAFF") {
   const staff =
     role === "HQ_ADMIN"
@@ -489,4 +482,164 @@ test("keeps the ttl dialog open with a server validation message", async ({
   ).toBeVisible();
   // 대화상자가 열려 있어 사용자가 입력을 고칠 수 있다.
   await expect(page.getByTestId("edit-approval-ttl-submit")).toBeVisible();
+});
+
+test("selects a hotel, edits refund tiers, and reuses the idempotency key on retry", async ({
+  page,
+}) => {
+  await page.addInitScript(seedStaffScript("HQ_ADMIN"));
+  const hotelId = "11000000-0000-0000-0000-000000000001";
+  let saved = false;
+  let attempts = 0;
+  const keys: string[] = [];
+
+  await page.route("**/api/staff/hotels", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify([
+        {
+          id: hotelId,
+          name: "서울 센트럴",
+          region: "서울",
+          timezone: "Asia/Seoul",
+          active: true,
+        },
+      ]),
+    }),
+  );
+  await page.route(/.*\/api\/staff\/policies(\?.*)?$/, (route) => {
+    const selectedHotel = new URL(route.request().url()).searchParams.get("hotelId");
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ...JSON.parse(POLICY_BODY),
+        cancellation: {
+          refundCutoffDaysBefore: 3,
+          refundCutoffLocalTime: "18:00",
+          timezone: "Asia/Seoul",
+          scope: selectedHotel && saved ? "HOTEL" : "CHAIN",
+          inherited: Boolean(selectedHotel && !saved),
+          rules: saved
+            ? [
+                { daysBefore: 3, cutoffLocalTime: "18:00", refundPercent: 100 },
+                { daysBefore: 1, cutoffLocalTime: "18:00", refundPercent: 50 },
+              ]
+            : [{ daysBefore: 3, cutoffLocalTime: "18:00", refundPercent: 100 }],
+        },
+        hotelCancellationRevision:
+          selectedHotel && saved
+            ? {
+                revisionId: "22000000-0000-0000-0000-000000000001",
+                hotelId,
+                action: "SET",
+                revision: 1,
+                rules: [],
+              }
+            : null,
+      }),
+    });
+  });
+  await page.route(
+    `**/api/staff/policies/hotels/${hotelId}/cancellation`,
+    async (route) => {
+      attempts += 1;
+      keys.push(route.request().headers()["idempotency-key"]);
+      if (attempts === 1) {
+        return route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({ message: "잠시 후 다시 시도해 주세요." }),
+        });
+      }
+      saved = true;
+      const body = route.request().postDataJSON() as {
+        rules: Array<{ refundPercent: number }>;
+      };
+      expect(body.rules.map((rule) => rule.refundPercent)).toEqual([100, 50]);
+      return route.fulfill({ status: 201, contentType: "application/json", body: "{}" });
+    },
+  );
+
+  await page.goto("/dashboard/policies");
+  await page.getByTestId("policy-hotel-select").selectOption(hotelId);
+  await expect(page.getByTestId("policy-scope-status")).toHaveText("체인 정책 상속");
+
+  await page.getByTestId("edit-cancellation").click();
+  await page.getByTestId("add-refund-rule").click();
+  await page.getByTestId("edit-rule-days-1").fill("1");
+  await page.getByTestId("edit-rule-time-1").fill("18:00");
+  await page.getByTestId("edit-rule-percent-1").fill("50");
+  await page.getByTestId("edit-cancellation-submit").click();
+  await expect(page.getByRole("alert")).toHaveText("잠시 후 다시 시도해 주세요.");
+  await page.getByTestId("edit-cancellation-submit").click();
+
+  await expect(page.getByTestId("policy-scope-status")).toHaveText("지점 재정의");
+  expect(keys).toHaveLength(2);
+  expect(keys[0]).toBeTruthy();
+  expect(keys[1]).toBe(keys[0]);
+});
+
+test("returns a hotel override to chain inheritance", async ({ page }) => {
+  await page.addInitScript(seedStaffScript("HQ_ADMIN"));
+  const hotelId = "11000000-0000-0000-0000-000000000001";
+  let inherited = false;
+  await page.route("**/api/staff/hotels", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify([
+        { id: hotelId, name: "서울 센트럴", region: "서울", timezone: "Asia/Seoul", active: true },
+      ]),
+    }),
+  );
+  await page.route(/.*\/api\/staff\/policies(\?.*)?$/, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ...JSON.parse(POLICY_BODY),
+        hotelCancellationRevision: inherited
+          ? { revisionId: "revision", hotelId, action: "INHERIT", revision: 2, rules: [] }
+          : { revisionId: "revision", hotelId, action: "SET", revision: 1, rules: [] },
+      }),
+    }),
+  );
+  await page.route(
+    `**/api/staff/policies/hotels/${hotelId}/cancellation/inherit`,
+    (route) => {
+      inherited = true;
+      return route.fulfill({ status: 201, contentType: "application/json", body: "{}" });
+    },
+  );
+
+  await page.goto("/dashboard/policies");
+  await page.getByTestId("policy-hotel-select").selectOption(hotelId);
+  await expect(page.getByTestId("policy-scope-status")).toHaveText("지점 재정의");
+  await page.getByTestId("inherit-cancellation").click();
+  await expect(page.getByTestId("policy-scope-status")).toHaveText("체인 정책 상속");
+});
+
+test("keeps the refund-rule dialog keyboard accessible at 390px", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.addInitScript(seedStaffScript("HQ_ADMIN"));
+  await page.route(/.*\/api\/staff\/policies(\?.*)?$/, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: POLICY_BODY }),
+  );
+  await page.goto("/dashboard/policies");
+
+  await page.getByTestId("edit-cancellation").focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("dialog", { name: "체인 환불 규칙 변경" })).toBeVisible();
+  await expect(page.getByTestId("edit-cutoff-days")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+
+  const hasHorizontalOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+  );
+  expect(hasHorizontalOverflow).toBe(false);
 });

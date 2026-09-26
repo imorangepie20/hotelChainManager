@@ -7,7 +7,9 @@ package team.hotelchain.policy;
  * 읽기 전용으로만 노출한다.
  */
 public record PolicyView(
-        CancellationPolicy cancellation,
+        CancellationPolicyView cancellation,
+        CancellationPolicyView chainCancellation,
+        CancellationPolicyRevisionView hotelCancellationRevision,
         long changeApprovalDirectLimitKrw,
         long changeApprovalTtlSeconds,
         boolean changeSettlementEnabled,

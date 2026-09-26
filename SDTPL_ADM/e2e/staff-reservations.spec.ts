@@ -57,6 +57,7 @@ test("lets a branch employee search reservations and open the selected reservati
         status: "CONFIRMED",
         cancellable: true,
         refundAmount: 420000,
+        refundPercent: 100,
         currency: "KRW",
         cutoffAt: "2026-09-14T09:00:00Z",
         unavailableReason: null,
@@ -87,6 +88,7 @@ test("lets a branch employee search reservations and open the selected reservati
         reservationId: "42000000-0000-0000-0000-000000000001",
         status: "CANCELLED",
         refundAmount: 420000,
+        refundPercent: 100,
         currency: "KRW",
       }),
     });

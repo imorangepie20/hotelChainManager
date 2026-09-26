@@ -8,15 +8,21 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.http.CacheControl;
 
 @RestController
 @RequestMapping("/api/staff/reports")
 public class ReportController {
 
     private final OperationsReportService operations;
+    private final OperationsReportXlsxService xlsx;
 
-    public ReportController(OperationsReportService operations) {
+    public ReportController(OperationsReportService operations, OperationsReportXlsxService xlsx) {
         this.operations = operations;
+        this.xlsx = xlsx;
     }
 
     // 본사가 지점별 매출·점유율·취소율·노쇼율과 예약 변경 승인 건수를 읽기 전용으로 확인한다.
@@ -37,5 +43,24 @@ public class ReportController {
             @RequestParam(required = false) LocalDate from,
             @RequestParam(required = false) LocalDate to) {
         return operations.roomTypeRevenue(token, hotelId, from, to);
+    }
+
+    @GetMapping(value = "/operations/export.xlsx",
+            produces = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    public ResponseEntity<byte[]> exportOperationsXlsx(
+            @RequestHeader(value = "X-Staff-Session", required = false) String token,
+            @RequestParam(required = false) LocalDate from,
+            @RequestParam(required = false) LocalDate to,
+            @RequestParam(required = false) UUID hotelId,
+            @RequestParam(defaultValue = "ko") String locale) {
+        OperationsReportView report = operations.operations(token, from, to, hotelId);
+        byte[] body = xlsx.write(report, locale);
+        String filename = "operations-report-" + report.from() + "-" + report.to() + ".xlsx";
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.noStore())
+                .contentType(MediaType.parseMediaType(
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+                .body(body);
     }
 }

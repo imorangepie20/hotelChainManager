@@ -5,11 +5,9 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Clock;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.LocalTime;
-import java.time.ZoneId;
 import java.util.UUID;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -30,6 +28,7 @@ public class CancellationService {
     private final Clock clock;
     private final ReservationChangeMutationGuard mutationGuard;
     private final ObjectProvider<TossRefundService> tossRefunds;
+    private final ObjectMapper objectMapper;
 
     public CancellationService(
             JdbcTemplate jdbc,
@@ -37,13 +36,15 @@ public class CancellationService {
             TestRefundGateway refundGateway,
             Clock clock,
             ReservationChangeMutationGuard mutationGuard,
-            ObjectProvider<TossRefundService> tossRefunds) {
+            ObjectProvider<TossRefundService> tossRefunds,
+            ObjectMapper objectMapper) {
         this.jdbc = jdbc;
         this.access = access;
         this.refundGateway = refundGateway;
         this.clock = clock;
         this.mutationGuard = mutationGuard;
         this.tossRefunds = tossRefunds;
+        this.objectMapper = objectMapper;
     }
 
     @Transactional(noRollbackFor = RefundFailedException.class)
@@ -56,33 +57,38 @@ public class CancellationService {
     @Transactional(readOnly = true)
     public CancellationPreview preview(UUID reservationId, String token) {
         CancellationReservation reservation = findReservation(reservationId, access.hashToken(token));
-        var cutoff = cutoff(reservation);
-        boolean supported = PaymentProviderSafety.supportsSettlement(jdbc, reservationId, activePaymentMode());
+        var decision = reservation.policy().evaluate(reservation.checkIn(), reservation.total(), clock.instant());
+        boolean supported = decision.refundAmount() == 0
+                || PaymentProviderSafety.supportsSettlement(jdbc, reservationId, activePaymentMode());
         boolean confirmed = "CONFIRMED".equals(reservation.status());
-        boolean beforeCutoff = clock.instant().isBefore(cutoff);
         String unavailableReason = !supported ? "이 결제 공급자의 취소·환불은 아직 지원하지 않습니다. 호텔에 문의해 주세요." : !confirmed
                 ? "확정된 예약만 취소할 수 있습니다."
-                : beforeCutoff ? null : "취소 가능 시간이 지났습니다.";
-        return new CancellationPreview(reservationId, reservation.status(), supported && confirmed && beforeCutoff,
-                supported && confirmed && beforeCutoff ? reservation.total() : 0, "KRW", cutoff, reservation.timezone(), unavailableReason);
+                : decision.cancellable() ? null : "취소 가능 시간이 지났습니다.";
+        boolean cancellable = supported && confirmed && decision.cancellable();
+        return new CancellationPreview(reservationId, reservation.status(), cancellable,
+                cancellable ? decision.refundAmount() : 0,
+                cancellable ? decision.refundPercent() : 0,
+                "KRW", decision.cutoffAt(), reservation.policy().timezone(), unavailableReason);
     }
 
     StaffCancellationPreview previewForStaff(UUID reservationId) {
         CancellationReservation reservation = findReservationForStaff(reservationId, false);
-        var cutoff = cutoff(reservation);
-        boolean supported = PaymentProviderSafety.supportsSettlement(jdbc, reservationId, activePaymentMode());
+        var decision = reservation.policy().evaluate(reservation.checkIn(), reservation.total(), clock.instant());
+        boolean supported = decision.refundAmount() == 0
+                || PaymentProviderSafety.supportsSettlement(jdbc, reservationId, activePaymentMode());
         boolean confirmed = "CONFIRMED".equals(reservation.status());
-        boolean beforeCutoff = clock.instant().isBefore(cutoff);
         String unavailableReason = !supported ? "이 결제 공급자의 취소·환불은 아직 지원하지 않습니다. 호텔에 문의해 주세요." : !confirmed
                 ? "확정된 예약만 취소할 수 있습니다."
-                : beforeCutoff ? null : "취소 가능 시간이 지났습니다.";
+                : decision.cancellable() ? null : "취소 가능 시간이 지났습니다.";
+        boolean cancellable = supported && confirmed && decision.cancellable();
         return new StaffCancellationPreview(
                 reservationId,
                 reservation.status(),
-                supported && confirmed && beforeCutoff,
-                supported && confirmed && beforeCutoff ? reservation.total() : 0,
+                cancellable,
+                cancellable ? decision.refundAmount() : 0,
+                cancellable ? decision.refundPercent() : 0,
                 "KRW",
-                cutoff,
+                decision.cutoffAt(),
                 unavailableReason
         );
     }
@@ -136,18 +142,29 @@ public class CancellationService {
                 throw new BusinessConflictException(
                         "RESERVATION_STATE_CONFLICT", "확정된 예약만 취소할 수 있습니다.");
             }
-            insertAttempt(reservationId, idempotencyKey, requestHash, reservation.total(), "SUCCEEDED", "CANCELLED", staffId);
-            return new CancellationResult(reservationId, "CANCELLED", reservation.total(), "KRW");
+            Long completedRefund = jdbc.query("""
+                    select refund_amount_krw from cancellation_attempt
+                     where reservation_id = ? and refund_status = 'SUCCEEDED'
+                     order by created_at desc, id desc limit 1
+                    """, rs -> rs.next() ? rs.getLong(1) : null, reservationId);
+            return new CancellationResult(
+                    reservationId, "CANCELLED", completedRefund == null ? 0 : completedRefund, "KRW");
         }
         if (!"CONFIRMED".equals(reservation.status())) {
             throw new BusinessConflictException("RESERVATION_STATE_CONFLICT", "확정된 예약만 취소할 수 있습니다.");
         }
 
-        var cutoff = cutoff(reservation);
-        if (!clock.instant().isBefore(cutoff)) {
+        var decision = reservation.policy().evaluate(reservation.checkIn(), reservation.total(), clock.instant());
+        if (!decision.cancellable()) {
             throw new CancellationNotAllowedException();
         }
         mutationGuard.assertCriticalMutationAllowed(reservationId);
+        long refundAmount = decision.refundAmount();
+        if (refundAmount == 0) {
+            insertAttempt(reservationId, idempotencyKey, requestHash, 0, "SUCCEEDED", "CANCELLED", staffId);
+            completeInternalCancellation(reservationId, reservation);
+            return new CancellationResult(reservationId, "CANCELLED", 0, "KRW");
+        }
         TossRefundService activeRefunds = tossRefunds.getIfAvailable();
         String tossProvider = activeRefunds == null ? null
                 : TossPaymentEnvironment.from(activeRefunds.providerMode()).providerCode();
@@ -160,40 +177,34 @@ public class CancellationService {
                     Boolean.class,reservationId,tossProvider))) {
                 throw new BusinessConflictException("CANCELLATION_RECONCILIATION_REQUIRED", "혼합 거래 또는 비활성 토스 환불은 본사 조정이 필요합니다.");
             }
-            var transactions=jdbc.queryForList("select id,captured_amount_krw-refunded_amount_krw as remaining from payment_transaction where reservation_id=? order by created_at,id for update",reservationId);
-            long total=transactions.stream().mapToLong(r -> (long)r.get("remaining")).sum();
-            insertAttempt(reservationId,idempotencyKey,requestHash,total,"PENDING","CANCELLATION_PENDING",staffId);
+            var transactions=jdbc.queryForList("select id,captured_amount_krw-refunded_amount_krw as remaining from payment_transaction where reservation_id=? and captured_amount_krw-refunded_amount_krw>0 order by created_at desc,id desc for update",reservationId);
+            long refundable=transactions.stream().mapToLong(r -> (long)r.get("remaining")).sum();
+            if (refundable < refundAmount) {
+                throw new BusinessConflictException("PAYMENT_TRANSACTION_NOT_SETTLEABLE", "환불 가능한 결제 잔액이 예상 환불액보다 적습니다.");
+            }
+            insertAttempt(reservationId,idempotencyKey,requestHash,refundAmount,"PENDING","CANCELLATION_PENDING",staffId);
             UUID cancellationId=jdbc.queryForObject("select id from cancellation_attempt where reservation_id=? and idempotency_key=?",UUID.class,reservationId,idempotencyKey);
-            for(var payment:transactions) if((long)payment.get("remaining")>0)
-                activeRefunds.prepare((UUID)payment.get("id"),(long)payment.get("remaining"),null,cancellationId);
-            return new CancellationResult(reservationId,"CANCELLATION_PENDING",total,"KRW");
+            long left = refundAmount;
+            for (var payment : transactions) {
+                if (left == 0) break;
+                long amount = Math.min(left, (long) payment.get("remaining"));
+                activeRefunds.prepare((UUID) payment.get("id"), amount, null, cancellationId);
+                left -= amount;
+            }
+            return new CancellationResult(reservationId,"CANCELLATION_PENDING",refundAmount,"KRW");
         }
         if (tossRefunds.getIfAvailable() != null) {
             throw new BusinessConflictException("CANCELLATION_RECONCILIATION_REQUIRED", "토스 모드에서는 이전 가상 거래의 환불을 본사에서 조정해야 합니다.");
         }
         PaymentProviderSafety.requireFakeSettlement(jdbc, reservationId);
-        if (!refundGateway.refund(reservationId, reservation.total())) {
-            insertAttempt(reservationId, idempotencyKey, requestHash, reservation.total(), "FAILED", "CONFIRMED", staffId);
+        if (!refundGateway.refund(reservationId, refundAmount)) {
+            insertAttempt(reservationId, idempotencyKey, requestHash, refundAmount, "FAILED", "CONFIRMED", staffId);
             throw new RefundFailedException();
         }
 
-        mutationGuard.prepareCriticalMutation(reservationId);
-        jdbc.query("""
-                SELECT stay_date FROM inventory_day
-                 WHERE room_type_id = ? AND stay_date >= ? AND stay_date < ?
-                 ORDER BY stay_date FOR UPDATE
-                """, rs -> { }, reservation.roomTypeId(), reservation.checkIn(), reservation.checkOut());
-        int updated = jdbc.update("""
-                UPDATE inventory_day SET confirmed = confirmed - ?
-                 WHERE room_type_id = ? AND stay_date >= ? AND stay_date < ? AND confirmed >= ?
-                """, reservation.rooms(), reservation.roomTypeId(), reservation.checkIn(), reservation.checkOut(), reservation.rooms());
-        if (updated != reservation.nights()) {
-            throw new IllegalStateException("취소할 확정 재고가 예약 숙박일과 일치하지 않습니다.");
-        }
-        jdbc.update("update reservation set status = 'CANCELLED' where id = ?", reservationId);
-        insertAttempt(reservationId, idempotencyKey, requestHash, reservation.total(), "SUCCEEDED", "CANCELLED", staffId);
-        mutationGuard.incrementRevision(reservationId);
-        return new CancellationResult(reservationId, "CANCELLED", reservation.total(), "KRW");
+        completeInternalCancellation(reservationId, reservation);
+        insertAttempt(reservationId, idempotencyKey, requestHash, refundAmount, "SUCCEEDED", "CANCELLED", staffId);
+        return new CancellationResult(reservationId, "CANCELLED", refundAmount, "KRW");
     }
 
     private String activePaymentMode() {
@@ -224,27 +235,31 @@ public class CancellationService {
         long verified=jdbc.queryForObject("select coalesce(sum(amount_krw),0) from toss_refund_command where cancellation_attempt_id=? and status='SUCCEEDED'",Long.class,attemptId);
         if(verified!=(long)attempt.get("refund_amount_krw") || !"CONFIRMED".equals(reservation.status()))return;
         jdbc.update("update cancellation_attempt set refund_status='SUCCEEDED',reservation_status='CANCELLED' where id=?",attemptId);
-        mutationGuard.prepareCriticalMutation(reservationId);
-        jdbc.query("SELECT stay_date FROM inventory_day WHERE room_type_id=? AND stay_date>=? AND stay_date<? ORDER BY stay_date FOR UPDATE",
-                rs->{},reservation.roomTypeId(),reservation.checkIn(),reservation.checkOut());
-        int updated=jdbc.update("UPDATE inventory_day SET confirmed=confirmed-? WHERE room_type_id=? AND stay_date>=? AND stay_date<? AND confirmed>=?",
-                reservation.rooms(),reservation.roomTypeId(),reservation.checkIn(),reservation.checkOut(),reservation.rooms());
-        if(updated!=reservation.nights())throw new IllegalStateException("취소 재고와 숙박일이 일치하지 않습니다.");
-        jdbc.update("update reservation set status='CANCELLED' where id=?",reservationId);
-        mutationGuard.incrementRevision(reservationId);
+        completeInternalCancellation(reservationId, reservation);
     }
 
-    private java.time.Instant cutoff(CancellationReservation reservation) {
-        return LocalDateTime.of(reservation.checkIn().minusDays(reservation.cutoffDays()), reservation.cutoffTime())
-                .atZone(ZoneId.of(reservation.timezone())).toInstant();
+    private void completeInternalCancellation(UUID reservationId, CancellationReservation reservation) {
+        mutationGuard.prepareCriticalMutation(reservationId);
+        jdbc.query("""
+                SELECT stay_date FROM inventory_day
+                 WHERE room_type_id = ? AND stay_date >= ? AND stay_date < ?
+                 ORDER BY stay_date FOR UPDATE
+                """, rs -> { }, reservation.roomTypeId(), reservation.checkIn(), reservation.checkOut());
+        int updated = jdbc.update("""
+                UPDATE inventory_day SET confirmed = confirmed - ?
+                 WHERE room_type_id = ? AND stay_date >= ? AND stay_date < ? AND confirmed >= ?
+                """, reservation.rooms(), reservation.roomTypeId(), reservation.checkIn(), reservation.checkOut(), reservation.rooms());
+        if (updated != reservation.nights()) {
+            throw new IllegalStateException("취소할 확정 재고가 예약 숙박일과 일치하지 않습니다.");
+        }
+        jdbc.update("update reservation set status = 'CANCELLED' where id = ?", reservationId);
+        mutationGuard.incrementRevision(reservationId);
     }
 
     private CancellationReservation lockReservation(UUID id, String tokenHash) {
         CancellationReservation reservation = jdbc.query("""
                 SELECT id, room_type_id, check_in, check_out, rooms, status, total_krw,
-                       COALESCE(policy_snapshot->>'timezone', 'Asia/Seoul') AS timezone,
-                       COALESCE((policy_snapshot->>'refundCutoffDaysBefore')::integer, 1) AS cutoff_days,
-                       COALESCE((policy_snapshot->>'refundCutoffLocalTime')::time, '18:00'::time) AS cutoff_time,
+                       policy_snapshot::text AS policy_snapshot,
                        (SELECT count(*) FROM reservation_night rn WHERE rn.reservation_id = r.id) AS nights
                   FROM reservation r
                  WHERE id = ? AND management_token_hash = ?
@@ -259,9 +274,7 @@ public class CancellationService {
     private CancellationReservation findReservation(UUID id, String tokenHash) {
         CancellationReservation reservation = jdbc.query("""
                 SELECT id, room_type_id, check_in, check_out, rooms, status, total_krw,
-                       COALESCE(policy_snapshot->>'timezone', 'Asia/Seoul') AS timezone,
-                       COALESCE((policy_snapshot->>'refundCutoffDaysBefore')::integer, 1) AS cutoff_days,
-                       COALESCE((policy_snapshot->>'refundCutoffLocalTime')::time, '18:00'::time) AS cutoff_time,
+                       policy_snapshot::text AS policy_snapshot,
                        (SELECT count(*) FROM reservation_night rn WHERE rn.reservation_id = r.id) AS nights
                   FROM reservation r
                  WHERE id = ? AND management_token_hash = ?
@@ -273,9 +286,7 @@ public class CancellationService {
     private CancellationReservation findReservationForStaff(UUID id, boolean lock) {
         String sql = """
                 SELECT id, room_type_id, check_in, check_out, rooms, status, total_krw,
-                       COALESCE(policy_snapshot->>'timezone', 'Asia/Seoul') AS timezone,
-                       COALESCE((policy_snapshot->>'refundCutoffDaysBefore')::integer, 1) AS cutoff_days,
-                       COALESCE((policy_snapshot->>'refundCutoffLocalTime')::time, '18:00'::time) AS cutoff_time,
+                       policy_snapshot::text AS policy_snapshot,
                        (SELECT count(*) FROM reservation_night rn WHERE rn.reservation_id = r.id) AS nights
                   FROM reservation r
                  WHERE id = ?
@@ -315,12 +326,12 @@ public class CancellationService {
     private CancellationReservation mapReservation(ResultSet rs) throws SQLException {
         return new CancellationReservation(rs.getObject("id", UUID.class), rs.getObject("room_type_id", UUID.class),
                 rs.getDate("check_in").toLocalDate(), rs.getDate("check_out").toLocalDate(), rs.getInt("rooms"),
-                rs.getString("status"), rs.getLong("total_krw"), rs.getString("timezone"), rs.getInt("cutoff_days"),
-                rs.getTime("cutoff_time").toLocalTime(), rs.getInt("nights"));
+                rs.getString("status"), rs.getLong("total_krw"),
+                SavedCancellationPolicy.fromJson(objectMapper, rs.getString("policy_snapshot")), rs.getInt("nights"));
     }
 
     private record CancellationReservation(UUID id, UUID roomTypeId, LocalDate checkIn, LocalDate checkOut,
-            int rooms, String status, long total, String timezone, int cutoffDays, LocalTime cutoffTime, int nights) {
+            int rooms, String status, long total, SavedCancellationPolicy policy, int nights) {
     }
 
     private record ExistingCancellation(String requestHash, long refundAmount, String refundStatus,

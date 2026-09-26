@@ -24,20 +24,28 @@ public class PolicyQueryService {
     private final JdbcTemplate jdbc;
     private final StaffAccessService access;
     private final CurrentPolicy current;
+    private final CancellationPolicyResolver cancellationPolicies;
     private final ReservationChangePolicy changePolicy;
 
     public PolicyQueryService(JdbcTemplate jdbc, StaffAccessService access, CurrentPolicy current,
+            CancellationPolicyResolver cancellationPolicies,
             ReservationChangePolicy changePolicy) {
         this.jdbc = jdbc;
         this.access = access;
         this.current = current;
+        this.cancellationPolicies = cancellationPolicies;
         this.changePolicy = changePolicy;
     }
 
     @Transactional(readOnly = true)
-    public PolicyView current(String token) {
+    public PolicyView current(String token, java.util.UUID hotelId) {
         access.requireHeadquarters(token);
-        return new PolicyView(current.cancellation(), current.changeApprovalDirectLimitKrw(),
+        ResolvedCancellationPolicy chain = cancellationPolicies.resolveChain();
+        ResolvedCancellationPolicy effective = hotelId == null
+                ? chain : cancellationPolicies.resolveForHotel(hotelId);
+        return new PolicyView(CancellationPolicyView.from(effective), CancellationPolicyView.from(chain),
+                hotelId == null ? null : cancellationPolicies.latestHotelRevision(hotelId),
+                current.changeApprovalDirectLimitKrw(),
                 current.changeApprovalTtlSeconds(), changePolicy.settlementEnabled(), revisionCount());
     }
 
@@ -49,17 +57,51 @@ public class PolicyQueryService {
         int resolvedOffset = offset == null ? 0 : offset;
         validatePaging(resolvedLimit, resolvedOffset);
 
-        Integer total = jdbc.queryForObject("select count(*) from policy_revision", Integer.class);
+        Integer total = jdbc.queryForObject("""
+                select count(*) from (
+                    select r.id from policy_revision r
+                    union all
+                    select p.id from cancellation_policy_revision p
+                     where p.legacy_revision_id is null
+                ) revisions
+                """, Integer.class);
         int totalCount = total == null ? 0 : total;
 
         List<PolicyRevisionView> revisions = jdbc.query("""
-                select r.key, r.refund_cutoff_days_before, r.refund_cutoff_local_time, r.value_krw,
-                       r.value_seconds,
-                       s.email as staff_email, s.display_name as staff_display_name, s.role as staff_role,
-                       to_char(r.created_at at time zone 'Asia/Seoul', 'YYYY-MM-DD"T"HH24:MI:SS') as created_at
-                  from policy_revision r
-                  join staff_member s on s.id = r.staff_id
-                 order by r.created_at desc, r.id desc
+                select key, refund_cutoff_days_before, refund_cutoff_local_time, value_krw,
+                       value_seconds, summary_override, staff_email, staff_display_name, staff_role,
+                       to_char(created_at_raw at time zone 'Asia/Seoul', 'YYYY-MM-DD"T"HH24:MI:SS') as created_at
+                  from (
+                    select r.id, r.key, r.refund_cutoff_days_before, r.refund_cutoff_local_time,
+                           r.value_krw, r.value_seconds, cast(null as text) as summary_override,
+                           s.email as staff_email, s.display_name as staff_display_name, s.role as staff_role,
+                           r.created_at as created_at_raw
+                      from policy_revision r
+                      join staff_member s on s.id = r.staff_id
+                    union all
+                    select p.id, 'cancellation' as key, 0 as refund_cutoff_days_before,
+                           '' as refund_cutoff_local_time, cast(null as bigint) as value_krw,
+                           cast(null as integer) as value_seconds,
+                           case when p.action = 'INHERIT'
+                                then coalesce(h.name, '지점') || ' 재정의 해제 → 체인 정책 상속'
+                                else coalesce(h.name, '체인 전체') || ' 환불 규칙 변경: '
+                                     || coalesce((
+                                         select string_agg(
+                                             rule.days_before || '일 전 ' || rule.cutoff_local_time
+                                             || ' ' || rule.refund_percent || '%',
+                                             ' · ' order by rule.rule_order)
+                                           from cancellation_refund_rule rule
+                                          where rule.revision_id = p.id
+                                     ), '규칙 없음')
+                           end as summary_override,
+                           s.email as staff_email, s.display_name as staff_display_name, s.role as staff_role,
+                           p.created_at as created_at_raw
+                      from cancellation_policy_revision p
+                      join staff_member s on s.id = p.staff_id
+                      left join hotel h on h.id = p.hotel_id
+                     where p.legacy_revision_id is null
+                  ) revisions
+                 order by created_at_raw desc, id desc
                  limit ? offset ?
                 """, this::mapRevision, resolvedLimit, resolvedOffset);
 
@@ -68,7 +110,8 @@ public class PolicyQueryService {
 
     private PolicyRevisionView mapRevision(ResultSet rs, int rowNumber) throws SQLException {
         String key = rs.getString("key");
-        String summary = switch (key) {
+        String summaryOverride = rs.getString("summary_override");
+        String summary = summaryOverride != null ? summaryOverride : switch (key) {
             case CurrentPolicy.CANCELLATION_KEY -> "취소 정책 체크인 " + rs.getInt("refund_cutoff_days_before")
                     + "일 전 " + rs.getString("refund_cutoff_local_time") + " 마감";
             case CurrentPolicy.CHANGE_APPROVAL_KEY ->

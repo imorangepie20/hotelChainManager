@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -24,8 +25,10 @@ public class PolicyController {
 
     // 본사가 체인 공통 정책의 현재값을 읽는다.
     @GetMapping
-    public PolicyView current(@RequestHeader(value = "X-Staff-Session", required = false) String token) {
-        return queries.current(token);
+    public PolicyView current(
+            @RequestHeader(value = "X-Staff-Session", required = false) String token,
+            @RequestParam(required = false) java.util.UUID hotelId) {
+        return queries.current(token, hotelId);
     }
 
     // 본사가 정책을 바꾼 이력을 최신순으로 읽는다. SELECT만 사용한다.
@@ -44,6 +47,31 @@ public class PolicyController {
             @RequestHeader(value = "X-Staff-Session", required = false) String token,
             @RequestBody CancellationPolicyUpdateRequest request) {
         CancellationPolicyUpdateResponse response = commands.updateCancellation(token, idempotencyKey, request);
+        return response.created()
+                ? ResponseEntity.status(HttpStatus.CREATED).body(response)
+                : ResponseEntity.ok(response);
+    }
+
+    @PutMapping("/hotels/{hotelId}/cancellation")
+    public ResponseEntity<CancellationPolicyUpdateResponse> updateHotelCancellation(
+            @PathVariable java.util.UUID hotelId,
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @RequestHeader(value = "X-Staff-Session", required = false) String token,
+            @RequestBody CancellationPolicyUpdateRequest request) {
+        CancellationPolicyUpdateResponse response = commands.updateHotelCancellation(
+                token, hotelId, idempotencyKey, request);
+        return response.created()
+                ? ResponseEntity.status(HttpStatus.CREATED).body(response)
+                : ResponseEntity.ok(response);
+    }
+
+    @PutMapping("/hotels/{hotelId}/cancellation/inherit")
+    public ResponseEntity<CancellationPolicyUpdateResponse> inheritHotelCancellation(
+            @PathVariable java.util.UUID hotelId,
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @RequestHeader(value = "X-Staff-Session", required = false) String token) {
+        CancellationPolicyUpdateResponse response = commands.inheritHotelCancellation(
+                token, hotelId, idempotencyKey);
         return response.created()
                 ? ResponseEntity.status(HttpStatus.CREATED).body(response)
                 : ResponseEntity.ok(response);

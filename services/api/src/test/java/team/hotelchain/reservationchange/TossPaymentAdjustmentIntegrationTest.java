@@ -275,6 +275,7 @@ class TossPaymentAdjustmentIntegrationTest {
         UUID reservation = original();
         jdbc.update("insert into payment_transaction(id,reservation_id,provider,merchant_account,gateway_transaction_id,transaction_type,captured_amount_krw,currency) values (?,?,'TOSS_TEST','hotel-test','extra-key','CHANGE_CHARGE',100000,'KRW')", UUID.randomUUID(), reservation);
         jdbc.update("insert into payment_provider_attempt(id,reservation_id,provider,merchant_account,order_id,payment_key,idempotency_key,amount_krw,currency,status) values (?,?,'TOSS_TEST','hotel-test','extra-order','extra-key','extra-idem',100000,'KRW','SUCCEEDED')", UUID.randomUUID(), reservation);
+        jdbc.update("update reservation set total_krw=300000 where id=?", reservation);
         provider.cancelResult = c -> c.paymentKey().equals("extra-key") ? new ProviderPayment(null,null,0,null,ProviderStatus.UNKNOWN,null,"HTTP_IO")
                 : new ProviderPayment(c.paymentKey(), order(c.paymentKey()), c.amountKrw(),"KRW",ProviderStatus.DONE,"cancel-original",null);
         var result = cancellations.cancel(reservation, TOKEN, "cancel-all");
@@ -287,6 +288,57 @@ class TossPaymentAdjustmentIntegrationTest {
         assertThat(cancellations.cancel(reservation, TOKEN, "cancel-all").status()).isEqualTo("CANCELLED");
         assertThat(jdbc.queryForObject("select sum(refunded_amount_krw) from payment_transaction",Long.class)).isEqualTo(300000);
         assertThat(provider.cancelCalls.stream().filter(c -> c.paymentKey().equals("original-key")).count()).isEqualTo(1);
+    }
+
+    @Test void partialPolicyRefundUsesOnlyTheNewestTransactionsUpToTheServerCalculatedTarget() {
+        UUID reservation = original();
+        LocalDate partialCheckIn = LocalDate.now().plusDays(25);
+        jdbc.update("update inventory_day set stay_date=? where room_type_id=? and stay_date=?",
+                partialCheckIn, ROOM, DAY);
+        jdbc.update("update inventory_day set stay_date=? where room_type_id=? and stay_date=?",
+                partialCheckIn.plusDays(1), ROOM, DAY.plusDays(1));
+        jdbc.update("update reservation_night set stay_date=? where reservation_id=? and stay_date=?",
+                partialCheckIn, reservation, DAY);
+        jdbc.update("update reservation_night set stay_date=? where reservation_id=? and stay_date=?",
+                partialCheckIn.plusDays(1), reservation, DAY.plusDays(1));
+        jdbc.update("""
+                update reservation
+                   set policy_snapshot = '{"timezone":"Asia/Seoul","refundRules":[
+                     {"daysBefore":30,"cutoffLocalTime":"18:00","refundPercent":100},
+                     {"daysBefore":20,"cutoffLocalTime":"18:00","refundPercent":50}
+                   ]}'::jsonb,
+                       check_in = ?, check_out = ?
+                 where id = ?
+                """, partialCheckIn, partialCheckIn.plusDays(2), reservation);
+        UUID newest = UUID.randomUUID();
+        jdbc.update("""
+                insert into payment_transaction
+                    (id,reservation_id,provider,merchant_account,gateway_transaction_id,transaction_type,
+                     captured_amount_krw,currency,created_at)
+                values (?,?,'TOSS_TEST','hotel-test','extra-key','CHANGE_CHARGE',100000,'KRW',now()+interval '1 second')
+                """, newest, reservation);
+        jdbc.update("""
+                insert into payment_provider_attempt
+                    (id,reservation_id,provider,merchant_account,order_id,payment_key,idempotency_key,
+                     amount_krw,currency,status)
+                values (?,?,'TOSS_TEST','hotel-test','extra-order','extra-key','extra-idem',100000,'KRW','SUCCEEDED')
+                """, UUID.randomUUID(), reservation);
+
+        var result = cancellations.cancel(reservation, TOKEN, "cancel-half");
+
+        assertThat(result.refundAmount()).isEqualTo(100000);
+        assertThat(jdbc.queryForObject(
+                "select sum(amount_krw) from toss_refund_command where cancellation_attempt_id is not null",
+                Long.class)).isEqualTo(100000);
+        assertThat(jdbc.queryForObject(
+                "select transaction_id from toss_refund_command where cancellation_attempt_id is not null",
+                UUID.class)).isEqualTo(newest);
+        cancellationWorker.processPending();
+        assertThat(provider.cancelCalls).singleElement()
+                .satisfies(command -> {
+                    assertThat(command.paymentKey()).isEqualTo("extra-key");
+                    assertThat(command.amountKrw()).isEqualTo(100000);
+                });
     }
 
     @Test void mixedCancellationCannotUseFakeRefund() {
@@ -304,6 +356,7 @@ class TossPaymentAdjustmentIntegrationTest {
         var change = request(reservation, -100000);
         jdbc.update("insert into payment_transaction(id,reservation_id,provider,merchant_account,gateway_transaction_id,transaction_type,captured_amount_krw,currency) values (?,?,'TOSS_TEST','hotel-test','extra-key','CHANGE_CHARGE',100000,'KRW')", UUID.randomUUID(), reservation);
         jdbc.update("insert into payment_provider_attempt(id,reservation_id,provider,merchant_account,order_id,payment_key,idempotency_key,amount_krw,currency,status) values (?,?,'TOSS_TEST','hotel-test','extra-order','extra-key','extra-idem',100000,'KRW','SUCCEEDED')", UUID.randomUUID(), reservation);
+        jdbc.update("update reservation set total_krw=300000 where id=?", reservation);
         provider.cancelResult = c -> c.paymentKey().equals("extra-key") ? new ProviderPayment(null,null,0,null,ProviderStatus.FAILED,null,"REFUND_REJECTED")
                 : new ProviderPayment(c.paymentKey(), order(c.paymentKey()), c.amountKrw(),"KRW",ProviderStatus.DONE,"cancel-original",null);
         cancellations.cancel(reservation, TOKEN, "cancel-retry");

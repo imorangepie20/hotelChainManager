@@ -9,5 +9,29 @@ public record CancellationPolicyUpdateResponse(
         String refundCutoffLocalTime,
         String timezone,
         int revision,
-        boolean created) {
+        boolean created,
+        java.util.UUID revisionId,
+        String scope,
+        java.util.UUID hotelId,
+        java.util.List<CancellationRefundRule> rules,
+        boolean inherited) {
+
+    public CancellationPolicyUpdateResponse(
+            int refundCutoffDaysBefore,
+            String refundCutoffLocalTime,
+            String timezone,
+            int revision,
+            boolean created) {
+        this(refundCutoffDaysBefore, refundCutoffLocalTime, timezone, revision, created, null, "CHAIN", null,
+                java.util.List.of(new CancellationRefundRule(
+                        refundCutoffDaysBefore, refundCutoffLocalTime, 100)), false);
+    }
+
+    static CancellationPolicyUpdateResponse from(
+            ResolvedCancellationPolicy policy, int revision, boolean created) {
+        CancellationPolicyView view = CancellationPolicyView.from(policy);
+        return new CancellationPolicyUpdateResponse(view.refundCutoffDaysBefore(), view.refundCutoffLocalTime(),
+                view.timezone(), revision, created, view.revisionId(), view.scope(), view.hotelId(), view.rules(),
+                view.inherited());
+    }
 }

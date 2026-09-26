@@ -101,6 +101,58 @@ class CancellationIntegrationTest {
     }
 
     @Test
+    void hotelPolicySnapshotCalculatesAndRefundsOnlyTheMatchingPartialAmount() {
+        insertHotelPolicy("partial-policy", 1,
+                new Object[][] {{3, "18:00", 100}, {1, "18:00", 50}, {0, "12:00", 0}});
+        ReservationView reservation = confirmedReservation("partial-refund");
+        clock.set(LocalDateTime.of(CHECK_IN.minusDays(2), LocalTime.of(19, 0))
+                .atZone(ZoneId.of("Asia/Seoul")).toInstant());
+
+        CancellationPreview preview = cancellationService.preview(reservation.id(), TOKEN);
+        CancellationResult result = cancellationService.cancel(reservation.id(), TOKEN, "partial-cancel");
+
+        assertThat(preview.refundPercent()).isEqualTo(50);
+        assertThat(preview.refundAmount()).isEqualTo(100_000);
+        assertThat(result.refundAmount()).isEqualTo(100_000);
+        assertThat(refundGateway.refundedAmount(reservation.id())).isEqualTo(100_000);
+        assertThat(reservation.cancellationPolicyDetails().scope()).isEqualTo("HOTEL");
+        assertThat(reservation.cancellationPolicyDetails().refundRules()).hasSize(3);
+        assertInventory(0);
+    }
+
+    @Test
+    void zeroPercentRuleCancelsWithoutCallingThePaymentGateway() {
+        insertHotelPolicy("zero-policy", 1,
+                new Object[][] {{3, "18:00", 100}, {1, "18:00", 50}, {0, "12:00", 0}});
+        ReservationView reservation = confirmedReservation("zero-refund");
+        clock.set(LocalDateTime.of(CHECK_IN.minusDays(1), LocalTime.of(19, 0))
+                .atZone(ZoneId.of("Asia/Seoul")).toInstant());
+
+        CancellationResult result = cancellationService.cancel(reservation.id(), TOKEN, "zero-cancel");
+
+        assertThat(result.status()).isEqualTo("CANCELLED");
+        assertThat(result.refundAmount()).isZero();
+        assertThat(refundGateway.refundedAmount(reservation.id())).isNull();
+        assertInventory(0);
+    }
+
+    @Test
+    void laterPolicyChangesDoNotAlterAnExistingReservationSnapshot() {
+        insertHotelPolicy("snapshot-first", 1,
+                new Object[][] {{3, "18:00", 100}, {1, "18:00", 50}});
+        ReservationView reservation = confirmedReservation("fixed-snapshot");
+        insertHotelPolicy("snapshot-later", 2,
+                new Object[][] {{3, "18:00", 100}, {1, "18:00", 20}});
+        clock.set(LocalDateTime.of(CHECK_IN.minusDays(2), LocalTime.of(19, 0))
+                .atZone(ZoneId.of("Asia/Seoul")).toInstant());
+
+        CancellationResult result = cancellationService.cancel(reservation.id(), TOKEN, "fixed-snapshot-cancel");
+
+        assertThat(result.refundAmount()).isEqualTo(100_000);
+        assertThat(refundGateway.refundedAmount(reservation.id())).isEqualTo(100_000);
+    }
+
+    @Test
     void repeatedCancellationReturnsInventoryOnlyOnce() {
         ReservationView reservation = confirmedReservation("repeat-cancel");
 
@@ -308,9 +360,30 @@ class CancellationIntegrationTest {
                 .isEqualTo(confirmedTotal);
     }
 
+    private void insertHotelPolicy(String idempotencyKey, int revision, Object[][] rules) {
+        UUID revisionId = UUID.randomUUID();
+        jdbc.update("""
+                insert into cancellation_policy_revision
+                    (id, hotel_id, action, revision_number, staff_id, idempotency_key, request_hash)
+                values (?, ?, 'SET', ?, ?, ?, ?)
+                """, revisionId, HOTEL_ID, revision, STAFF_ID, idempotencyKey,
+                "a".repeat(64));
+        for (int index = 0; index < rules.length; index++) {
+            Object[] rule = rules[index];
+            jdbc.update("""
+                    insert into cancellation_refund_rule
+                        (revision_id, rule_order, days_before, cutoff_local_time, refund_percent)
+                    values (?, ?, ?, ?, ?)
+                    """, revisionId, index, rule[0], rule[1], rule[2]);
+        }
+    }
+
     private void clean() {
         jdbc.update("delete from staff_session");
         jdbc.update("delete from cancellation_attempt");
+        jdbc.update("delete from cancellation_policy_noop_command");
+        jdbc.update("delete from cancellation_refund_rule");
+        jdbc.update("delete from cancellation_policy_revision");
         jdbc.update("delete from staff_member where id in (?, ?)", STAFF_ID, OTHER_STAFF_ID);
         jdbc.update("delete from payment_transaction where reservation_id in (select id from reservation where room_type_id=?)", ROOM_TYPE_ID);
         jdbc.update("delete from payment_attempt");

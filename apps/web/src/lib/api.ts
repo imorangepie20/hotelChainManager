@@ -13,7 +13,11 @@ export type Reservation = {
   expiresAt: string; total: number; currency: string; nightlyPrices: NightlyPrice[]
   cancellationPolicy: string; guest: { name: string; email: string; phone?: string | null }
   roomTypeName?: string; ratePlanName?: string; paymentStatus?: string; adults?: number; children?: number
-  cancellationPolicyDetails?: { refundCutoffDaysBefore: number; refundCutoffLocalTime: string; timezone: string }
+  cancellationPolicyDetails?: {
+    refundCutoffDaysBefore: number; refundCutoffLocalTime: string; timezone: string
+    refundRules?: Array<{ daysBefore: number; cutoffLocalTime: string; refundPercent: number }>
+    revisionId?: string | null; scope?: string
+  }
 }
 
 export type ReservationChangePayment = {
@@ -51,7 +55,7 @@ export type CustomerChangeStart = { requestId: string; status: string; direction
 
 export type CancellationPreview = {
   reservationId: string; status: string; cancellable: boolean; refundAmount: number
-  currency: string; cutoffAt: string; timezone: string; unavailableReason: string | null
+  refundPercent: number; currency: string; cutoffAt: string; timezone: string; unavailableReason: string | null
 }
 export type PaymentMode = PaymentModes
 

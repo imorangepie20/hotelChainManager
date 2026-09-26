@@ -4,13 +4,20 @@ package team.hotelchain.policy;
  * 본사가 취소 정책을 변경할 때 받는 요청이다.
  * 마감 일수는 1~30, 마감 시각은 {@code HH:MM} 형식. 검증은 서버가 최종 판단한다.
  */
-public record CancellationPolicyUpdateRequest(Integer refundCutoffDaysBefore, String refundCutoffLocalTime) {
+public record CancellationPolicyUpdateRequest(
+        Integer refundCutoffDaysBefore,
+        String refundCutoffLocalTime,
+        java.util.List<CancellationRefundRule> rules) {
 
     public static final int MIN_CUTOFF_DAYS = 1;
     public static final int MAX_CUTOFF_DAYS = 30;
     private static final java.util.regex.Pattern LOCAL_TIME = java.util.regex.Pattern.compile("^([01]\\d|2[0-3]):[0-5]\\d$");
 
     public void validate() {
+        if (rules != null) {
+            validateRules();
+            return;
+        }
         if (refundCutoffDaysBefore == null
                 || refundCutoffDaysBefore < MIN_CUTOFF_DAYS
                 || refundCutoffDaysBefore > MAX_CUTOFF_DAYS) {
@@ -28,5 +35,41 @@ public record CancellationPolicyUpdateRequest(Integer refundCutoffDaysBefore, St
 
     public String cutoffLocalTime() {
         return refundCutoffLocalTime;
+    }
+
+    public boolean legacyRequest() {
+        return rules == null;
+    }
+
+    public java.util.List<CancellationRefundRule> canonicalRules() {
+        if (legacyRequest()) {
+            return java.util.List.of(new CancellationRefundRule(cutoffDays(), cutoffLocalTime(), 100));
+        }
+        return rules.stream().sorted(CancellationRefundRule.EARLIEST_FIRST).toList();
+    }
+
+    private void validateRules() {
+        if (rules.isEmpty() || rules.size() > 10) {
+            throw new IllegalArgumentException("환불 규칙은 1개 이상 10개 이하여야 합니다.");
+        }
+        rules.forEach(rule -> {
+            if (rule == null) throw new IllegalArgumentException("환불 규칙을 확인해 주세요.");
+            rule.validate();
+        });
+        java.util.List<CancellationRefundRule> sorted = canonicalRules();
+        java.util.Set<String> thresholds = new java.util.HashSet<>();
+        int previousPercent = 101;
+        boolean fullRefund = false;
+        for (CancellationRefundRule rule : sorted) {
+            if (!thresholds.add(rule.daysBefore() + "|" + rule.cutoffLocalTime())) {
+                throw new IllegalArgumentException("같은 환불 기준 시각을 중복해서 등록할 수 없습니다.");
+            }
+            if (rule.refundPercent() > previousPercent) {
+                throw new IllegalArgumentException("체크인에 가까워질수록 환불률이 높아질 수 없습니다.");
+            }
+            previousPercent = rule.refundPercent();
+            fullRefund |= rule.refundPercent() == 100;
+        }
+        if (!fullRefund) throw new IllegalArgumentException("100% 환불 규칙이 하나 이상 필요합니다.");
     }
 }

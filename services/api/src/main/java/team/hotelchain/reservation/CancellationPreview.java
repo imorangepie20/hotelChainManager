@@ -8,6 +8,7 @@ public record CancellationPreview(
         String status,
         boolean cancellable,
         long refundAmount,
+        int refundPercent,
         String currency,
         Instant cutoffAt,
         String timezone,

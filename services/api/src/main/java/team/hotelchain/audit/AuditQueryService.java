@@ -127,7 +127,34 @@ public class AuditQueryService {
     private String unionAll() {        return String.join("\nunion all\n", List.of(
                 guestChanges(), partyChanges(), roomReassignments(), stayChanges(),
                 cancellations(), roomOperationalTransitions(), checkedInRoomMoves(),
-                changeRequestEvents()));
+                changeRequestEvents(), policyChanges()));
+    }
+
+    // 취소·환불 정책 revision도 통합 감사 이력에 노출한다. 멱원 키와 요청 해시는
+    // 운영 화면에 노출하지 않고 scope와 사람이 읽을 수 있는 규칙 요약만 제공한다.
+    private String policyChanges() {
+        return """
+                select 'POLICY_CHANGE' as event_type, p.created_at,
+                       s.email as staff_email, s.display_name as staff_display_name, s.role as staff_role,
+                       p.hotel_id::text as hotel_id, coalesce(h.name, '체인 전체') as hotel_name,
+                       cast(null as text) as reservation_id, cast(null as text) as guest_name,
+                       cast(null as text) as room_number,
+                       case when p.action = 'INHERIT'
+                            then '지점 재정의 해제 → 체인 정책 상속'
+                            else (case when p.hotel_id is null then '체인' else '지점' end)
+                                 || ' 환불 규칙 변경: '
+                                 || coalesce((
+                                      select string_agg(
+                                          r.days_before || '일 전 ' || r.cutoff_local_time || ' ' || r.refund_percent || '%',
+                                          ' · ' order by r.rule_order)
+                                        from cancellation_refund_rule r
+                                       where r.revision_id = p.id
+                                 ), '규칙 없음')
+                       end as summary
+                  from cancellation_policy_revision p
+                  join staff_member s on s.id = p.staff_id
+                  left join hotel h on h.id = p.hotel_id
+                """;
     }
 
     // 예약자 정정. 이전 이름·이메일 → 새 이름·이메일

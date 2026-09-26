@@ -108,6 +108,32 @@ class AuditIntegrationTest {
     }
 
     @Test
+    void policyChangesAreIncludedWithoutExposingIdempotencyData() throws Exception {
+        UUID revisionId = UUID.randomUUID();
+        UUID staffId = jdbc.queryForObject(
+                "select id from staff_member where email = ?", UUID.class, HQ_EMAIL);
+        jdbc.update("""
+                insert into cancellation_policy_revision
+                    (id, hotel_id, action, revision_number, staff_id, idempotency_key, request_hash, created_at)
+                values (?, ?, 'SET', 1, ?, 'audit-secret-key', ?, now())
+                """, revisionId, SOKCHO, staffId, "a".repeat(64));
+        jdbc.update("""
+                insert into cancellation_refund_rule
+                    (revision_id, rule_order, days_before, cutoff_local_time, refund_percent)
+                values (?, 0, 3, '18:00', 100), (?, 1, 1, '18:00', 50)
+                """, revisionId, revisionId);
+
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/audit")
+                .header("X-Staff-Session", hqToken)
+                .param("hotelId", SOKCHO.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.events[0].eventType").value("POLICY_CHANGE"))
+                .andExpect(jsonPath("$.events[0].hotelName").value("audit-sokcho"))
+                .andExpect(jsonPath("$.events[0].summary", Matchers.containsString("3일 전 18:00 100%")))
+                .andExpect(jsonPath("$.events[0].summary", Matchers.not(Matchers.containsString("audit-secret-key"))));
+    }
+
+    @Test
     void missingSessionIsRejected() throws Exception {
         mvc.perform(MockMvcRequestBuilders.get("/api/staff/audit"))
                 .andExpect(status().isUnauthorized());
@@ -400,6 +426,9 @@ class AuditIntegrationTest {
 
     private void clean() {
         jdbc.update("delete from staff_session");
+        jdbc.update("delete from cancellation_policy_noop_command");
+        jdbc.update("delete from cancellation_refund_rule");
+        jdbc.update("delete from cancellation_policy_revision");
         jdbc.update("delete from checked_in_room_move");
         jdbc.update("delete from physical_room_operational_event");
         jdbc.update("delete from reservation_room_assignment_change");

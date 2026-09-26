@@ -14,6 +14,10 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -26,19 +30,22 @@ public class ReservationService {
     private final ReservationAccess access;
     private final Clock clock;
     private final Duration holdTtl;
-    private final team.hotelchain.policy.CurrentPolicy current;
+    private final team.hotelchain.policy.CancellationPolicyResolver cancellationPolicies;
+    private final ObjectMapper objectMapper;
 
     public ReservationService(
             JdbcTemplate jdbc,
             ReservationAccess access,
             Clock clock,
             @Value("${reservation.hold-ttl:10m}") Duration holdTtl,
-            team.hotelchain.policy.CurrentPolicy current) {
+            team.hotelchain.policy.CancellationPolicyResolver cancellationPolicies,
+            ObjectMapper objectMapper) {
         this.jdbc = jdbc;
         this.access = access;
         this.clock = clock;
         this.holdTtl = holdTtl;
-        this.current = current;
+        this.cancellationPolicies = cancellationPolicies;
+        this.objectMapper = objectMapper;
     }
 
     @Transactional
@@ -59,11 +66,12 @@ public class ReservationService {
         }
 
         RatePlanInfo plan = jdbc.query("""
-                SELECT rt.max_occupancy, rp.policy_version
+                SELECT rt.max_occupancy, rp.policy_version, rt.hotel_id
                   FROM room_type rt
                   JOIN rate_plan rp ON rp.room_type_id = rt.id
                  WHERE rt.id = ? AND rp.id = ?
-                """, rs -> rs.next() ? new RatePlanInfo(rs.getInt(1), rs.getString(2)) : null,
+                """, rs -> rs.next() ? new RatePlanInfo(
+                        rs.getInt(1), rs.getString(2), rs.getObject(3, UUID.class)) : null,
                 request.roomTypeId(), request.ratePlanId());
         if (plan == null || plan.maxOccupancy() * request.rooms() < request.adults() + request.children()) {
             throw new BusinessConflictException("SOLD_OUT", "선택한 객실을 현재 예약할 수 없습니다.");
@@ -91,11 +99,8 @@ public class ReservationService {
 
         UUID reservationId = UUID.randomUUID();
         Instant expiresAt = clock.instant().plus(holdTtl);
-        var cancellation = current.cancellation();
-        String policySnapshot = "{\"version\":\"" + plan.policyVersion().replace("\"", "")
-                + "\",\"timezone\":\"" + cancellation.timezone() + "\","
-                + "\"refundCutoffDaysBefore\":" + cancellation.refundCutoffDaysBefore() + ","
-                + "\"refundCutoffLocalTime\":\"" + cancellation.refundCutoffLocalTime() + "\"}";
+        var cancellation = cancellationPolicies.resolveForHotel(plan.hotelId());
+        String policySnapshot = policySnapshot(plan.policyVersion(), cancellation);
         jdbc.update("""
                 INSERT INTO reservation
                     (id, room_type_id, rate_plan_id, check_in, check_out, adults, children, rooms,
@@ -137,9 +142,6 @@ public class ReservationService {
                 """, (rs, index) -> new ReservationNight(rs.getDate(1).toLocalDate(), rs.getInt(2)), reservationId);
         var details = jdbc.queryForObject("""
                 select rt.name room_type_name, rp.name rate_plan_name, r.adults, r.children,
-                  coalesce((r.policy_snapshot->>'refundCutoffDaysBefore')::integer, 1) cutoff_days,
-                  coalesce(r.policy_snapshot->>'refundCutoffLocalTime', '18:00') cutoff_time,
-                  coalesce(r.policy_snapshot->>'timezone', 'Asia/Seoul') timezone,
                   case when exists(select 1 from payment_transaction t where t.reservation_id=r.id)
                     then 'SUCCEEDED'
                     else coalesce((select p.status from payment_provider_attempt p where p.reservation_id=r.id
@@ -149,12 +151,16 @@ public class ReservationService {
                 from reservation r join room_type rt on rt.id=r.room_type_id
                 join rate_plan rp on rp.id=r.rate_plan_id where r.id=?
                 """, (rs, n) -> new DisplayDetails(rs.getString("room_type_name"), rs.getString("rate_plan_name"),
-                    rs.getInt("adults"), rs.getInt("children"), rs.getString("payment_status"),
-                    new CancellationPolicyDetails(rs.getInt("cutoff_days"), rs.getString("cutoff_time"), rs.getString("timezone"))), reservationId);
+                    rs.getInt("adults"), rs.getInt("children"), rs.getString("payment_status")), reservationId);
+        SavedCancellationPolicy savedPolicy = SavedCancellationPolicy.fromJson(objectMapper, row.policySnapshot());
+        var fullRefund = savedPolicy.fullRefundRule();
+        CancellationPolicyDetails policyDetails = new CancellationPolicyDetails(
+                fullRefund.daysBefore(), fullRefund.cutoffLocalTime(), savedPolicy.timezone(),
+                savedPolicy.rules(), savedPolicy.revisionId(), savedPolicy.scope());
         return new ReservationView(row.id(), row.status(), row.checkIn(), row.checkOut(), row.rooms(),
                 row.expiresAt(), row.total(), row.currency(), nights, row.policySnapshot(),
                 new ReservationGuest(row.guestName(), row.guestEmail(), row.guestPhone()), details.roomTypeName(), details.ratePlanName(),
-                details.adults(), details.children(), details.paymentStatus(), details.policy());
+                details.adults(), details.children(), details.paymentStatus(), policyDetails);
     }
 
     private ExistingRequest findExisting(String tokenHash, String idempotencyKey) {
@@ -226,13 +232,45 @@ public class ReservationService {
         return phone.trim();
     }
 
+    private String policySnapshot(String ratePlanPolicyVersion,
+            team.hotelchain.policy.ResolvedCancellationPolicy cancellation) {
+        ObjectNode root = objectMapper.createObjectNode();
+        root.put("version", ratePlanPolicyVersion);
+        root.put("timezone", cancellation.timezone());
+        var fullRefund = cancellation.rules().stream()
+                .filter(rule -> rule.refundPercent() == 100)
+                .min(java.util.Comparator.comparingInt(team.hotelchain.policy.CancellationRefundRule::daysBefore)
+                        .thenComparing(team.hotelchain.policy.CancellationRefundRule::cutoffLocalTime,
+                                java.util.Comparator.reverseOrder()))
+                .orElse(cancellation.rules().getFirst());
+        root.put("refundCutoffDaysBefore", fullRefund.daysBefore());
+        root.put("refundCutoffLocalTime", fullRefund.cutoffLocalTime());
+        if (cancellation.revisionId() == null) root.putNull("cancellationPolicyRevisionId");
+        else root.put("cancellationPolicyRevisionId", cancellation.revisionId().toString());
+        root.put("policyScope", cancellation.scope());
+        if (cancellation.hotelId() == null) root.putNull("policyHotelId");
+        else root.put("policyHotelId", cancellation.hotelId().toString());
+        ArrayNode rules = root.putArray("refundRules");
+        for (var rule : cancellation.rules()) {
+            ObjectNode savedRule = rules.addObject();
+            savedRule.put("daysBefore", rule.daysBefore());
+            savedRule.put("cutoffLocalTime", rule.cutoffLocalTime());
+            savedRule.put("refundPercent", rule.refundPercent());
+        }
+        try {
+            return objectMapper.writeValueAsString(root);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("예약 취소 정책을 저장할 수 없습니다.", exception);
+        }
+    }
+
     private record DisplayDetails(String roomTypeName, String ratePlanName, int adults, int children,
-            String paymentStatus, CancellationPolicyDetails policy) {}
+            String paymentStatus) {}
 
     private record InventoryNight(LocalDate date, int capacity, int held, int confirmed, Integer amount) {
     }
 
-    private record RatePlanInfo(int maxOccupancy, String policyVersion) {
+    private record RatePlanInfo(int maxOccupancy, String policyVersion, UUID hotelId) {
     }
 
     private record ExistingRequest(String requestHash, UUID reservationId) {

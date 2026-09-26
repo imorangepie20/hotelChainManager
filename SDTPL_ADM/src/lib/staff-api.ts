@@ -143,6 +143,7 @@ export type StaffCancellationPreview = {
   status: string;
   cancellable: boolean;
   refundAmount: number;
+  refundPercent: number;
   currency: string;
   cutoffAt: string;
   unavailableReason: string | null;
@@ -3347,10 +3348,31 @@ export type CancellationPolicy = {
   refundCutoffDaysBefore: number;
   refundCutoffLocalTime: string;
   timezone: string;
+  revisionId?: string | null;
+  scope?: "CHAIN" | "HOTEL";
+  hotelId?: string | null;
+  rules?: CancellationRefundRule[];
+  inherited?: boolean;
+};
+
+export type CancellationRefundRule = {
+  daysBefore: number;
+  cutoffLocalTime: string;
+  refundPercent: number;
+};
+
+export type CancellationPolicyRevision = {
+  revisionId: string;
+  hotelId: string;
+  action: "SET" | "INHERIT";
+  revision: number;
+  rules: CancellationRefundRule[];
 };
 
 export type ChainPolicy = {
   cancellation: CancellationPolicy;
+  chainCancellation?: CancellationPolicy;
+  hotelCancellationRevision?: CancellationPolicyRevision | null;
   changeApprovalDirectLimitKrw: number;
   changeApprovalTtlSeconds: number;
   changeSettlementEnabled: boolean;
@@ -3386,14 +3408,16 @@ function policyFailureMessage(status: number) {
   return "공통 정책을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.";
 }
 
-export function getChainPolicies(token: string) {
-  return policyRequest<ChainPolicy>("/api/staff/policies", token);
+export function getChainPolicies(token: string, hotelId?: string) {
+  const query = hotelId ? `?hotelId=${encodeURIComponent(hotelId)}` : "";
+  return policyRequest<ChainPolicy>(`/api/staff/policies${query}`, token);
 }
 
 // 본사가 취소 정책을 변경한다. 멱원 재호출은 200으로 같은 revision을 돌려준다.
 export type UpdateCancellationPolicyInput = {
-  refundCutoffDaysBefore: number;
-  refundCutoffLocalTime: string;
+  refundCutoffDaysBefore?: number;
+  refundCutoffLocalTime?: string;
+  rules?: CancellationRefundRule[];
 };
 
 export type UpdatedCancellationPolicy = {
@@ -3402,6 +3426,11 @@ export type UpdatedCancellationPolicy = {
   timezone: string;
   revision: number;
   created: boolean;
+  revisionId?: string | null;
+  scope?: "CHAIN" | "HOTEL";
+  hotelId?: string | null;
+  rules?: CancellationRefundRule[];
+  inherited?: boolean;
 };
 
 export function updateCancellationPolicy(
@@ -3416,6 +3445,38 @@ export function updateCancellationPolicy(
       method: "PUT",
       headers: { "Idempotency-Key": idempotencyKey },
       body: JSON.stringify(input),
+    },
+  );
+}
+
+export function updateHotelCancellationPolicy(
+  token: string,
+  hotelId: string,
+  idempotencyKey: string,
+  input: UpdateCancellationPolicyInput,
+) {
+  return policyRequest<UpdatedCancellationPolicy>(
+    `/api/staff/policies/hotels/${encodeURIComponent(hotelId)}/cancellation`,
+    token,
+    {
+      method: "PUT",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export function inheritHotelCancellationPolicy(
+  token: string,
+  hotelId: string,
+  idempotencyKey: string,
+) {
+  return policyRequest<UpdatedCancellationPolicy>(
+    `/api/staff/policies/hotels/${encodeURIComponent(hotelId)}/cancellation/inherit`,
+    token,
+    {
+      method: "PUT",
+      headers: { "Idempotency-Key": idempotencyKey },
     },
   );
 }
@@ -3521,7 +3582,8 @@ export type AuditEventType =
   | "CANCELLATION"
   | "ROOM_OPERATIONAL_TRANSITION"
   | "CHECKED_IN_ROOM_MOVE"
-  | "CHANGE_REQUEST_EVENT";
+  | "CHANGE_REQUEST_EVENT"
+  | "POLICY_CHANGE";
 
 export const auditEventLabels: Record<AuditEventType, string> = {
   GUEST_UPDATE: "예약자 정정",
@@ -3532,6 +3594,7 @@ export const auditEventLabels: Record<AuditEventType, string> = {
   ROOM_OPERATIONAL_TRANSITION: "객실 운영 상태",
   CHECKED_IN_ROOM_MOVE: "투숙 중 객실 이동",
   CHANGE_REQUEST_EVENT: "예약 변경 요청",
+  POLICY_CHANGE: "정책 변경",
 };
 
 export type AuditEvent = {
@@ -3540,7 +3603,7 @@ export type AuditEvent = {
   staffEmail: string;
   staffDisplayName: string;
   staffRole: string;
-  hotelId: string;
+  hotelId: string | null;
   hotelName: string;
   reservationId: string | null;
   guestName: string | null;
@@ -3662,6 +3725,12 @@ export type OperationsReport = {
   days: number;
   hotels: HotelOperationsMetrics[];
   totals: OperationsReportTotals;
+  previousPeriod: {
+    from: string;
+    to: string;
+    days: number;
+    totals: OperationsReportTotals;
+  };
 };
 
 export async function getOperationsReport(
@@ -3685,6 +3754,46 @@ export async function getOperationsReport(
     );
   }
   return response.json() as Promise<OperationsReport>;
+}
+
+export type OperationsReportLocale = "ko" | "en";
+
+export async function downloadOperationsReportXlsx(
+  token: string,
+  filters: {
+    from: string;
+    to: string;
+    hotelId?: string;
+    locale: OperationsReportLocale;
+  },
+): Promise<{ blob: Blob; filename: string }> {
+  const searchParams = new URLSearchParams({
+    from: filters.from,
+    to: filters.to,
+    locale: filters.locale,
+  });
+  if (filters.hotelId) searchParams.set("hotelId", filters.hotelId);
+
+  const response = await fetch(
+    `/api/staff/reports/operations/export.xlsx?${searchParams}`,
+    { headers: { "X-Staff-Session": token } },
+  );
+  if (!response.ok) {
+    const error = (await response.json().catch(() => ({}))) as ApiErrorPayload;
+    throw new StaffApiError(
+      error.message ?? reportFailureMessage(response.status),
+      response.status,
+      error.code,
+    );
+  }
+
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  const plain = disposition.match(/filename="?([^";]+)"?/i)?.[1];
+  const filename = encoded
+    ? decodeURIComponent(encoded)
+    : (plain ?? `operations-report-${filters.from}-${filters.to}.xlsx`);
+  return { blob: await response.blob(), filename };
 }
 
 function reportFailureMessage(status: number) {

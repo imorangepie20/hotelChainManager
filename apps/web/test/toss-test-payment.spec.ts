@@ -160,7 +160,7 @@ test('승인 요청이 서버 도달 전에 유실되면 NEW 확인 후 메모�
 test('고객 전체 취소 pending을 완료로 표시하지 않는다', async ({ page }) => {
   await page.route(`**/api/reservations/${id}`, route => route.fulfill({ json: { ...reservation, status: 'CONFIRMED' } }))
   await page.route(`**/api/reservations/${id}/cancel`, route => route.fulfill({ json: { status: 'CANCELLATION_PENDING', refundAmount: 120000 } }))
-  await page.route(`**/api/reservations/${id}/cancellation-preview`, route => route.fulfill({ json: { reservationId: id, status: 'CONFIRMED', cancellable: true, refundAmount: 120000, currency: 'KRW', cutoffAt: '2026-10-09T09:00:00Z', timezone: 'Asia/Seoul', unavailableReason: null } }))
+  await page.route(`**/api/reservations/${id}/cancellation-preview`, route => route.fulfill({ json: { reservationId: id, status: 'CONFIRMED', cancellable: true, refundAmount: 120000, refundPercent: 100, currency: 'KRW', cutoffAt: '2026-10-09T09:00:00Z', timezone: 'Asia/Seoul', unavailableReason: null } }))
   await page.goto(`/reservations/${id}`)
   await page.getByRole('button', { name: '예약 취소', exact: true }).click()
   await page.getByRole('button', { name: '예약 취소 확정', exact: true }).click()

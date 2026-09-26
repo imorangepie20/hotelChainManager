@@ -10,7 +10,15 @@ public record OperationsReportView(
         String to,
         int days,
         List<HotelOperationsMetrics> hotels,
-        Totals totals) {
+        Totals totals,
+        PreviousPeriod previousPeriod) {
+
+    public record PreviousPeriod(
+            String from,
+            String to,
+            int days,
+            Totals totals) {
+    }
 
     public record Totals(
             long reservations,

@@ -412,7 +412,7 @@ export function ReservationManagement() {
             <AlertDialogTitle>{cancellationTarget?.guestName} 고객 예약을 취소할까요?</AlertDialogTitle>
             <AlertDialogDescription>
               {cancellationPreview?.cancellable
-                ? `예상 환불액 ${money(cancellationPreview.refundAmount, cancellationPreview.currency)} · 취소 마감 ${displayDateTime(cancellationPreview.cutoffAt)}`
+                ? `환불률 ${cancellationPreview.refundPercent}% · 예상 환불액 ${money(cancellationPreview.refundAmount, cancellationPreview.currency)} · 적용 마감 ${displayDateTime(cancellationPreview.cutoffAt)}`
                 : cancellationPreview?.unavailableReason ?? "현재 이 예약을 취소할 수 없습니다."}
             </AlertDialogDescription>
           </AlertDialogHeader>

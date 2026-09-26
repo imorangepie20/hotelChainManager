@@ -1,6 +1,6 @@
 # 관리자(Admin) 메뉴 로드맵
 
-> 최종 갱신: 2026-09-27 (호텔·객실 및 재고·가격 쓰기 기능 감사 완료).
+> 최종 갱신: 2026-09-27 (환불 규칙·지점별 정책·감사 통합 완료).
 
 ## 현재 메뉴 (`SDTPL_ADM/src/lib/nav.ts`)
 | 그룹 | 메뉴 | 경로 | 권한 | 상태 |
@@ -50,16 +50,16 @@
 ### 4. 운영 통계·리포트 (HQ_ADMIN)
 
 - 지점별 매출·점유율·취소율·노쇼율과 예약 변경 승인 대기·완료 건수.
-- 현재: `GET /api/staff/reports/operations`가 지점별 예약 건수·취소·노쇼·만료·매출·점유율과 변경 승인 대기·완료 건수를 반환하고 `GET /api/staff/reports/operations/room-types`가 지점의 객실 유형별 예약·취소·노쇼·매출·매출 비중을 반환한다. 둘 다 SELECT만 사용한다. `운영 통계` (`/dashboard/reports`) 메뉴가 기간 프리셋·전체 합계 카드·지점별 표·객실 유형별 매출 표·CSV 내보내기를 보여준다.
-- **후보 메뉴**: `통계·리포트` (`/dashboard/reports`) — **읽기 전용 1차 + 객실 유형별 상세 매출 + CSV 내보내기 구현됨**
-- 남음: 차트 시각화, 이전 기간 대비 증감, 영문 전환, Excel 내보내기(CSV만 있다).
+- 현재: `GET /api/staff/reports/operations`가 지점별 예약 건수·취소·노쇼·만료·매출·점유율과 변경 승인 대기·완료 건수 및 직전 동일 기간 합계를 반환하고 `GET /api/staff/reports/operations/room-types`가 지점의 객실 유형별 예약·취소·노쇼·매출·매출 비중을 반환한다. `GET /api/staff/reports/operations/export.xlsx`는 같은 집계를 한국어·영어 XLSX로 내려준다. 모두 SELECT 집계만 사용한다. `운영 통계` (`/dashboard/reports`) 메뉴가 과거 기간 프리셋·이전 기간 증감·접근 가능한 지점별 차트와 데이터 표·객실 유형별 매출·한영 전환·기존 CSV·XLSX 내보내기를 보여준다.
+- **후보 메뉴**: `통계·리포트` (`/dashboard/reports`) — **읽기 전용 집계·동일 기간 비교·차트·한영 전환·CSV/XLSX 구현됨**
+- 남음: 없음. 4번 영역이 완료됐다.
 
 ### 5. 공통 정책 관리 (HQ_ADMIN)
 
 - 취소 정책 기준(체크인 며칠 전까지 전액 환급, 마감 시각), 예약 변경 승인 한도(지점 직접 승인 가능 차액), 환불 규칙.
-- 현재: `GET /api/staff/policies`가 취소 정책·변경 승인 한도·변경 승인 TTL·정산 활성 여부를 반환하고 `PUT /api/staff/policies/cancellation`이 취소 마감 일수·마감 시각을, `PUT /api/staff/policies/change-limit`가 지점 직접 승인 한도를, `PUT /api/staff/policies/change-approval-ttl`이 본사 승인 대기 시간을 변경한다. `GET /api/staff/policies/revisions`가 변경 이력을 최신순으로 반환한다. `공통 정책` (`/dashboard/policies`) 메뉴가 현재값·변경 대화상자·변경 이력 표를 보여준다. 멱원 키와 `policy_revision` 이력으로 중복 변경을 막는다.
-- **후보 메뉴**: `공통 정책` (`/dashboard/policies`) — **조회·취소 정책·승인 한도·승인 TTL 변경·이력 조회 구현됨**
-- 남음: 환불 규칙, 지점별 정책, 정책 변경의 감사 이력(7번 메뉴) 통합. **1번·2번·3번 영역이 끝났으므로 로드맵 순서에 따라 이 영역이 다음 작업이다.**
+  - 현재: 체인·지점별 취소/환불 규칙(1~10개), 지점 재정의·체인 상속 복귀, 승인 한도·승인 TTL 변경과 변경 이력을 제공한다. 정책은 예약 생성 시 revision·scope·전체 규칙으로 snapshot되며 고객·직원 preview와 실제 fake/Toss 환불을 서버가 같은 규칙으로 계산한다. 기존 단일 전액 환급 API와 snapshot도 호환한다. `공통 정책` (`/dashboard/policies`)에서 지점과 상속 상태를 선택·확인하고 규칙을 편집할 수 있다. scope별 멱원 키, no-op 영수증, append-only revision으로 중복 변경을 막는다.
+  - **후보 메뉴**: `공통 정책` (`/dashboard/policies`) — **환불 규칙·지점별 재정의/상속·감사 통합까지 구현됨**
+  - 남음: 없음. 정책과 운영 통계 영역이 완료됐으며 로드맵 순서의 다음 영역은 7번 `감사·이력 조회`다.
 
 ### 6. 고객 요청 관리 (지점 직원)
 
@@ -71,7 +71,7 @@
 ### 7. 감사·이력 조회 (HQ_ADMIN)
 
 - V29~V37 감사 테이블(예약자 정정·인원·객실 재배정·일정 변경·취소·운영 상태 전환)의 통합 조회.
-- 현재: `GET /api/staff/audit`가 8종 감사 이력을 발생 시각 내림차순으로 반환하고 `GET /api/staff/audit?masked=true`가 고객 이름·이메일과 `GUEST_UPDATE` 요약의 개인정보를 가린다. `감사 이력` (`/dashboard/audit`) 메뉴가 유형별 표·더 보기 페이지 이동·개인정보 마스킹 토글·CSV 내보내기를 보여준다. SELECT만 사용한다.
+  - 현재: `GET /api/staff/audit`가 `POLICY_CHANGE`를 포함한 9종 감사 이력을 발생 시각 내림차순으로 반환하고 `GET /api/staff/audit?masked=true`가 고객 이름·이메일과 `GUEST_UPDATE` 요약의 개인정보를 가린다. 정책 감사에는 체인·지점, SET·INHERIT, 처리 직원과 변경 시각이 포함된다. `감사 이력` (`/dashboard/audit`) 메뉴가 유형별 표·더 보기 페이지 이동·개인정보 마스킹 토글·CSV 내보내기를 보여준다. SELECT만 사용한다.
 - **후보 메뉴**: `감사 이력` (`/dashboard/audit`) — **1차 + 개인정보 마스킹 + CSV 내보내기 구현됨**
 - 남음: Excel(xlsx) 내보내기(CSV만 있다), 고객 요청 이력(6번 메뉴와 겹침).
 

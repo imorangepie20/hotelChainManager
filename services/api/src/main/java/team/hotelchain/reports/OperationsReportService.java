@@ -2,6 +2,7 @@ package team.hotelchain.reports;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Clock;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
@@ -31,22 +32,37 @@ public class OperationsReportService {
 
     private final JdbcTemplate jdbc;
     private final StaffAccessService access;
+    private final Clock clock;
 
-    public OperationsReportService(JdbcTemplate jdbc, StaffAccessService access) {
+    public OperationsReportService(JdbcTemplate jdbc, StaffAccessService access, Clock clock) {
         this.jdbc = jdbc;
         this.access = access;
+        this.clock = clock;
     }
 
     @Transactional(readOnly = true)
     public OperationsReportView operations(String token, LocalDate from, LocalDate to, UUID hotelId) {
         access.requireHeadquarters(token);
-        LocalDate start = from == null ? LocalDate.now(ZONE).minusDays(6) : from;
-        LocalDate end = to == null ? LocalDate.now(ZONE) : to;
+        LocalDate today = LocalDate.now(clock.withZone(ZONE));
+        LocalDate start = from == null ? today.minusDays(6) : from;
+        LocalDate end = to == null ? today : to;
         validateRange(start, end);
         if (hotelId != null && !hotelExists(hotelId)) {
             throw new HotelNotFoundException(hotelId);
         }
 
+        Aggregate current = aggregate(start, end, hotelId);
+        int days = Math.toIntExact(java.time.temporal.ChronoUnit.DAYS.between(start, end) + 1);
+        LocalDate previousEnd = start.minusDays(1);
+        LocalDate previousStart = start.minusDays(days);
+        Aggregate previous = aggregate(previousStart, previousEnd, hotelId);
+
+        return new OperationsReportView(start.toString(), end.toString(), days,
+                current.rows(), current.totals(), new OperationsReportView.PreviousPeriod(
+                        previousStart.toString(), previousEnd.toString(), days, previous.totals()));
+    }
+
+    private Aggregate aggregate(LocalDate start, LocalDate end, UUID hotelId) {
         Map<UUID, HotelOperationsMetrics> metrics = new LinkedHashMap<>();
         for (HotelRow hotel : loadHotels(hotelId)) {
             metrics.put(hotel.id(), new HotelOperationsMetrics(
@@ -59,9 +75,7 @@ public class OperationsReportService {
         applyCapacity(metrics, start, end);
 
         List<HotelOperationsMetrics> rows = new ArrayList<>(metrics.values());
-        return new OperationsReportView(start.toString(), end.toString(),
-                (int) java.time.temporal.ChronoUnit.DAYS.between(start, end) + 1,
-                rows, totals(rows));
+        return new Aggregate(rows, totals(rows));
     }
 
     private List<HotelRow> loadHotels(UUID hotelId) {
@@ -180,7 +194,8 @@ public class OperationsReportService {
         if (!to.isAfter(from) && !to.isEqual(from)) {
             throw new IllegalArgumentException("종료 날짜는 시작 날짜와 같거나 이후여야 합니다.");
         }
-        if (from.plusDays(MAX_RANGE_DAYS).isBefore(to)) {
+        long inclusiveDays = java.time.temporal.ChronoUnit.DAYS.between(from, to) + 1;
+        if (inclusiveDays > MAX_RANGE_DAYS) {
             throw new IllegalArgumentException("조회 기간은 최대 " + MAX_RANGE_DAYS + "일입니다.");
         }
     }
@@ -253,5 +268,8 @@ public class OperationsReportService {
     }
 
     private record HotelRow(UUID id, String name, String region) {
+    }
+
+    private record Aggregate(List<HotelOperationsMetrics> rows, OperationsReportView.Totals totals) {
     }
 }

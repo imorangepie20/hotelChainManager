@@ -70,6 +70,271 @@ class PolicyIntegrationTest {
     }
 
     @Test
+    void headquartersUpdatesAndReadsChainRefundRules() throws Exception {
+        String body = """
+                {"rules":[
+                  {"daysBefore":3,"cutoffLocalTime":"18:00","refundPercent":100},
+                  {"daysBefore":1,"cutoffLocalTime":"18:00","refundPercent":50},
+                  {"daysBefore":0,"cutoffLocalTime":"18:00","refundPercent":0}
+                ]}
+                """;
+
+        mvc.perform(MockMvcRequestBuilders.put("/api/staff/policies/cancellation")
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "chain-rules")
+                .contentType("application/json")
+                .content(body))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.scope").value("CHAIN"))
+                .andExpect(jsonPath("$.revisionId").isNotEmpty())
+                .andExpect(jsonPath("$.rules", org.hamcrest.Matchers.hasSize(3)))
+                .andExpect(jsonPath("$.rules[1].refundPercent").value(50));
+
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/policies")
+                .header("X-Staff-Session", hqToken))
+                .andExpect(status().isOk())
+                // 기존 단일 마감 필드는 첫 100% 규칙으로 계속 제공한다.
+                .andExpect(jsonPath("$.cancellation.refundCutoffDaysBefore").value(3))
+                .andExpect(jsonPath("$.cancellation.refundCutoffLocalTime").value("18:00"))
+                .andExpect(jsonPath("$.cancellation.scope").value("CHAIN"))
+                .andExpect(jsonPath("$.cancellation.rules", org.hamcrest.Matchers.hasSize(3)));
+    }
+
+    @Test
+    void legacyCompatibleUpdateKeepsTheScopedRevisionIdentityWhenReadBack() throws Exception {
+        mvc.perform(MockMvcRequestBuilders.put("/api/staff/policies/cancellation")
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "legacy-compatible-revision")
+                .contentType("application/json")
+                .content("{\"refundCutoffDaysBefore\":2,\"refundCutoffLocalTime\":\"19:00\"}"))
+                .andExpect(status().isCreated());
+
+        UUID scopedRevisionId = jdbc.queryForObject(
+                "select id from cancellation_policy_revision where idempotency_key = ?",
+                UUID.class,
+                "legacy-compatible-revision");
+
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/policies")
+                .header("X-Staff-Session", hqToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cancellation.revisionId").value(scopedRevisionId.toString()));
+    }
+
+    @Test
+    void hotelOverrideAndInheritExposeEffectivePolicy() throws Exception {
+        updateChainRules("chain-default", 4, 100, 1, 40);
+
+        String overrideBody = """
+                {"rules":[
+                  {"daysBefore":2,"cutoffLocalTime":"17:00","refundPercent":100},
+                  {"daysBefore":0,"cutoffLocalTime":"12:00","refundPercent":20}
+                ]}
+                """;
+        mvc.perform(MockMvcRequestBuilders.put("/api/staff/policies/hotels/{hotelId}/cancellation", SOKCHO)
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "hotel-override")
+                .contentType("application/json")
+                .content(overrideBody))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.scope").value("HOTEL"))
+                .andExpect(jsonPath("$.hotelId").value(SOKCHO.toString()))
+                .andExpect(jsonPath("$.inherited").value(false));
+
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/policies?hotelId={hotelId}", SOKCHO)
+                .header("X-Staff-Session", hqToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cancellation.scope").value("HOTEL"))
+                .andExpect(jsonPath("$.cancellation.inherited").value(false))
+                .andExpect(jsonPath("$.cancellation.rules[1].refundPercent").value(20))
+                .andExpect(jsonPath("$.chainCancellation.rules[1].refundPercent").value(40))
+                .andExpect(jsonPath("$.hotelCancellationRevision.action").value("SET"));
+
+        mvc.perform(MockMvcRequestBuilders.put(
+                        "/api/staff/policies/hotels/{hotelId}/cancellation/inherit", SOKCHO)
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "hotel-inherit"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.scope").value("CHAIN"))
+                .andExpect(jsonPath("$.inherited").value(true));
+
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/policies?hotelId={hotelId}", SOKCHO)
+                .header("X-Staff-Session", hqToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cancellation.scope").value("CHAIN"))
+                .andExpect(jsonPath("$.cancellation.inherited").value(true))
+                .andExpect(jsonPath("$.cancellation.rules[1].refundPercent").value(40))
+                .andExpect(jsonPath("$.hotelCancellationRevision.action").value("INHERIT"));
+    }
+
+    @Test
+    void sameScopeIdempotencyKeyRejectsDifferentRequestButScopesAreIndependent() throws Exception {
+        updateChainRules("shared-key", 3, 100, 1, 50);
+
+        mvc.perform(MockMvcRequestBuilders.put("/api/staff/policies/cancellation")
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "shared-key")
+                .contentType("application/json")
+                .content(rulesBody(3, 100, 1, 30)))
+                .andExpect(status().isConflict());
+
+        mvc.perform(MockMvcRequestBuilders.put("/api/staff/policies/hotels/{hotelId}/cancellation", SOKCHO)
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "shared-key")
+                .contentType("application/json")
+                .content(rulesBody(2, 100, 0, 0)))
+                .andExpect(status().isCreated());
+    }
+
+    @Test
+    void sameRulesWithNewKeyAreANoOpInTheSameScope() throws Exception {
+        String body = rulesBody(3, 100, 1, 50);
+        updateChainRules("first-key", 3, 100, 1, 50);
+
+        mvc.perform(MockMvcRequestBuilders.put("/api/staff/policies/cancellation")
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "second-key")
+                .contentType("application/json")
+                .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.created").value(false))
+                .andExpect(jsonPath("$.revision").value(1));
+    }
+
+    @Test
+    void noOpKeyRemainsBoundAfterThePolicyChanges() throws Exception {
+        String first = rulesBody(3, 100, 1, 50);
+        String second = rulesBody(5, 100, 2, 30);
+        updateChainRules("first-key", 3, 100, 1, 50);
+
+        mvc.perform(MockMvcRequestBuilders.put("/api/staff/policies/cancellation")
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "noop-key")
+                .contentType("application/json")
+                .content(first))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.created").value(false));
+
+        mvc.perform(MockMvcRequestBuilders.put("/api/staff/policies/cancellation")
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "second-policy")
+                .contentType("application/json")
+                .content(second))
+                .andExpect(status().isCreated());
+
+        // 응답 유실 뒤 같은 no-op 키를 재전송해도 과거 정책을 새 revision으로 되돌리지 않는다.
+        mvc.perform(MockMvcRequestBuilders.put("/api/staff/policies/cancellation")
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "noop-key")
+                .contentType("application/json")
+                .content(first))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.revision").value(1))
+                .andExpect(jsonPath("$.rules[1].refundPercent").value(50));
+
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/policies")
+                .header("X-Staff-Session", hqToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cancellation.refundCutoffDaysBefore").value(5));
+
+        mvc.perform(MockMvcRequestBuilders.put("/api/staff/policies/cancellation")
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "noop-key")
+                .contentType("application/json")
+                .content(second))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    void revisionNumberWinsWhenRevisionTimestampsAreEqual() throws Exception {
+        updateChainRules("same-time-first", 3, 100, 1, 50);
+        updateChainRules("same-time-second", 5, 100, 2, 30);
+        jdbc.update("update cancellation_policy_revision set created_at = now()");
+
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/policies")
+                .header("X-Staff-Session", hqToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cancellation.refundCutoffDaysBefore").value(5));
+    }
+
+    @Test
+    void preMigrationLegacyIdempotencyKeyKeepsItsMeaning() throws Exception {
+        UUID staffId = jdbc.queryForObject(
+                "select id from staff_member where email = ?", UUID.class, HQ_EMAIL);
+        jdbc.update("""
+                insert into policy_revision
+                    (id, key, refund_cutoff_days_before, refund_cutoff_local_time, timezone,
+                     staff_id, idempotency_key, request_hash)
+                values (?, 'cancellation', 2, '19:00', 'Asia/Seoul', ?, 'legacy-key', ?)
+                """, UUID.randomUUID(), staffId, "b".repeat(64));
+
+        mvc.perform(MockMvcRequestBuilders.put("/api/staff/policies/cancellation")
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "legacy-key")
+                .contentType("application/json")
+                .content("{\"refundCutoffDaysBefore\":2,\"refundCutoffLocalTime\":\"19:00\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.created").value(false))
+                .andExpect(jsonPath("$.revision").value(1));
+
+        mvc.perform(MockMvcRequestBuilders.put("/api/staff/policies/cancellation")
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "legacy-key")
+                .contentType("application/json")
+                .content(rulesBody(3, 100, 1, 50)))
+                .andExpect(status().isConflict());
+
+        org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject(
+                "select count(*) from cancellation_policy_revision", Integer.class)).isZero();
+    }
+
+    @Test
+    void invalidRefundRuleDocumentsAreRejected() throws Exception {
+        String duplicateThreshold = """
+                {"rules":[
+                  {"daysBefore":2,"cutoffLocalTime":"18:00","refundPercent":100},
+                  {"daysBefore":2,"cutoffLocalTime":"18:00","refundPercent":50}
+                ]}
+                """;
+        String refundIncreasesNearCheckIn = rulesBody(3, 50, 1, 100);
+        String noFullRefund = rulesBody(3, 80, 1, 20);
+
+        for (String body : java.util.List.of(duplicateThreshold, refundIncreasesNearCheckIn, noFullRefund)) {
+            mvc.perform(MockMvcRequestBuilders.put("/api/staff/policies/cancellation")
+                    .header("X-Staff-Session", hqToken)
+                    .header("Idempotency-Key", "invalid-" + UUID.randomUUID())
+                    .contentType("application/json")
+                    .content(body))
+                    .andExpect(status().isBadRequest());
+        }
+    }
+
+    @Test
+    void hotelPolicyEndpointsRequireHeadquartersAndExistingHotel() throws Exception {
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/policies?hotelId={hotelId}", SOKCHO)
+                .header("X-Staff-Session", sokchoToken))
+                .andExpect(status().isForbidden());
+
+        mvc.perform(MockMvcRequestBuilders.put("/api/staff/policies/hotels/{hotelId}/cancellation", SOKCHO)
+                .header("X-Staff-Session", sokchoToken)
+                .header("Idempotency-Key", "branch-denied")
+                .contentType("application/json")
+                .content(rulesBody(2, 100, 0, 0)))
+                .andExpect(status().isForbidden());
+
+        UUID unknown = UUID.randomUUID();
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/policies?hotelId={hotelId}", unknown)
+                .header("X-Staff-Session", hqToken))
+                .andExpect(status().isNotFound());
+
+        mvc.perform(MockMvcRequestBuilders.put("/api/staff/policies/hotels/{hotelId}/cancellation", unknown)
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "unknown-hotel")
+                .contentType("application/json")
+                .content(rulesBody(2, 100, 0, 0)))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
     void branchStaffCannotReadPolicy() throws Exception {
         mvc.perform(MockMvcRequestBuilders.get("/api/staff/policies")
                 .header("X-Staff-Session", sokchoToken))
@@ -563,8 +828,30 @@ class PolicyIntegrationTest {
 
     private void clean() {
         jdbc.update("delete from staff_session");
+        jdbc.update("delete from cancellation_policy_noop_command");
+        jdbc.update("delete from cancellation_refund_rule");
+        jdbc.update("delete from cancellation_policy_revision");
         jdbc.update("delete from policy_revision");
         jdbc.update("delete from staff_member");
         jdbc.update("delete from hotel where id = ?", SOKCHO);
+    }
+
+    private void updateChainRules(String idempotencyKey, int firstDays, int firstPercent,
+            int secondDays, int secondPercent) throws Exception {
+        mvc.perform(MockMvcRequestBuilders.put("/api/staff/policies/cancellation")
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", idempotencyKey)
+                .contentType("application/json")
+                .content(rulesBody(firstDays, firstPercent, secondDays, secondPercent)))
+                .andExpect(status().isCreated());
+    }
+
+    private String rulesBody(int firstDays, int firstPercent, int secondDays, int secondPercent) {
+        return """
+                {"rules":[
+                  {"daysBefore":%d,"cutoffLocalTime":"18:00","refundPercent":%d},
+                  {"daysBefore":%d,"cutoffLocalTime":"18:00","refundPercent":%d}
+                ]}
+                """.formatted(firstDays, firstPercent, secondDays, secondPercent);
     }
 }
