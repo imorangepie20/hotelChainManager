@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 const TOKEN = "P".repeat(43);
+const EXPIRES_AT = "2026-09-27T06:17:00.000Z";
 const pageId = "preview-story";
 const connections = { roomTypeIds: [], targetHotelIds: [], relatedPages: [] };
 const content = { seo: { title: "미리보기 이야기", description: "저장 초안 검토" }, blocks: [{ type: "HERO", imageAssetId: "14000000-0000-0000-0000-000000000001", imageSrc: "/images/sokcho-coast-hero.png", imageAlt: "해안", title: "저장 제목", description: "저장 설명", eyebrow: "STAY" }] };
@@ -37,7 +38,7 @@ for (const width of [1280, 390]) test(`requires a saved draft and supports block
   let revoked = 0;
   await page.route(`**/pages/${pageId}/preview-grants`, route => {
     issued.push(route.request().postDataJSON());
-    return route.fulfill({ json: { grantId: "grant-one", previewToken: TOKEN, previewPath: "/brand/preview-story", expiresAt: new Date(Date.now() + 600_000).toISOString() } });
+    return route.fulfill({ json: { grantId: "grant-one", previewToken: TOKEN, previewPath: "/brand/preview-story", expiresAt: EXPIRES_AT } });
   });
   await page.route("**/preview-grants/grant-one", route => { revoked++; return route.fulfill({ status: 204 }); });
   const action = page.getByRole("button", { name: "실제 화면 미리보기", exact: true });
@@ -51,7 +52,9 @@ for (const width of [1280, 390]) test(`requires a saved draft and supports block
   await expect(dialog).toBeVisible();
   await expect(dialog.getByLabel("미리보기 링크")).toHaveValue(`http://127.0.0.1:4000/brand/preview-story#preview=${TOKEN}`);
   expect(issued).toEqual([{ locale: "ko", expectedDraftVersion: 2 }]);
-  await expect(dialog.getByText(/10분|만료/).first()).toBeVisible();
+  await expect(dialog.locator(`time[datetime="${EXPIRES_AT}"]`)).toContainText(/2026.*9.*27.*3:17/);
+  await expect(dialog.getByText("(서울 시간)", { exact: false })).toBeVisible();
+  await expect(dialog.getByText(/발급 후 10분/)).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await dialog.getByRole("button", { name: "링크 폐기" }).click();
   await expect(dialog.getByLabel("미리보기 링크")).toHaveCount(0);

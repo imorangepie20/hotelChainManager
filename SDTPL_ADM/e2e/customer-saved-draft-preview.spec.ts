@@ -40,7 +40,7 @@ for (const width of [1280, 390]) test(`captures reloadable draft session and blo
   await page.setViewportSize({ width, height: 844 });
   const calls = await mockPreview(page);
   await page.goto(`/brand/story#preview=${TOKEN}`);
-  await expect(page).toHaveURL("http://127.0.0.1:4000/brand/story");
+  await expect(page).toHaveURL(/\/brand\/story$/);
   await expect(page.getByRole("heading", { name: "저장 초안", exact: true })).toBeVisible();
   await expect(page.getByRole("region", { name: "저장 초안 미리보기" })).toBeVisible();
   await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", "noindex,nofollow");
@@ -55,7 +55,7 @@ for (const width of [1280, 390]) test(`captures reloadable draft session and blo
   await page.getByRole("link", { name: "공개 이야기", exact: true }).click();
   await expect(page.getByRole("heading", { name: "공개본", exact: true })).toBeVisible();
   expect(await page.evaluate(() => sessionStorage.getItem("website-preview"))).toBeNull();
-  await expect(page.locator('meta[name="robots"]')).toHaveCount(0);
+  await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", "index,follow");
 });
 
 test("does not fall back to public content when the grant is unavailable", async ({ page }) => {
@@ -73,7 +73,7 @@ test("normal navigation to the current path exits preview before reload", async 
   await page.getByRole("link", { name: "KO", exact: true }).click();
   await expect(page.getByRole("heading", { name: "공개본", exact: true })).toBeVisible();
   expect(await page.evaluate(() => sessionStorage.getItem("website-preview"))).toBeNull();
-  await expect(page.locator('meta[name="robots"]')).toHaveCount(0);
+  await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", "index,follow");
 });
 
 test("removes the draft from the screen at expiry", async ({ page }) => {
@@ -127,7 +127,7 @@ test("captures and removes the fragment even when tab storage is blocked", async
   const calls = await mockPreview(page);
   await page.addInitScript(() => Object.defineProperty(window, "sessionStorage", { configurable: true, get() { throw new DOMException("검증용 저장소 차단", "SecurityError"); } }));
   await page.goto(`/brand/story#preview=${TOKEN}`);
-  await expect(page).toHaveURL("http://127.0.0.1:4000/brand/story");
+  await expect(page).toHaveURL(/\/brand\/story$/);
   await expect(page.getByRole("heading", { name: "저장 초안", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "미리보기 종료", exact: true }).click();
   await expect(page.getByRole("heading", { name: "공개본", exact: true })).toBeVisible();

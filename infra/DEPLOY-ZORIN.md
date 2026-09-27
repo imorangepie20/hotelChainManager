@@ -184,6 +184,8 @@ docker compose --env-file infra/secrets/compose.env \
   `AI_TELEMETRY_INGEST_TOKEN`은 필수이며 API와 concierge가 같은 값을
   사용한다. `GOOGLE_API_KEY`가 비어 있으면 정규식 폴백과 `no_key`
   측정만 동작한다. 실제 토큰은 저장소가 아니라 `compose.env`에 둔다.
+  저장 초안 미리보기는 `WEBSITE_PREVIEW_TTL_MINUTES`를 사용하며 기본값은
+  10, 허용 범위는 1~60분이다. 변경하면 API를 다시 기동해야 새 grant부터 적용된다.
 - **DB를 호스트에 노출하지 않는다.** 서버의 DB는 컨테이너 네트워크
   안에서만 통신한다. 개발용 `55432` 포트 노출은 로컬 Windows
   `compose.yaml`만 해당한다.

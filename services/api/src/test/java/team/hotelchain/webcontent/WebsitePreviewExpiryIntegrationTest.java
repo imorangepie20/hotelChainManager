@@ -1,20 +1,22 @@
 package team.hotelchain.webcontent;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicReference;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.context.WebApplicationContext;
 
 import team.hotelchain.staff.StaffAccessService;
@@ -27,7 +29,6 @@ import team.hotelchain.staff.StaffSessionView;
  * TTL이 10분으로 고정되면 10분을 기다려야 하므로 1분으로 줄여서 검증한다.
  */
 @SpringBootTest(properties = { "website.preview.require-https=false", "website.preview.ttl-minutes=1" })
-@Transactional
 class WebsitePreviewExpiryIntegrationTest {
 
     @Autowired JdbcTemplate jdbc;
@@ -35,8 +36,18 @@ class WebsitePreviewExpiryIntegrationTest {
     @Autowired WebsitePageService pages;
     @Autowired WebsitePreviewGrantService previewGrants;
     @Autowired WebApplicationContext context;
+    private UUID seededStaffId;
+
+    @AfterEach
+    void cleanUp() {
+        if (seededStaffId == null) return;
+        jdbc.update("delete from website_preview_grant where issued_by = ?", seededStaffId);
+        jdbc.update("delete from staff_session where staff_id = ?", seededStaffId);
+        jdbc.update("delete from staff_member where id = ?", seededStaffId);
+    }
 
     @Test
+    @Timeout(90)
     void expiresAfterTheConfiguredMinutesInRealTime() throws Exception {
         StaffSessionView editor = seedEditor();
         WebsitePageDocument home = pages.homeDraft(editor.token());
@@ -50,26 +61,36 @@ class WebsitePreviewExpiryIntegrationTest {
                         .param("path", grant.previewPath())
                         .param("locale", "ko")
                         .header("X-Website-Preview", grant.previewToken()))
-                .andExpect(status().isOk());
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(header().string("X-Website-Preview-Expires-At", grant.expiresAt().toString()));
 
-        // TTL 1분 + 여유 5초를 실제 시간으로 기다린다.
-        AtomicReference<Integer> finalStatus = new AtomicReference<>();
-        long deadline = System.currentTimeMillis() + Duration.ofMinutes(1).plusSeconds(5).toMillis();
-        while (System.currentTimeMillis() < deadline) {
-            int status = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+        // 임의의 65초 sleep 대신 서버가 발급한 만료 시각까지 실제로 기다린다.
+        long millisUntilExpiry = Duration.between(Instant.now(), grant.expiresAt()).toMillis();
+        if (millisUntilExpiry > 0) {
+            Thread.sleep(millisUntilExpiry);
+        }
+
+        Integer finalStatus = null;
+        Instant deadline = grant.expiresAt().plusSeconds(15);
+        do {
+            int currentStatus = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
                             .get("/api/website/pages/preview")
                             .param("path", grant.previewPath())
                             .param("locale", "ko")
                             .header("X-Website-Preview", grant.previewToken()))
                     .andReturn().getResponse().getStatus();
-            if (status == 410) {
-                finalStatus.set(status);
+            if (currentStatus == 410) {
+                finalStatus = currentStatus;
                 break;
             }
-            Thread.sleep(2_000);
-        }
+            assertThat(currentStatus).as("만료 전에는 200만 반환해야 한다").isEqualTo(200);
+            if (Instant.now().isBefore(deadline)) {
+                Thread.sleep(250);
+            }
+        } while (Instant.now().isBefore(deadline));
 
-        assertThat(finalStatus.get())
+        assertThat(finalStatus)
                 .as("1분 TTL 이후에는 410로 바뀌어야 한다")
                 .isEqualTo(410);
         mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
@@ -84,10 +105,11 @@ class WebsitePreviewExpiryIntegrationTest {
     private StaffSessionView seedEditor() {
         BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
         UUID staffId = UUID.randomUUID();
+        seededStaffId = staffId;
         jdbc.update("""
                 insert into staff_member (id, email, display_name, password_hash, role)
                 values (?, ?, ?, ?, 'HQ_EDITOR')
-                """, staffId, "expiry-editor@example.com", "만료 검증 편집자", encoder.encode("editor-password"));
-        return staffAccess.login("expiry-editor@example.com", "editor-password");
+                """, staffId, "expiry-editor-" + staffId + "@example.com", "만료 검증 편집자", encoder.encode("editor-password"));
+        return staffAccess.login("expiry-editor-" + staffId + "@example.com", "editor-password");
     }
 }

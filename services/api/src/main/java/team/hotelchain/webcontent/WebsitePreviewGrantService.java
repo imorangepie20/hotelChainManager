@@ -8,6 +8,7 @@ import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Base64;
 import java.util.HexFormat;
 import java.util.Set;
@@ -26,7 +27,6 @@ import team.hotelchain.staff.StaffPrincipal;
 
 @Service
 public class WebsitePreviewGrantService {
-    private static final Duration DEFAULT_TTL = Duration.ofMinutes(10);
     private static final Duration CLEANUP_RETENTION = Duration.ofHours(24);
     private static final Set<String> PREVIEWABLE_TYPES = Set.of("HOME_PAGE", "HOTEL_LANDING", "CONTENT_PAGE");
 
@@ -81,7 +81,8 @@ public class WebsitePreviewGrantService {
 
         UUID grantId = UUID.randomUUID();
         String rawToken = newToken();
-        Instant expiresAt = now.plus(ttl);
+        // PostgreSQL TIMESTAMPTZ의 마이크로초 정밀도에 맞춰 발급 응답과 이후 조회 header가 같게 한다.
+        Instant expiresAt = now.plus(ttl).truncatedTo(ChronoUnit.MICROS);
         jdbc.update("""
                 insert into website_preview_grant
                     (id, token_hash, page_id, locale, draft_version, preview_path,
@@ -131,16 +132,18 @@ public class WebsitePreviewGrantService {
             throw new WebsitePreviewNotFoundException();
         }
         Grant grant = jdbc.query("""
-                select page_id, locale, draft_version, preview_path, expires_at, revoked_at
+                select page_id, locale, draft_version, preview_path, issued_at, expires_at, revoked_at
                   from website_preview_grant where token_hash = ?
                 """, rs -> rs.next() ? new Grant(rs.getObject(1, UUID.class), rs.getString(2),
                         rs.getInt(3), rs.getString(4), rs.getTimestamp(5).toInstant(),
-                        rs.getTimestamp(6) == null ? null : rs.getTimestamp(6).toInstant()) : null,
+                        rs.getTimestamp(6).toInstant(),
+                        rs.getTimestamp(7) == null ? null : rs.getTimestamp(7).toInstant()) : null,
                 hash(rawToken));
         if (grant == null || !grant.locale().equals(locale) || !grant.path().equals(path)) {
             throw new WebsitePreviewNotFoundException();
         }
-        if (grant.revokedAt() != null || !grant.expiresAt().isAfter(clock.instant())) {
+        Instant now = clock.instant();
+        if (grant.revokedAt() != null || now.isBefore(grant.issuedAt()) || !grant.expiresAt().isAfter(now)) {
             throw new WebsitePreviewUnavailableException();
         }
         PublishedWebsitePage page = "en".equals(locale)
@@ -216,5 +219,5 @@ public class WebsitePreviewGrantService {
     }
 
     private record Grant(UUID pageId, String locale, int version, String path,
-            Instant expiresAt, Instant revokedAt) {}
+            Instant issuedAt, Instant expiresAt, Instant revokedAt) {}
 }

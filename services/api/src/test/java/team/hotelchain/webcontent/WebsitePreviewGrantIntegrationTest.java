@@ -266,6 +266,11 @@ class WebsitePreviewGrantIntegrationTest {
         mvc.perform(get("/api/website/pages/preview").param("path", "/").param("locale", "en")
                         .header("X-Website-Preview", grant.previewToken()))
                 .andExpect(status().isNotFound());
+        clock.set(START.minusNanos(1));
+        assertThatThrownBy(() -> previewGrants.resolve(grant.previewToken(), "/", "ko"))
+                .isInstanceOf(WebsitePreviewUnavailableException.class);
+        clock.set(START);
+        assertThat(previewGrants.resolve(grant.previewToken(), "/", "ko").page().id()).isEqualTo(home.id());
         clock.set(grant.expiresAt().minusNanos(1));
         assertThat(previewGrants.resolve(grant.previewToken(), "/", "ko").page().id()).isEqualTo(home.id());
         clock.set(grant.expiresAt());

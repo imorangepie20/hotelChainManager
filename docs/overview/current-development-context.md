@@ -12,6 +12,16 @@
 
 최종 갱신: 2026-09-27
 
+## 저장 초안 미리보기 만료 시각·영구 E2E (2026-09-27)
+
+- 관리자 발급 대화상자에 서버 `expiresAt`을 서울 절대 시각과 `<time>`으로 노출하기로 결정했다.
+  설정과 어긋나던 `발급 후 10분` 하드코딩은 제거하고 TTL 변경 UI는 만들지 않았다.
+- `website.preview.ttl-minutes`는 `WEBSITE_PREVIEW_TTL_MINUTES`로 로컬·Zorin compose까지 전달한다.
+  기본 10분, 허용 범위 1~60분이며 발급 JSON과 저장 후 header가 같은 마이크로초 Instant를 쓴다.
+- Spring 10건, 관리자 Playwright 6건, 고객 preview Playwright 14건, TypeScript·production build와
+  두 compose config가 통과했다. 실제 TTL 1분 경과 전 200과 이후 410, 1280px·390px를 확인했다.
+  상세 결정과 검증은 [변경 기록](../changes/2026-09-27-website-preview-expiry-visibility.md)을 따른다.
+
 ## 고객 요청 감사 통합·XLSX 내보내기 (2026-09-27)
 
 - 고객 요청 생성과 담당자·우선순위·상태 변경을 별도 append-only 이벤트로 저장하고 본사 감사
@@ -858,7 +868,7 @@
 
 1. Toss `GET /v1/settlements` 기반 정산·대사의 본사 읽기 전용 화면과 정산·대사의 토스 test 환경 지원, 본사 정산 실행 생성·재시도를 완료했다. 다음은 실제 라이브 거래가 자료에 나타난 뒤 외부 대사를 검증하는 것이다.
 
-2. 저장 초안 미리보기의 만료 시간 경과 검증을 완료했다. 만료 시간을 `website.preview.ttl-minutes`로 조정 가능하게 하고 실제 시간 경과로 410 전환을 확인했다. 다음은 영구 E2E suite와 관리자 UI에서 만료 시간 노출 여부를 정하는 것이다.
+2. 저장 초안 미리보기 만료 시각을 관리자 발급 대화상자에 노출하기로 결정하고 서버 `expiresAt`의 서울 절대 시각을 표시했다. `website.preview.ttl-minutes`의 compose 전달, 실제 1분 경과 전 200·이후 410, 관리자·고객 영구 Playwright와 390px 검증까지 완료했다. 이 후속 범위의 남은 항목은 없다.
 
 3. AI 도우미의 정책 임베딩을 코드로 두고 고객 대화 E2E suite를 추가했으며, Gemini LLM을 연결해 정규식 불가 표현을 해석하게 했다. 정책 위반 400을 고객 웹에 구분해 안내하고 LLM 결과·소요 시간을 INFO 로그로 올려 운영 로그에서 지속 수집되게 했다. `/metrics/llm`과 본사 `AI 운영` 메뉴로 결과별 호출 수·평균 지연을 읽기 전용으로 확인하게 했다. 다음은 측정을 영구 보관·시계열 집계하고 정책 위반 건수도 노출하는 것이다.
 

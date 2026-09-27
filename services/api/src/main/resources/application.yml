@@ -52,6 +52,8 @@ payment:
     settlement-delay-days: ${TOSS_SETTLEMENT_DELAY_DAYS:2}
 
 website:
+  preview:
+    ttl-minutes: ${WEBSITE_PREVIEW_TTL_MINUTES:10}
   media:
     storage-dir: ${WEBSITE_MEDIA_STORAGE_DIR:}
     storage:

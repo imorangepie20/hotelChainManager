@@ -12,6 +12,11 @@ type Props = {
   draftPath: string; dirty: boolean; disabled?: boolean; onBusyChange?: (busy: boolean) => void;
 };
 const CUSTOMER_ORIGIN = process.env.NEXT_PUBLIC_CUSTOMER_WEB_ORIGIN ?? "http://127.0.0.1:4000";
+const SEOUL_EXPIRY_FORMAT = new Intl.DateTimeFormat("ko-KR", {
+  dateStyle: "long",
+  timeStyle: "short",
+  timeZone: "Asia/Seoul",
+});
 function grantUrl(grant: WebsitePreviewGrantResponse) {
   const url = new URL(grant.previewPath, CUSTOMER_ORIGIN);
   if (url.protocol !== "https:" && !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) throw new Error("미리보기 고객 주소는 HTTPS여야 합니다.");
@@ -81,7 +86,7 @@ export function WebsiteSavedDraftPreviewAction({ token, pageId, locale, draftVer
     {!open && error && <p role="alert" className="text-sm text-destructive">{error}</p>}
     <Dialog open={open} onOpenChange={setOpen}><DialogContent finalFocus={trigger} className="sm:max-w-lg">
       <DialogHeader><DialogTitle>저장 초안 미리보기</DialogTitle><DialogDescription>저장된 초안만 표시합니다. 링크를 가진 사람은 만료 전까지 초안을 볼 수 있으므로 외부 공유에 주의해 주세요.</DialogDescription></DialogHeader>
-      {grant && <><p className="text-sm">만료: {new Date(grant.expiresAt).toLocaleString("ko-KR")} (발급 후 10분)</p><label className="grid min-w-0 gap-2 text-sm">미리보기 링크<Input aria-label="미리보기 링크" value={grantUrl(grant)} readOnly onFocus={event => event.target.select()} /></label></>}
+      {grant && <><div className="grid gap-1 text-sm"><p>사용 가능 기한: <time dateTime={grant.expiresAt}>{SEOUL_EXPIRY_FORMAT.format(new Date(grant.expiresAt))}</time> (서울 시간)</p><p className="text-muted-foreground">이 시각 이후에는 새 링크를 발급해야 합니다.</p></div><label className="grid min-w-0 gap-2 text-sm">미리보기 링크<Input aria-label="미리보기 링크" value={grantUrl(grant)} readOnly onFocus={event => event.target.select()} /></label></>}
       <p role="status" className="text-sm text-muted-foreground">{message}</p>
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       {grant && <DialogFooter><Button type="button" variant="destructive" disabled={busy} onClick={() => void revoke()}>링크 폐기</Button><Button type="button" disabled={busy} onClick={() => void copy()}>링크 복사</Button></DialogFooter>}

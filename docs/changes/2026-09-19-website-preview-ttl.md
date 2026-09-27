@@ -34,9 +34,16 @@
   - 홈 초안은 원래 `HERO` 제목으로 복원해 `PUT /api/staff/website/home` 200(draftVersion 7)을 받았다. `draftMetadata`는 `slug: home, path: /, menuLabel: 홈, menuVisible: false`로 유지됐다.
 - 이전 세션에서 끊긴 시점의 404 원인도 정리됐다. 초안 저장 엔드포인트는 `PUT /api/staff/website/pages/{pageId}/draft`가 아니라 `PUT /api/staff/website/home`(`WebsitePageManagementController` line 32)이다.
 
-## 미검증 항목
+## 당시 미검증 항목
 
 - 만료 시간을 10분이 아닌 값으로 컨테이너에 전달하는 동선. `compose.yaml`은 `WEBSITE_PREVIEW_TTL_MINUTES`를 아직 전달하지 않는다. `website.preview.ttl-minutes`는 RELAXED_BINDING으로 대소문자 구분이 없어 컨테이너 환경 변수를 바로 연결할 수 있다. 실사용 환경에서 10분이 아닌 값이 필요해지면 그때 `compose.yaml`에 추가한다.
 - 영구 Playwright 브라우저 suite. 이번 검증은 API·고객 4000 직접 호출로만 수행했다.
 - 관리자 UI에서 만료 시간 표시·변경. grant 응답의 `expiresAt`를 화면에 노출하지 않는다.
 - 1~60분 경계값 거부의 라이브 확인. 생성자 검증은 서버 테스트가 아닌 시작 시점이므로 별도 테스트를 두지 않았다.
+
+## 2026-09-27 후속 결정
+
+- 관리자에게 서버 응답 `expiresAt`의 서울 절대 시각을 노출하기로 결정했다. 링크 복사·공유 전 사용
+  가능 기한을 알아야 하며, 고정 `발급 후 10분` 문구는 설정과 불일치할 수 있어 제거한다.
+- compose 환경변수 전달과 영구 Playwright, 실제 wall-clock 테스트 안정화는
+  [후속 변경 기록](2026-09-27-website-preview-expiry-visibility.md)을 따른다.
