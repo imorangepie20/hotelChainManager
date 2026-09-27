@@ -267,7 +267,7 @@ test("shows type alerts and changes assignee and priority without changing statu
     events: [],
   };
 
-  await page.route("**/api/staff/guest-requests*", async (route) => {
+  await page.route("**/api/staff/guest-requests**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
     if (url.pathname.endsWith("/notifications")) {
@@ -365,8 +365,11 @@ test("shows type alerts and changes assignee and priority without changing statu
   await expect(page.getByText("프런트 알림 1건")).toBeVisible();
   await expect(page.getByRole("cell", { name: "보통" })).toBeVisible();
   await page.getByTestId(`guest-request-open-${REQUEST.id}`).click();
-  await expect(page.getByText("우선순위", { exact: true })).toBeVisible();
-  await expect(page.getByText("보통", { exact: true })).toBeVisible();
+  const detailDialog = page.getByRole("dialog", { name: REQUEST.subject });
+  await expect(
+    detailDialog.getByText("우선순위", { exact: true }),
+  ).toBeVisible();
+  await expect(detailDialog.getByText("보통", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "담당·우선순위 변경" }).click();
   const dialog = page.getByRole("dialog", { name: "담당자와 우선순위 변경" });
@@ -396,7 +399,7 @@ test("keeps the assignment dialog keyboard accessible at 390px", async ({
     assignedTo: null,
     events: [],
   };
-  await page.route("**/api/staff/guest-requests*", async (route) => {
+  await page.route("**/api/staff/guest-requests**", async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname.endsWith("/notifications")) {
       return route.fulfill({ json: { notifications: [], totalCount: 0 } });

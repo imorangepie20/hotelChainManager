@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Inbox, RefreshCw } from "lucide-react";
+import { BellRing, Inbox, RefreshCw, UserRoundCog } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -32,12 +32,20 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import {
   getGuestRequest,
+  getGuestRequestAssignees,
+  getGuestRequestNotifications,
   getGuestRequests,
+  guestRequestNotificationLabels,
+  guestRequestPriorityLabels,
   guestRequestStatusLabels,
   guestRequestTypeLabels,
   StaffApiError,
   transitionGuestRequest,
+  type GuestRequestAssignee,
   type GuestRequestDetail,
+  type GuestRequestNotification,
+  type GuestRequestNotificationType,
+  type GuestRequestPriority,
   type GuestRequestStatus,
   type GuestRequestSummary,
   type StaffPrincipal,
@@ -50,6 +58,15 @@ const STATUS_FILTERS: GuestRequestStatus[] = [
   "IN_PROGRESS",
   "RESOLVED",
   "CLOSED",
+];
+
+const PRIORITIES: GuestRequestPriority[] = ["LOW", "NORMAL", "HIGH"];
+
+const NOTIFICATION_TYPES: GuestRequestNotificationType[] = [
+  "FRONT_DESK",
+  "HOUSEKEEPING",
+  "REFUND_REVIEW",
+  "GENERAL",
 ];
 
 function dateTime(value: string) {
@@ -88,12 +105,23 @@ export function GuestRequests() {
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [notifications, setNotifications] = useState<
+    GuestRequestNotification[]
+  >([]);
   const [detail, setDetail] = useState<GuestRequestDetail | null>(null);
   const [detailError, setDetailError] = useState("");
   const [nextStatus, setNextStatus] = useState<GuestRequestStatus | null>(null);
   const [resolutionNote, setResolutionNote] = useState("");
   const [saving, setSaving] = useState(false);
+  const [manageOpen, setManageOpen] = useState(false);
+  const [assignees, setAssignees] = useState<GuestRequestAssignee[]>([]);
+  const [assigneeLoading, setAssigneeLoading] = useState(false);
+  const [selectedAssignee, setSelectedAssignee] = useState("");
+  const [selectedPriority, setSelectedPriority] =
+    useState<GuestRequestPriority>("NORMAL");
   const idempotencyKey = useRef("");
+  const manageIdempotencyKey = useRef("");
+  const assigneeSelect = useRef<HTMLSelectElement>(null);
   const requestGeneration = useRef(0);
   const mounted = useRef(false);
 
@@ -152,10 +180,30 @@ export function GuestRequests() {
     }
   }, [status, offset, sessionToken]);
 
+  const refreshNotifications = useCallback(async () => {
+    if (!sessionToken) return;
+    try {
+      const next = await getGuestRequestNotifications(sessionToken);
+      if (mounted.current) setNotifications(next.notifications ?? []);
+    } catch {
+      // 알림은 보조 정보이므로 목록 조회를 막지 않는다.
+      if (mounted.current) setNotifications([]);
+    }
+  }, [sessionToken]);
+
   useEffect(() => {
     if (!isStaff) return;
     void refresh();
   }, [isStaff, refresh]);
+
+  useEffect(() => {
+    if (!isStaff) return;
+    void refreshNotifications();
+  }, [isStaff, refreshNotifications]);
+
+  useEffect(() => {
+    if (manageOpen && !assigneeLoading) assigneeSelect.current?.focus();
+  }, [assigneeLoading, manageOpen]);
 
   async function openDetail(request: GuestRequestSummary) {
     if (!sessionToken) return;
@@ -187,6 +235,83 @@ export function GuestRequests() {
     idempotencyKey.current = "";
   }
 
+  async function openManage() {
+    if (!sessionToken || !detail) return;
+    setManageOpen(true);
+    setAssignees([]);
+    setSelectedAssignee(detail.assignedTo ?? "");
+    setSelectedPriority(detail.priority);
+    setDetailError("");
+    setAssigneeLoading(true);
+    manageIdempotencyKey.current = window.crypto.randomUUID();
+    try {
+      const next = await getGuestRequestAssignees(sessionToken, detail.id);
+      setAssignees(next.assignees ?? []);
+    } catch (cause) {
+      setDetailError(
+        cause instanceof StaffApiError
+          ? cause.message
+          : "담당자 목록을 불러오지 못했습니다.",
+      );
+    } finally {
+      setAssigneeLoading(false);
+    }
+  }
+
+  function closeManage() {
+    if (saving) return;
+    setManageOpen(false);
+    setAssignees([]);
+    manageIdempotencyKey.current = "";
+  }
+
+  function changeManageInput(
+    kind: "assignee" | "priority",
+    value: string,
+  ) {
+    if (kind === "assignee") setSelectedAssignee(value);
+    else setSelectedPriority(value as GuestRequestPriority);
+    manageIdempotencyKey.current = window.crypto.randomUUID();
+  }
+
+  async function saveManagement() {
+    if (
+      !sessionToken ||
+      !detail ||
+      !manageIdempotencyKey.current ||
+      assigneeLoading
+    )
+      return;
+    setSaving(true);
+    setDetailError("");
+    try {
+      const updated = await transitionGuestRequest(
+        sessionToken,
+        detail.id,
+        manageIdempotencyKey.current,
+        {
+          status: detail.status,
+          ...(selectedAssignee ? { assignTo: selectedAssignee } : {}),
+          priority: selectedPriority,
+        },
+      );
+      setDetail(updated);
+      setManageOpen(false);
+      setAssignees([]);
+      manageIdempotencyKey.current = "";
+      void refresh();
+      void refreshNotifications();
+    } catch (cause) {
+      setDetailError(
+        cause instanceof StaffApiError
+          ? cause.message
+          : "담당자와 우선순위를 바꾸지 못했습니다.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function saveTransition() {
     if (!sessionToken || !detail || !nextStatus || !idempotencyKey.current)
       return;
@@ -204,6 +329,7 @@ export function GuestRequests() {
       setResolutionNote("");
       idempotencyKey.current = "";
       void refresh();
+      void refreshNotifications();
     } catch (cause) {
       setDetailError(
         cause instanceof StaffApiError
@@ -226,6 +352,12 @@ export function GuestRequests() {
   const detailTargets = detail
     ? STATUS_FILTERS.filter((target) => target !== detail.status)
     : [];
+  const notificationCounts = NOTIFICATION_TYPES.map((type) => ({
+    type,
+    count: notifications.filter(
+      (notification) => notification.notificationType === type,
+    ).length,
+  })).filter(({ count }) => count > 0);
 
   return (
     <div className="flex flex-col gap-4">
@@ -243,13 +375,38 @@ export function GuestRequests() {
         <Button
           type="button"
           variant="outline"
-          onClick={() => void refresh()}
+          onClick={() => {
+            void refresh();
+            void refreshNotifications();
+          }}
           disabled={loading || !isStaff}
         >
           <RefreshCw className="h-4 w-4" aria-hidden />
           {loading ? "불러오는 중" : "새로고침"}
         </Button>
       </div>
+
+      {isStaff && notificationCounts.length > 0 && (
+        <section
+          aria-labelledby="guest-request-notifications-title"
+          className="rounded-xl border bg-muted/30 p-4"
+        >
+          <h3
+            id="guest-request-notifications-title"
+            className="flex items-center gap-2 text-sm font-semibold"
+          >
+            <BellRing className="h-4 w-4" aria-hidden />
+            요청 유형별 알림
+          </h3>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {notificationCounts.map(({ type, count }) => (
+              <Badge key={type} variant="secondary">
+                {guestRequestNotificationLabels[type]} {count}건
+              </Badge>
+            ))}
+          </div>
+        </section>
+      )}
 
       {isStaff && (
         <div className="flex flex-wrap gap-1.5">
@@ -314,6 +471,7 @@ export function GuestRequests() {
                   <TableHead>고객</TableHead>
                   <TableHead>제목</TableHead>
                   <TableHead>상태</TableHead>
+                  <TableHead>우선순위</TableHead>
                   <TableHead>담당</TableHead>
                   <TableHead>
                     <span className="sr-only">검토</span>
@@ -343,6 +501,9 @@ export function GuestRequests() {
                       <Badge variant="secondary">
                         {guestRequestStatusLabels[request.status]}
                       </Badge>
+                    </TableCell>
+                    <TableCell>
+                      {guestRequestPriorityLabels[request.priority]}
                     </TableCell>
                     <TableCell className="text-muted-foreground">
                       {request.assignedDisplayName ?? "-"}
@@ -452,6 +613,10 @@ export function GuestRequests() {
                   label="담당"
                   value={detail.assignedDisplayName ?? "-"}
                 />
+                <DetailField
+                  label="우선순위"
+                  value={guestRequestPriorityLabels[detail.priority]}
+                />
               </dl>
             </div>
 
@@ -491,6 +656,15 @@ export function GuestRequests() {
             )}
 
             <div className="flex flex-wrap justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={saving}
+                onClick={() => void openManage()}
+              >
+                <UserRoundCog className="h-4 w-4" aria-hidden />
+                담당·우선순위 변경
+              </Button>
               {detailTargets.map((target) => (
                 <Button
                   key={target}
@@ -506,6 +680,88 @@ export function GuestRequests() {
             </div>
           </DialogContent>
         )}
+      </Dialog>
+
+      <Dialog
+        open={manageOpen}
+        onOpenChange={(open) => {
+          if (!open) closeManage();
+        }}
+      >
+        <DialogContent className="max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] overflow-y-auto sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>담당자와 우선순위 변경</DialogTitle>
+            <DialogDescription>
+              이 요청을 처리할 직원과 업무 우선순위를 지정합니다. 지정 가능한
+              직원은 서버 권한 범위에 따라 제한됩니다.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4">
+            <div className="grid gap-2">
+              <Label htmlFor="guest-request-assignee">담당자</Label>
+              <select
+                id="guest-request-assignee"
+                ref={assigneeSelect}
+                autoFocus
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                value={selectedAssignee}
+                disabled={saving || assigneeLoading}
+                onChange={(event) =>
+                  changeManageInput("assignee", event.target.value)
+                }
+              >
+                <option value="">
+                  {assigneeLoading ? "담당자 불러오는 중" : "미지정"}
+                </option>
+                {assignees.map((assignee) => (
+                  <option key={assignee.id} value={assignee.id}>
+                    {assignee.displayName}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="guest-request-priority">우선순위</Label>
+              <select
+                id="guest-request-priority"
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                value={selectedPriority}
+                disabled={saving}
+                onChange={(event) =>
+                  changeManageInput("priority", event.target.value)
+                }
+              >
+                {PRIORITIES.map((priority) => (
+                  <option key={priority} value={priority}>
+                    {guestRequestPriorityLabels[priority]}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          {detailError && (
+            <p role="alert" className="break-words text-sm text-destructive">
+              {detailError}
+            </p>
+          )}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={closeManage}
+              disabled={saving}
+            >
+              돌아가기
+            </Button>
+            <Button
+              type="button"
+              disabled={saving || assigneeLoading}
+              onClick={() => void saveManagement()}
+            >
+              {saving ? "저장 중" : "변경 저장"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
       </Dialog>
 
       <Dialog

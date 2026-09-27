@@ -9,7 +9,6 @@ import java.util.HexFormat;
 import java.util.Set;
 import java.util.UUID;
 
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -40,6 +39,7 @@ public class GuestRequestCommandService {
     private static final int NAME_MAX_LENGTH = 100;
     private static final int EMAIL_MAX_LENGTH = 254;
     private static final int PHONE_MAX_LENGTH = 30;
+    private static final int RESOLUTION_NOTE_MAX_LENGTH = 500;
 
     private static final Set<String> REQUEST_TYPES = Set.of(
             "ROOM_REQUEST", "AMENITY_REQUEST", "REFUND_INQUIRY", "GENERAL_INQUIRY", "OTHER");
@@ -50,13 +50,16 @@ public class GuestRequestCommandService {
     private final Clock clock;
     private final StaffAccessService access;
     private final GuestRequestQueryService queries;
+    private final GuestRequestAssigneeService assignees;
 
     public GuestRequestCommandService(JdbcTemplate jdbc, Clock clock,
-            StaffAccessService access, GuestRequestQueryService queries) {
+            StaffAccessService access, GuestRequestQueryService queries,
+            GuestRequestAssigneeService assignees) {
         this.jdbc = jdbc;
         this.clock = clock;
         this.access = access;
         this.queries = queries;
+        this.assignees = assignees;
     }
 
     @Transactional
@@ -78,38 +81,43 @@ public class GuestRequestCommandService {
         }
 
         String requestHash = requestHash(resolvedHotelId, reservationId, input);
-        Existing handled = findExisting(idempotencyKey, requestHash);
-        if (handled != null) {
-            return new GuestRequestCreateResponse(
-                    handled.id(), handled.requestType(), handled.subject(), handled.status,
-                    handled.createdAt(), false);
-        }
-
         Instant now = clock.instant();
         UUID requestId = UUID.randomUUID();
-        try {
-            jdbc.update("""
-                    insert into guest_request
-                        (id, hotel_id, reservation_id, request_type, subject, body,
-                         guest_name, guest_email, guest_phone, status, priority,
-                         idempotency_key, request_hash, created_at, updated_at)
-                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', 'NORMAL', ?, ?, ?, ?)
-                    """, requestId, resolvedHotelId, reservationId,
-                    input.requestType(), input.subject().trim(), input.body().trim(),
-                    input.guestName().trim(), input.guestEmail().trim().toLowerCase(),
-                    isBlank(input.guestPhone()) ? null : input.guestPhone().trim(),
-                    idempotencyKey, requestHash,
-                    java.sql.Timestamp.from(now), java.sql.Timestamp.from(now));
-        } catch (DataIntegrityViolationException conflict) {
-            // 동시에 같은 내용이 접수됐으면 이미 저장된 요청을 돌려준다.
-            Existing replay = findExisting(idempotencyKey, requestHash);
-            if (replay != null) {
-                return new GuestRequestCreateResponse(
-                        replay.id(), replay.requestType(), replay.subject(), replay.status,
-                        replay.createdAt(), false);
+        // 같은 내용의 서로 다른 키도 직렬화해 응답 유실 재시도가 한 요청을 가리키게 한다.
+        jdbc.queryForList("select pg_advisory_xact_lock(hashtextextended(?, 0))", requestHash);
+        int claimed = jdbc.update("""
+                insert into guest_request_submission_command
+                    (idempotency_key, request_hash, request_id, created_at)
+                values (?, ?, ?, ?)
+                on conflict (idempotency_key) do nothing
+                """, idempotencyKey, requestHash, requestId, java.sql.Timestamp.from(now));
+        if (claimed == 0) {
+            SubmissionReceipt receipt = findSubmissionCommand(idempotencyKey);
+            if (receipt == null || !receipt.requestHash().equals(requestHash)) {
+                throw new GuestRequestStateConflictException("같은 멱등 키에 다른 고객 요청을 사용할 수 없습니다.");
             }
-            throw conflict;
+            return replay(findExistingById(receipt.requestId()));
         }
+
+        Existing duplicate = findExistingByHash(requestHash);
+        if (duplicate != null) {
+            jdbc.update("update guest_request_submission_command set request_id = ? where idempotency_key = ?",
+                    duplicate.id(), idempotencyKey);
+            return replay(duplicate);
+        }
+
+        jdbc.update("""
+                insert into guest_request
+                    (id, hotel_id, reservation_id, request_type, subject, body,
+                     guest_name, guest_email, guest_phone, status, priority,
+                     idempotency_key, request_hash, created_at, updated_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', 'NORMAL', ?, ?, ?, ?)
+                """, requestId, resolvedHotelId, reservationId,
+                input.requestType(), input.subject().trim(), input.body().trim(),
+                input.guestName().trim(), input.guestEmail().trim().toLowerCase(),
+                isBlank(input.guestPhone()) ? null : input.guestPhone().trim(),
+                idempotencyKey, requestHash,
+                java.sql.Timestamp.from(now), java.sql.Timestamp.from(now));
 
         jdbc.update("""
                 insert into guest_request_event
@@ -142,6 +150,9 @@ public class GuestRequestCommandService {
         if (nextPriority != null && !PRIORITIES.contains(nextPriority)) {
             throw new IllegalArgumentException("알 수 없는 우선순위입니다.");
         }
+        if (input.resolutionNote() != null && input.resolutionNote().length() > RESOLUTION_NOTE_MAX_LENGTH) {
+            throw new IllegalArgumentException("처리 안내는 최대 " + RESOLUTION_NOTE_MAX_LENGTH + "자입니다.");
+        }
 
         StaffPrincipal staff = access.current(token);
         Existing request = loadExistingForUpdate(requestId);
@@ -155,7 +166,7 @@ public class GuestRequestCommandService {
             return queries.get(token, requestId);
         }
         if (input.assignTo() != null) {
-            requireAssignableStaff(input.assignTo(), request.hotelId());
+            assignees.requireAssignable(staff, input.assignTo(), request.hotelId());
         }
 
         UUID nextAssignee = input.assignTo() == null ? request.assignedTo() : input.assignTo();
@@ -258,10 +269,10 @@ public class GuestRequestCommandService {
         return request;
     }
 
-    private Existing findExisting(String idempotencyKey, String requestHash) {
+    private Existing findExistingById(UUID requestId) {
         return jdbc.query(
                 "select id, hotel_id, request_type, subject, status, priority, assigned_to, created_at from guest_request"
-                        + " where idempotency_key = ? and request_hash = ?",
+                        + " where id = ?",
                 rs -> rs.next() ? new Existing(
                         rs.getObject("id", UUID.class),
                         rs.getObject("hotel_id", UUID.class),
@@ -271,25 +282,48 @@ public class GuestRequestCommandService {
                         rs.getString("priority"),
                         rs.getObject("assigned_to", UUID.class),
                         rs.getTimestamp("created_at").toInstant()) : null,
-                idempotencyKey, requestHash);
+                requestId);
+    }
+
+    private Existing findExistingByHash(String requestHash) {
+        return jdbc.query(
+                "select id, hotel_id, request_type, subject, status, priority, assigned_to, created_at"
+                        + " from guest_request where request_hash = ? order by created_at, id limit 1",
+                rs -> rs.next() ? new Existing(
+                        rs.getObject("id", UUID.class), rs.getObject("hotel_id", UUID.class),
+                        rs.getString("request_type"), rs.getString("subject"), rs.getString("status"),
+                        rs.getString("priority"), rs.getObject("assigned_to", UUID.class),
+                        rs.getTimestamp("created_at").toInstant()) : null,
+                requestHash);
+    }
+
+    private SubmissionReceipt findSubmissionCommand(String idempotencyKey) {
+        return jdbc.query("""
+                select request_hash, request_id
+                  from guest_request_submission_command
+                 where idempotency_key = ?
+                """, rs -> rs.next() ? new SubmissionReceipt(
+                        rs.getString("request_hash"), rs.getObject("request_id", UUID.class)) : null,
+                idempotencyKey);
+    }
+
+    private GuestRequestCreateResponse replay(Existing existing) {
+        if (existing == null) {
+            throw new IllegalStateException("멱등 접수 결과를 찾을 수 없습니다.");
+        }
+        return new GuestRequestCreateResponse(
+                existing.id(), existing.requestType(), existing.subject(), existing.status(),
+                existing.createdAt(), false);
     }
 
     private void requireHotelAccess(StaffPrincipal staff, UUID hotelId) {
-        if (!"HQ_ADMIN".equals(staff.role()) && !hotelId.equals(staff.hotelId())) {
-            throw new StaffAccessDeniedException();
+        if ("HQ_ADMIN".equals(staff.role())) {
+            return;
         }
-    }
-
-    private void requireAssignableStaff(UUID staffId, UUID hotelId) {
-        Boolean assignable = jdbc.query("""
-                select true from staff_member
-                 where id = ? and active and role <> 'REMOVED'
-                   and (role = 'HQ_ADMIN' or (role = 'BRANCH_STAFF' and hotel_id = ?))
-                 for share
-                """, rs -> rs.next() ? Boolean.TRUE : null, staffId, hotelId);
-        if (assignable == null) {
-            throw new IllegalArgumentException("해당 지점의 활성 직원을 담당자로 지정해 주세요.");
+        if ("BRANCH_STAFF".equals(staff.role()) && hotelId.equals(staff.hotelId())) {
+            return;
         }
+        throw new StaffAccessDeniedException();
     }
 
     private CommandReceipt findTransitionCommand(UUID requestId, String idempotencyKey) {
@@ -412,4 +446,6 @@ public class GuestRequestCommandService {
     }
 
     private record CommandReceipt(String requestHash) {}
+
+    private record SubmissionReceipt(String requestHash, UUID requestId) {}
 }

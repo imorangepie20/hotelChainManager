@@ -1,6 +1,6 @@
 # 관리자(Admin) 메뉴 로드맵
 
-> 최종 갱신: 2026-09-27 (고객 요청 감사 통합·XLSX 완료).
+> 최종 갱신: 2026-09-27 (고객 요청 담당자·우선순위·유형별 알림 완료).
 
 ## 현재 메뉴 (`SDTPL_ADM/src/lib/nav.ts`)
 | 그룹 | 메뉴 | 경로 | 권한 | 상태 |
@@ -64,9 +64,9 @@
 ### 6. 고객 요청 관리 (지점 직원)
 
 - 고객의 예약 변경·취소 요청과 일반 문의를 받고 처리 상태를 표시.
-- 현재: `POST /api/hotels/{hotelId}/guest-requests`가 고객의 객실·편의 요청·환불 문의·일반 문의를 받는다. 예약 변경·취소는 전용 API가 있으므로 이 API에서 처리하지 않는다. `GET /api/staff/guest-requests`가 본사는 전 지점을, 지점 직원은 자기 지점만 돌려주고 `GET /api/staff/guest-requests/{requestId}`가 연락처·내용·처리 이력을 돌려준다. `POST /api/staff/guest-requests/{requestId}/transition`이 처리 상태를 `OPEN`→`IN_PROGRESS`→`RESOLVED`→`CLOSED`로 바꾼다. 멱원은 두 갈래로 동작한다. `고객 요청` (`/dashboard/guest-requests`) 메뉴가 상태 필터·표·검토 대화상자·상태 변경 대화상자를 보여준다. 고객 웹 `/contact`·`/en/contact`가 요청 접수 폼을 제공한다.
-- **후보 메뉴**: `고객 요청` (`/dashboard/guest-requests`) — **1차 구현됨**
-- 남음: 담당자·우선순위 지정 UI(서버 `transition` 본문은 `assignTo`·`priority`를 받는다), 요청 유형별 알림.
+- 현재: `POST /api/hotels/{hotelId}/guest-requests`가 고객의 객실·편의 요청·환불 문의·일반 문의를 받는다. 예약 변경·취소는 전용 API가 있으므로 이 API에서 처리하지 않는다. 접수 멱등 키를 본문 지문과 함께 선점해 같은 키·다른 본문은 409로 거부하고, 같은 내용의 재시도는 한 요청으로 합친다. `GET /api/staff/guest-requests`가 본사는 전 지점을, 지점 직원은 자기 지점만 돌려주고 `GET /api/staff/guest-requests/{requestId}`가 연락처·내용·처리 이력을 돌려준다. `GET .../{requestId}/assignees`는 본사에는 활성 본사 관리자와 해당 지점 직원, 지점 직원에는 자기 지점 직원만 최소 정보로 반환한다. `POST .../{requestId}/transition`이 상태·담당자·우선순위를 같은 멱등 명령으로 바꾸며 서버가 actor와 요청 지점을 다시 검증하고 각각 감사 이벤트를 남긴다. `GET .../notifications`는 개인정보 없이 `OPEN` 요청을 객실→프런트, 편의→하우스키핑, 환불→환불 검토, 일반·기타→일반 문의 앱 내 알림으로 계산한다. `고객 요청` (`/dashboard/guest-requests`) 메뉴가 상태 필터·유형별 알림·우선순위·검토·담당자/우선순위·상태 변경 대화상자를 보여준다. 고객 웹 `/contact`·`/en/contact`가 요청 접수 폼을 제공한다.
+- **후보 메뉴**: `고객 요청` (`/dashboard/guest-requests`) — **접수·조회·상태·담당자·우선순위·유형별 앱 내 알림·감사 연동 구현됨**
+- 남음: 없음. 외부 메일·푸시 알림은 현재 범위에 포함하지 않는다.
 
 ### 7. 감사·이력 조회 (HQ_ADMIN)
 

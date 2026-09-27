@@ -42,10 +42,13 @@ public class GuestRequestQueryService {
 
     private final JdbcTemplate jdbc;
     private final StaffAccessService access;
+    private final GuestRequestAssigneeService assignees;
 
-    public GuestRequestQueryService(JdbcTemplate jdbc, StaffAccessService access) {
+    public GuestRequestQueryService(JdbcTemplate jdbc, StaffAccessService access,
+            GuestRequestAssigneeService assignees) {
         this.jdbc = jdbc;
         this.access = access;
+        this.assignees = assignees;
     }
 
     @Transactional(readOnly = true)
@@ -62,7 +65,7 @@ public class GuestRequestQueryService {
                 throw new HotelNotFoundException(hotelId);
             }
             effectiveHotelId = hotelId;
-        } else {
+        } else if ("BRANCH_STAFF".equals(staff.role())) {
             // 지점 직원은 자기 지점만 읽을 수 있다.
             if (hotelId != null && !hotelId.equals(staff.hotelId())) {
                 throw new StaffAccessDeniedException();
@@ -74,6 +77,8 @@ public class GuestRequestQueryService {
             if (!hotelExists(effectiveHotelId)) {
                 throw new HotelNotFoundException(effectiveHotelId);
             }
+        } else {
+            throw new StaffAccessDeniedException();
         }
 
         StringBuilder where = new StringBuilder();
@@ -111,6 +116,56 @@ public class GuestRequestQueryService {
         RequestRow request = loadRequest(requestId);
         requireAccess(staff, request.hotelId());
         return toView(request);
+    }
+
+    @Transactional(readOnly = true)
+    public GuestRequestAssigneeListView assignees(String token, UUID requestId) {
+        StaffPrincipal staff = access.current(token);
+        RequestRow request = loadRequest(requestId);
+        requireAccess(staff, request.hotelId());
+        return assignees.list(staff, request.hotelId());
+    }
+
+    @Transactional(readOnly = true)
+    public GuestRequestNotificationListView notifications(String token, Integer limit) {
+        StaffPrincipal staff = access.current(token);
+        int pageSize = limit == null ? 20 : limit;
+        if (pageSize < 1 || pageSize > 20) {
+            throw new IllegalArgumentException("알림 조회 건수는 1 이상 20 이하여야 합니다.");
+        }
+
+        String scope = "";
+        List<Object> params = new ArrayList<>();
+        if ("BRANCH_STAFF".equals(staff.role())) {
+            if (staff.hotelId() == null || !hotelExists(staff.hotelId())) {
+                throw new StaffAccessDeniedException();
+            }
+            scope = " and hotel_id = ?";
+            params.add(staff.hotelId());
+        } else if (!"HQ_ADMIN".equals(staff.role())) {
+            throw new StaffAccessDeniedException();
+        }
+
+        Integer total = jdbc.queryForObject(
+                "select count(*) from guest_request_detail where status = 'OPEN'" + scope,
+                Integer.class, params.toArray());
+        List<Object> rowParams = new ArrayList<>(params);
+        rowParams.add(pageSize);
+        List<GuestRequestNotificationListView.NotificationView> rows = jdbc.query("""
+                select id, hotel_id, hotel_name, request_type, created_at
+                  from guest_request_detail
+                 where status = 'OPEN'%s
+                 order by created_at desc, id desc
+                 limit ?
+                """.formatted(scope), (rs, row) -> {
+                    UUID requestId = rs.getObject("id", UUID.class);
+                    String requestType = rs.getString("request_type");
+                    return new GuestRequestNotificationListView.NotificationView(
+                            requestId, requestId, rs.getObject("hotel_id", UUID.class),
+                            rs.getString("hotel_name"), requestType,
+                            notificationType(requestType), rs.getTimestamp("created_at").toInstant());
+                }, rowParams.toArray());
+        return new GuestRequestNotificationListView(rows, total == null ? 0 : total);
     }
 
     private GuestRequestListView.GuestRequestSummary mapSummary(ResultSet rs) throws SQLException {
@@ -200,9 +255,23 @@ public class GuestRequestQueryService {
     }
 
     private void requireAccess(StaffPrincipal staff, UUID hotelId) {
-        if (!"HQ_ADMIN".equals(staff.role()) && !hotelId.equals(staff.hotelId())) {
-            throw new StaffAccessDeniedException();
+        if ("HQ_ADMIN".equals(staff.role())) {
+            return;
         }
+        if ("BRANCH_STAFF".equals(staff.role()) && hotelId.equals(staff.hotelId())) {
+            return;
+        }
+        throw new StaffAccessDeniedException();
+    }
+
+    private String notificationType(String requestType) {
+        return switch (requestType) {
+            case "ROOM_REQUEST" -> "FRONT_DESK";
+            case "AMENITY_REQUEST" -> "HOUSEKEEPING";
+            case "REFUND_INQUIRY" -> "REFUND_REVIEW";
+            case "GENERAL_INQUIRY", "OTHER" -> "GENERAL";
+            default -> throw new IllegalStateException("알 수 없는 고객 요청 유형입니다.");
+        };
     }
 
     private int sanitizeLimit(Integer limit) {

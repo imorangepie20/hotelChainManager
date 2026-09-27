@@ -3,6 +3,7 @@ package team.hotelchain.guestrequest;
 import java.util.UUID;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.http.CacheControl;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -36,21 +37,35 @@ public class GuestRequestController {
 
     // 직원이 고객 요청 목록을 읽는다. 본사는 전 지점을, 지점 직원은 자기 지점만 읽는다.
     @GetMapping
-    public GuestRequestListView list(
+    public ResponseEntity<GuestRequestListView> list(
             @RequestHeader(value = "X-Staff-Session", required = false) String token,
             @RequestParam(required = false) String status,
             @RequestParam(required = false) UUID hotelId,
             @RequestParam(required = false) Integer limit,
             @RequestParam(required = false) Integer offset) {
-        return queries.list(token, status, hotelId, limit, offset);
+        return noStore(queries.list(token, status, hotelId, limit, offset));
+    }
+
+    @GetMapping("/notifications")
+    public ResponseEntity<GuestRequestNotificationListView> notifications(
+            @RequestHeader(value = "X-Staff-Session", required = false) String token,
+            @RequestParam(required = false) Integer limit) {
+        return noStore(queries.notifications(token, limit));
     }
 
     // 직원이 고객 요청 1건과 처리 이력을 읽는다.
     @GetMapping("/{requestId}")
-    public GuestRequestView get(
+    public ResponseEntity<GuestRequestView> get(
             @PathVariable UUID requestId,
             @RequestHeader(value = "X-Staff-Session", required = false) String token) {
-        return queries.get(token, requestId);
+        return noStore(queries.get(token, requestId));
+    }
+
+    @GetMapping("/{requestId}/assignees")
+    public ResponseEntity<GuestRequestAssigneeListView> assignees(
+            @PathVariable UUID requestId,
+            @RequestHeader(value = "X-Staff-Session", required = false) String token) {
+        return noStore(queries.assignees(token, requestId));
     }
 
     // 직원이 고객 요청의 처리 상태를 바꾼다. 멱원 재호출은 200으로 같은 결과를 돌려준다.
@@ -61,18 +76,24 @@ public class GuestRequestController {
             @RequestHeader(value = "X-Staff-Session", required = false) String token,
             @RequestBody GuestRequestTransitionRequest request) {
         GuestRequestView view = commands.transition(token, requestId, idempotencyKey, request);
-        return ResponseEntity.ok(view);
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(view);
     }
 
     @ExceptionHandler(GuestRequestNotFoundException.class)
     public ResponseEntity<ApiError> notFound(GuestRequestNotFoundException exception) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .cacheControl(CacheControl.noStore())
                 .body(new ApiError("GUEST_REQUEST_NOT_FOUND", exception.getMessage()));
     }
 
     @ExceptionHandler(GuestRequestStateConflictException.class)
     public ResponseEntity<ApiError> conflict(GuestRequestStateConflictException exception) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
+                .cacheControl(CacheControl.noStore())
                 .body(new ApiError("GUEST_REQUEST_STATE_CONFLICT", exception.getMessage()));
+    }
+
+    private <T> ResponseEntity<T> noStore(T body) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(body);
     }
 }

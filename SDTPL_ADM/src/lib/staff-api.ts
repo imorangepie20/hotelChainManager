@@ -3945,6 +3945,14 @@ export type GuestRequestStatus =
   | "RESOLVED"
   | "CLOSED";
 
+export type GuestRequestPriority = "LOW" | "NORMAL" | "HIGH";
+
+export type GuestRequestNotificationType =
+  | "FRONT_DESK"
+  | "HOUSEKEEPING"
+  | "REFUND_REVIEW"
+  | "GENERAL";
+
 export const guestRequestTypeLabels: Record<GuestRequestType, string> = {
   ROOM_REQUEST: "객실 요청",
   AMENITY_REQUEST: "편의 요청",
@@ -3960,6 +3968,22 @@ export const guestRequestStatusLabels: Record<GuestRequestStatus, string> = {
   CLOSED: "종료",
 };
 
+export const guestRequestPriorityLabels: Record<GuestRequestPriority, string> = {
+  LOW: "낮음",
+  NORMAL: "보통",
+  HIGH: "높음",
+};
+
+export const guestRequestNotificationLabels: Record<
+  GuestRequestNotificationType,
+  string
+> = {
+  FRONT_DESK: "프런트 알림",
+  HOUSEKEEPING: "하우스키핑 알림",
+  REFUND_REVIEW: "환불 검토 알림",
+  GENERAL: "일반 문의 알림",
+};
+
 export type GuestRequestSummary = {
   id: string;
   hotelId: string;
@@ -3969,7 +3993,7 @@ export type GuestRequestSummary = {
   subject: string;
   guestName: string;
   status: GuestRequestStatus;
-  priority: string;
+  priority: GuestRequestPriority;
   assignedDisplayName: string | null;
   createdAt: string;
   updatedAt: string;
@@ -4003,7 +4027,7 @@ export type GuestRequestDetail = {
   guestEmail: string;
   guestPhone: string | null;
   status: GuestRequestStatus;
-  priority: string;
+  priority: GuestRequestPriority;
   assignedTo: string | null;
   assignedDisplayName: string | null;
   createdAt: string;
@@ -4018,6 +4042,32 @@ export type GuestRequestList = {
   hotelId: string;
   limit: number;
   offset: number;
+};
+
+export type GuestRequestAssignee = {
+  id: string;
+  displayName: string;
+  role: "HQ_ADMIN" | "BRANCH_STAFF";
+  hotelId: string | null;
+};
+
+export type GuestRequestAssigneeList = {
+  assignees: GuestRequestAssignee[];
+};
+
+export type GuestRequestNotification = {
+  id: string;
+  requestId: string;
+  hotelId: string;
+  hotelName: string;
+  requestType: GuestRequestType;
+  notificationType: GuestRequestNotificationType;
+  createdAt: string;
+};
+
+export type GuestRequestNotificationList = {
+  notifications: GuestRequestNotification[];
+  totalCount: number;
 };
 
 function guestRequestFailureMessage(status: number) {
@@ -4074,11 +4124,50 @@ export async function getGuestRequest(
   return (await response.json()) as GuestRequestDetail;
 }
 
+export async function getGuestRequestAssignees(
+  token: string,
+  requestId: string,
+): Promise<GuestRequestAssigneeList> {
+  const response = await fetch(
+    `/api/staff/guest-requests/${encodeURIComponent(requestId)}/assignees`,
+    { headers: { "X-Staff-Session": token } },
+  );
+  if (!response.ok) {
+    const error = (await response.json().catch(() => ({}))) as ApiErrorPayload;
+    throw new StaffApiError(
+      error.message ?? guestRequestFailureMessage(response.status),
+      response.status,
+      error.code,
+    );
+  }
+  return (await response.json()) as GuestRequestAssigneeList;
+}
+
+export async function getGuestRequestNotifications(
+  token: string,
+  limit = 20,
+): Promise<GuestRequestNotificationList> {
+  const response = await fetch(
+    `/api/staff/guest-requests/notifications?limit=${encodeURIComponent(limit)}`,
+    { headers: { "X-Staff-Session": token } },
+  );
+  if (!response.ok) {
+    const error = (await response.json().catch(() => ({}))) as ApiErrorPayload;
+    throw new StaffApiError(
+      error.message ?? guestRequestFailureMessage(response.status),
+      response.status,
+      error.code,
+    );
+  }
+  return (await response.json()) as GuestRequestNotificationList;
+}
+
 // 직원이 고객 요청의 처리 상태를 바꾼다. 멱원 재호출은 200으로 같은 결과를
 // 돌려주고 요청이 두 번 바뀌지 않는다.
 export type GuestRequestTransitionInput = {
   status: GuestRequestStatus;
   assignTo?: string | null;
+  priority?: GuestRequestPriority;
   resolutionNote?: string | null;
 };
 
