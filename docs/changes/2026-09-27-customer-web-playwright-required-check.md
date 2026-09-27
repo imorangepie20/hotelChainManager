@@ -41,8 +41,10 @@
   base URL을 테스트 환경의 단일 origin으로 고정한 뒤 다시 34/34를 확인했다.
 - 실행 뒤 4173 포트가 해제되고 JUnit·HTML report·실행/서버 log가 생성됨을 확인했다.
 
-## 원격 완료 조건
+## 원격 등록
 
-- 저장소 변경만으로 branch protection은 자동으로 바뀌지 않는다. workflow를 원격에 반영해 최초 성공 run으로
-  `customer-web-playwright` context를 만든 뒤 `main` ruleset의 required status check로 지정하고 실제 PR에서
-  병합 차단 여부를 확인해야 완전히 필수화된다.
+- `74a4857`을 `origin/main`에 반영했고 [GitHub Actions run 36288585451](https://github.com/imorangepie20/hotelChainManager/actions/runs/36288585451)의
+  `customer-web-playwright` job이 Ubuntu에서 59초 만에 통과했다.
+- `customer-web-playwright-36288585451-1` artifact가 228,046 bytes로 생성됐고 14일 보존 만료 시각이 설정됐다.
+- `main` branch protection의 required status check에 `customer-web-playwright`를 등록했다. 요청 밖의 정책 변경을
+  피하려고 strict 최신 브랜치 강제, 관리자 강제, 필수 승인 수, 푸시 제한은 추가하지 않았다.

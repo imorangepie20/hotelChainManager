@@ -21,6 +21,8 @@
 - CI 동일 명령에서 production build와 Chromium 34/34가 34.76초에 통과했다. HTML·JUnit·실패 screenshot·trace,
   실행·서버 log를 14일 artifact로 보존하며 job timeout은 10분이다. 상세 계약은
   [변경 기록](../changes/2026-09-27-customer-web-playwright-required-check.md)을 따른다.
+- `74a4857`을 `origin/main`에 반영한 첫 Ubuntu Actions job은 59초에 통과했고 14일 artifact를 만들었다.
+  `main` branch protection에도 `customer-web-playwright`를 required status check로 등록했다.
 
 ## 저장 초안 미리보기 만료 시각·영구 E2E (2026-09-27)
 
@@ -882,8 +884,8 @@
 
 3. AI 도우미의 정책 임베딩을 코드로 두고 고객 대화 E2E suite를 추가했으며, Gemini LLM을 연결해 정규식 불가 표현을 해석하게 했다. 정책 위반 400을 고객 웹에 구분해 안내하고 LLM 결과·소요 시간을 INFO 로그로 올려 운영 로그에서 지속 수집되게 했다. `/metrics/llm`과 본사 `AI 운영` 메뉴로 결과별 호출 수·평균 지연을 읽기 전용으로 확인하게 했다. 다음은 측정을 영구 보관·시계열 집계하고 정책 위반 건수도 노출하는 것이다.
 
-4. Playwright 전체 회귀 34건을 `customer-web-playwright` GitHub Actions 검사로 구현했다. 다음은 workflow 최초 성공 뒤
-   `main` ruleset에 required status check로 등록하고 실제 PR 병합 차단을 확인하는 것이다.
+4. Playwright 전체 회귀 34건을 `customer-web-playwright` GitHub Actions 검사로 구현하고 첫 원격 실행과 14일 artifact,
+   `main` required status check 등록까지 완료했다. 이 범위의 남은 항목은 없다.
 
 5. `admin-menu-roadmap.md` 1번 `지점·객실 유형 관리`와 2번 `재고·가격`의 쓰기 동작까지 완료했고, 관리자 61건·서버 206건으로 다시 확인했다. 두 영역의 남은 항목은 없다.
 
