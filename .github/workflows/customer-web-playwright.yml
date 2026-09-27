@@ -1,0 +1,74 @@
+name: Customer Web Playwright
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: customer-web-playwright-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  customer-web-playwright:
+    name: customer-web-playwright
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      CI: 'true'
+      TZ: Asia/Seoul
+      CUSTOMER_WEB_E2E_PORT: '4173'
+      CUSTOMER_WEB_BASE_URL: http://127.0.0.1:4173
+      CUSTOMER_WEB_E2E_SERVER_LOG: playwright-server.log
+      API_PROXY_TARGET: http://127.0.0.1:65535
+      CONCIERGE_PROXY_TARGET: http://127.0.0.1:65535
+    defaults:
+      run:
+        working-directory: apps/web
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run customer web Playwright
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm run test:e2e 2>&1 | tee playwright-run.log
+
+      - name: Upload Playwright evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: customer-web-playwright-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            apps/web/playwright-report/
+            apps/web/test-results/
+            apps/web/playwright-run.log
+            apps/web/playwright-server.log
+          if-no-files-found: warn
+          retention-days: 14

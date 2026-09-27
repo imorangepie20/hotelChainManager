@@ -12,6 +12,16 @@
 
 최종 갱신: 2026-09-27
 
+## 고객 웹 Playwright CI 필수 검사 (2026-09-27)
+
+- 고객 웹 네 `*.spec.ts`의 Playwright 34건을 `Customer Web Playwright / customer-web-playwright` GitHub Actions
+  검사로 만들었다. `main` push와 모든 pull request에서 실행하며 path filter와 자동 재시도는 사용하지 않는다.
+- suite는 mock 전용이므로 DB·API·concierge·외부 Toss를 띄우거나 비밀값을 주지 않는다. production preview만
+  `127.0.0.1:4173`에 띄우고 미모킹 proxy는 닫힌 loopback 포트로 보내 실제 서비스 접근을 차단한다.
+- CI 동일 명령에서 production build와 Chromium 34/34가 34.76초에 통과했다. HTML·JUnit·실패 screenshot·trace,
+  실행·서버 log를 14일 artifact로 보존하며 job timeout은 10분이다. 상세 계약은
+  [변경 기록](../changes/2026-09-27-customer-web-playwright-required-check.md)을 따른다.
+
 ## 저장 초안 미리보기 만료 시각·영구 E2E (2026-09-27)
 
 - 관리자 발급 대화상자에 서버 `expiresAt`을 서울 절대 시각과 `<time>`으로 노출하기로 결정했다.
@@ -872,7 +882,8 @@
 
 3. AI 도우미의 정책 임베딩을 코드로 두고 고객 대화 E2E suite를 추가했으며, Gemini LLM을 연결해 정규식 불가 표현을 해석하게 했다. 정책 위반 400을 고객 웹에 구분해 안내하고 LLM 결과·소요 시간을 INFO 로그로 올려 운영 로그에서 지속 수집되게 했다. `/metrics/llm`과 본사 `AI 운영` 메뉴로 결과별 호출 수·평균 지연을 읽기 전용으로 확인하게 했다. 다음은 측정을 영구 보관·시계열 집계하고 정책 위반 건수도 노출하는 것이다.
 
-4. Playwright 전체 회귀의 실패 5건을 제거했다. 고객 웹 전체 34건이 통과하며 다음은 이 회귀를 CI 필수 검사로 둘지 결정하는 것이다.
+4. Playwright 전체 회귀 34건을 `customer-web-playwright` GitHub Actions 검사로 구현했다. 다음은 workflow 최초 성공 뒤
+   `main` ruleset에 required status check로 등록하고 실제 PR 병합 차단을 확인하는 것이다.
 
 5. `admin-menu-roadmap.md` 1번 `지점·객실 유형 관리`와 2번 `재고·가격`의 쓰기 동작까지 완료했고, 관리자 61건·서버 206건으로 다시 확인했다. 두 영역의 남은 항목은 없다.
 

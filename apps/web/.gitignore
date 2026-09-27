@@ -1,2 +1,4 @@
 test-results/
 playwright-report/
+playwright-server.log
+playwright-run.log
