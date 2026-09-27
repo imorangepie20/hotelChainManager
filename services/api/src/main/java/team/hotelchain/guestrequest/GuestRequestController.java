@@ -17,6 +17,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import team.hotelchain.web.ApiError;
+import team.hotelchain.staff.StaffAccessDeniedException;
+import team.hotelchain.staff.StaffAuthenticationException;
 
 /**
  * 본사·지점 직원이 고객 요청을 조회하고 처리 상태를 바꾼다.
@@ -91,6 +93,27 @@ public class GuestRequestController {
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .cacheControl(CacheControl.noStore())
                 .body(new ApiError("GUEST_REQUEST_STATE_CONFLICT", exception.getMessage()));
+    }
+
+    @ExceptionHandler(StaffAuthenticationException.class)
+    public ResponseEntity<ApiError> unauthenticated(StaffAuthenticationException exception) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .cacheControl(CacheControl.noStore())
+                .body(new ApiError("STAFF_AUTHENTICATION_REQUIRED", exception.getMessage()));
+    }
+
+    @ExceptionHandler(StaffAccessDeniedException.class)
+    public ResponseEntity<ApiError> forbidden(StaffAccessDeniedException exception) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .cacheControl(CacheControl.noStore())
+                .body(new ApiError("STAFF_HOTEL_ACCESS_DENIED", exception.getMessage()));
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ApiError> invalid(IllegalArgumentException exception) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .cacheControl(CacheControl.noStore())
+                .body(new ApiError("INVALID_REQUEST", exception.getMessage()));
     }
 
     private <T> ResponseEntity<T> noStore(T body) {

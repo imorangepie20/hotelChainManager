@@ -597,6 +597,14 @@ class GuestRequestIntegrationTest {
     }
 
     @Test
+    void authenticationFailureOnGuestRequestReadIsNotCacheable() throws Exception {
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/guest-requests/notifications"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                        .string("Cache-Control", org.hamcrest.Matchers.containsString("no-store")));
+    }
+
+    @Test
     void requestReplayAndIdempotencyCollisionDoNotDuplicateNotification() throws Exception {
         String first = mvc.perform(MockMvcRequestBuilders.post("/api/hotels/" + SOKCHO + "/guest-requests")
                         .header("Idempotency-Key", "notification-replay-key")
