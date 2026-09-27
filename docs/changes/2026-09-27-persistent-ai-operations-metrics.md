@@ -2,7 +2,7 @@
 
 ## 상태
 
-- 구현·집중 테스트·로컬 교차 서비스 검증 완료.
+- 구현·집중 테스트·로컬/배포 교차 서비스 검증 완료.
 - 기준 계획: `docs/overview/current-development-context.md`의 AI 운영 후속 작업과
   `docs/plans/admin-menu-roadmap.md` 8번.
 
@@ -40,10 +40,14 @@
 - 로컬 실제 compose에서 `/chat` 200 뒤 영구 이벤트가 2→3으로 증가했다. concierge 재시작과
   API 재시작 뒤에도 3건이 유지됐다. 고정 UUID를 내부 수집 API에 두 번 보내도 3→4로 한 건만
   증가했다.
+- `53dd505`를 원격 `main`에 푸시하고 Zorin compose를 재빌드·배포했다. 배포 검증에서 API·웹·
+  관리자·concierge 헬스, Cloudflare 터널, 실제 chat→telemetry→PostgreSQL 왕복이 모두 통과했다.
+- 배포 DB 이벤트는 API·concierge 재시작 전후 `1→1`로 유지됐다. 공개 관리자 AI 운영 화면은
+  `200`, 무인증 집계 API는 `401`, 비공개 concierge 지표 경로는 `404`를 반환했다.
 
-## 제한과 다음 확인
+## 제한과 후속 작업
 
 - 수집은 고객 응답 보호를 위해 fail-open이다. 250ms 안에 내부 API가 응답하지 않으면 해당
   이벤트는 유실될 수 있고 구조화 경고만 남는다. durable outbox는 별도 작업이다.
-- 실제 Zorin 배포 후 `verify-deployment.sh`의 chat→telemetry→DB 왕복과 관리자 브라우저 표시를
-  다시 확인한다.
+- 배포 관리자 경로와 접근 제어는 확인했다. 실제 HQ 세션으로 기간을 바꾸며 차트 값을 육안 확인하는
+  브라우저 검증은 자동 Playwright의 동일 계약으로 대체했으며, 필요하면 운영 계정 점검 절차에 포함한다.

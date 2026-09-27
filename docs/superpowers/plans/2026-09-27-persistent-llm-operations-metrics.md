@@ -59,3 +59,11 @@
 - 지표 기록 실패가 고객 채팅을 실패시키거나 느린 수집 재시도를 기다리게 되면 구현을 중단한다.
 - 원문 메시지·criteria·비밀값을 저장하거나 응답에 노출하는 설계는 채택하지 않는다.
 - 가격·재고·예약 확정 권한은 기존처럼 Spring 예약 API에만 둔다.
+
+## 완료 결과
+
+- V70 영구 이벤트, 멱등 수집, 90일 보존, 서울 시간 집계, HQ 전용 API와 관리자 시계열 UI를 구현했다.
+- Spring 통합 10건, concierge 39건, 관리자 Playwright 8건과 두 프런트엔드 production build가 통과했다.
+- Zorin 배포에서 chat→DB 적재와 API·concierge 재시작 후 보존, 공개 경로 접근 제어를 확인했다.
+- 상세 증거와 알려진 fail-open 제약은
+  [변경 기록](../../changes/2026-09-27-persistent-ai-operations-metrics.md)을 따른다.
