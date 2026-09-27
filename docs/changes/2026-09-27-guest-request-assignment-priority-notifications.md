@@ -57,3 +57,5 @@
   Cloudflare Tunnel 공개 경로의 상태 검사가 모두 통과했다.
 - 공개 관리자 `/dashboard/guest-requests`는 200을 반환했다. 인증 없는 알림 API는 의도한 401과
   `Cache-Control: no-store`를 반환해 인증 오류도 캐시되지 않음을 확인했다.
+- 속초 지점에 `[샘플] 늦은 체크인 안내 요청` 1건을 공개 접수 API로 멱등하게 추가했다. 요청은
+  `OPEN`·`ROOM_REQUEST`로 생성돼 관리자 목록과 `프런트 알림`에서 확인할 수 있다.
