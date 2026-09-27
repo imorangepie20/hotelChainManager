@@ -9,6 +9,8 @@ import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -567,14 +569,181 @@ class GuestRequestIntegrationTest {
                 .andExpect(status().isNotFound());
     }
 
-    private String submit(String idempotencyKey, UUID hotelId) throws Exception {
-        String body = mvc.perform(MockMvcRequestBuilders.post("/api/hotels/" + hotelId + "/guest-requests")
-                        .header("Idempotency-Key", idempotencyKey)
+    @ParameterizedTest
+    @CsvSource({
+            "ROOM_REQUEST,FRONT_DESK",
+            "AMENITY_REQUEST,HOUSEKEEPING",
+            "REFUND_INQUIRY,REFUND_REVIEW",
+            "GENERAL_INQUIRY,GENERAL",
+            "OTHER,GENERAL"
+    })
+    void submissionCreatesOneTypeSpecificNotification(String requestType, String notificationType) throws Exception {
+        String key = "notification-type-" + requestType;
+        String requestId = submitBody(key, SOKCHO, requestBody(requestType, "유형별 알림"));
+
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/guest-requests/notifications")
+                .header("X-Staff-Session", hqToken))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                        .string("Cache-Control", org.hamcrest.Matchers.containsString("no-store")))
+                .andExpect(jsonPath("$.totalCount").value(1))
+                .andExpect(jsonPath("$.notifications[0].requestId").value(requestId))
+                .andExpect(jsonPath("$.notifications[0].requestType").value(requestType))
+                .andExpect(jsonPath("$.notifications[0].notificationType").value(notificationType))
+                .andExpect(jsonPath("$.notifications[0].guestName").doesNotExist())
+                .andExpect(jsonPath("$.notifications[0].subject").doesNotExist())
+                .andExpect(jsonPath("$.notifications[0].body").doesNotExist())
+                .andExpect(jsonPath("$.notifications[0].guestEmail").doesNotExist());
+    }
+
+    @Test
+    void requestReplayAndIdempotencyCollisionDoNotDuplicateNotification() throws Exception {
+        String first = mvc.perform(MockMvcRequestBuilders.post("/api/hotels/" + SOKCHO + "/guest-requests")
+                        .header("Idempotency-Key", "notification-replay-key")
                         .contentType("application/json")
                         .content(REQUEST_BODY))
                 .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
+
+        mvc.perform(MockMvcRequestBuilders.post("/api/hotels/" + SOKCHO + "/guest-requests")
+                .header("Idempotency-Key", "notification-replay-key")
+                .contentType("application/json")
+                .content(REQUEST_BODY))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.requestId").value(extractId(first)));
+
+        mvc.perform(MockMvcRequestBuilders.post("/api/hotels/" + SOKCHO + "/guest-requests")
+                .header("Idempotency-Key", "notification-replay-key")
+                .contentType("application/json")
+                .content(requestBody("GENERAL_INQUIRY", "다른 본문")))
+                .andExpect(status().isConflict());
+
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/guest-requests/notifications")
+                .header("X-Staff-Session", hqToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalCount").value(1));
+        org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject(
+                "select count(*) from guest_request", Integer.class)).isEqualTo(1);
+        org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject(
+                "select count(*) from guest_request_event where request_id = ?::uuid",
+                Integer.class, extractId(first))).isEqualTo(1);
+    }
+
+    @Test
+    void headquartersSeesAllNotificationsButBranchSeesOnlyOwnHotel() throws Exception {
+        submit("notification-scope-sokcho", SOKCHO);
+        submitBody("notification-scope-jeju", JEJU,
+                requestBody("REFUND_INQUIRY", "제주 환불 문의"));
+
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/guest-requests/notifications")
+                .header("X-Staff-Session", hqToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalCount").value(2));
+
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/guest-requests/notifications")
+                .header("X-Staff-Session", sokchoToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalCount").value(1))
+                .andExpect(jsonPath("$.notifications[0].hotelId").value(SOKCHO.toString()));
+    }
+
+    @Test
+    void notificationLeavesPendingListWhenProcessingStarts() throws Exception {
+        String id = submit("notification-state-key", SOKCHO);
+
+        mvc.perform(MockMvcRequestBuilders.post("/api/staff/guest-requests/" + id + "/transition")
+                .header("X-Staff-Session", sokchoToken)
+                .header("Idempotency-Key", "notification-state-transition")
+                .contentType("application/json")
+                .content("{\"status\": \"IN_PROGRESS\"}"))
+                .andExpect(status().isOk());
+
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/guest-requests/notifications")
+                .header("X-Staff-Session", sokchoToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalCount").value(0));
+    }
+
+    @Test
+    void assigneeCandidatesAndAssignmentAreActorAndHotelScoped() throws Exception {
+        String id = submit("assignee-scope-key", SOKCHO);
+
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/guest-requests/" + id + "/assignees")
+                .header("X-Staff-Session", hqToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.assignees", org.hamcrest.Matchers.hasSize(2)))
+                .andExpect(jsonPath("$.assignees[*].id",
+                        org.hamcrest.Matchers.containsInAnyOrder(hqStaffId.toString(), sokchoStaffId.toString())))
+                .andExpect(jsonPath("$.assignees[0].email").doesNotExist());
+
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/guest-requests/" + id + "/assignees")
+                .header("X-Staff-Session", sokchoToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.assignees", org.hamcrest.Matchers.hasSize(1)))
+                .andExpect(jsonPath("$.assignees[0].id").value(sokchoStaffId.toString()));
+
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/guest-requests/" + id + "/assignees")
+                .header("X-Staff-Session", jejuToken))
+                .andExpect(status().isForbidden());
+
+        mvc.perform(MockMvcRequestBuilders.post("/api/staff/guest-requests/" + id + "/transition")
+                .header("X-Staff-Session", sokchoToken)
+                .header("Idempotency-Key", "branch-cannot-assign-hq")
+                .contentType("application/json")
+                .content("""
+                        {"status":"OPEN","assignTo":"%s"}
+                        """.formatted(hqStaffId)))
+                .andExpect(status().isBadRequest());
+
+        org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject(
+                "select count(*) from guest_request_transition_command where request_id = ?::uuid",
+                Integer.class, id)).isZero();
+    }
+
+    @Test
+    void transitionRejectsOversizedResolutionNoteWithoutSideEffects() throws Exception {
+        String id = submit("long-note-key", SOKCHO);
+
+        mvc.perform(MockMvcRequestBuilders.post("/api/staff/guest-requests/" + id + "/transition")
+                .header("X-Staff-Session", hqToken)
+                .header("Idempotency-Key", "long-note-transition")
+                .contentType("application/json")
+                .content("""
+                        {"status":"IN_PROGRESS","resolutionNote":"%s"}
+                        """.formatted("가".repeat(501))))
+                .andExpect(status().isBadRequest());
+
+        org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject(
+                "select status from guest_request where id = ?::uuid", String.class, id)).isEqualTo("OPEN");
+        org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject(
+                "select count(*) from guest_request_transition_command where request_id = ?::uuid",
+                Integer.class, id)).isZero();
+    }
+
+    private String submit(String idempotencyKey, UUID hotelId) throws Exception {
+        return submitBody(idempotencyKey, hotelId, REQUEST_BODY);
+    }
+
+    private String submitBody(String idempotencyKey, UUID hotelId, String requestBody) throws Exception {
+        String body = mvc.perform(MockMvcRequestBuilders.post("/api/hotels/" + hotelId + "/guest-requests")
+                        .header("Idempotency-Key", idempotencyKey)
+                        .contentType("application/json")
+                        .content(requestBody))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
         return extractId(body);
+    }
+
+    private String requestBody(String requestType, String subject) {
+        return """
+                {
+                  "requestType": "%s",
+                  "subject": "%s",
+                  "body": "유형별 알림 검증 본문",
+                  "guestName": "notification-guest",
+                  "guestEmail": "notification@example.com"
+                }
+                """.formatted(requestType, subject);
     }
 
     private String extractId(String body) {

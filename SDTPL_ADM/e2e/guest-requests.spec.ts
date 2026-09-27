@@ -252,3 +252,194 @@ test("opens a request and transitions its status", async ({ page }) => {
     page.getByText("프런트데스크에서 확인 중입니다."),
   ).toBeVisible();
 });
+
+test("shows type alerts and changes assignee and priority without changing status", async ({
+  page,
+}) => {
+  await page.addInitScript(seedStaffScript("HQ_ADMIN"));
+  let transitionBody: Record<string, unknown> | null = null;
+  const detail = {
+    ...REQUEST,
+    body: "가능하면 높은 층의 객실을 부탁드립니다.",
+    guestEmail: "guest@example.com",
+    guestPhone: "01012345678",
+    assignedTo: null,
+    events: [],
+  };
+
+  await page.route("**/api/staff/guest-requests*", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (url.pathname.endsWith("/notifications")) {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          notifications: [
+            {
+              id: "notification-1",
+              requestId: REQUEST.id,
+              hotelId: HOTEL_ID,
+              hotelName: "속초 지점",
+              requestType: "ROOM_REQUEST",
+              notificationType: "FRONT_DESK",
+              createdAt: REQUEST.createdAt,
+            },
+          ],
+          totalCount: 1,
+        }),
+      });
+    }
+    if (url.pathname.endsWith("/assignees")) {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          assignees: [
+            {
+              id: "staff-sokcho",
+              displayName: "속초 직원",
+              role: "BRANCH_STAFF",
+              hotelId: HOTEL_ID,
+            },
+          ],
+        }),
+      });
+    }
+    if (
+      url.pathname === `/api/staff/guest-requests/${REQUEST.id}/transition` &&
+      request.method() === "POST"
+    ) {
+        transitionBody = request.postDataJSON() as Record<string, unknown>;
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ...detail,
+            priority: "HIGH",
+            assignedTo: "staff-sokcho",
+            assignedDisplayName: "속초 직원",
+            events: [
+              {
+                id: "assigned-event",
+                eventType: "ASSIGNED",
+                fromStatus: null,
+                toStatus: null,
+                fromAssignedDisplayName: null,
+                toAssignedDisplayName: "속초 직원",
+                actorDisplayName: "본사 관리자",
+                note: null,
+                createdAt: "2026-09-22T10:01:00Z",
+              },
+              {
+                id: "priority-event",
+                eventType: "PRIORITY_CHANGED",
+                fromStatus: null,
+                toStatus: null,
+                fromPriority: "NORMAL",
+                toPriority: "HIGH",
+                actorDisplayName: "본사 관리자",
+                note: null,
+                createdAt: "2026-09-22T10:02:00Z",
+              },
+            ],
+          }),
+        });
+    }
+    if (url.pathname === `/api/staff/guest-requests/${REQUEST.id}`) {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(detail),
+      });
+    }
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: listBody("OPEN", [REQUEST]),
+    });
+  });
+
+  await page.goto("/dashboard/guest-requests");
+
+  await expect(page.getByText("프런트 알림 1건")).toBeVisible();
+  await expect(page.getByRole("cell", { name: "보통" })).toBeVisible();
+  await page.getByTestId(`guest-request-open-${REQUEST.id}`).click();
+  await expect(page.getByText("우선순위", { exact: true })).toBeVisible();
+  await expect(page.getByText("보통", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "담당·우선순위 변경" }).click();
+  const dialog = page.getByRole("dialog", { name: "담당자와 우선순위 변경" });
+  await dialog.getByLabel("담당자").selectOption("staff-sokcho");
+  await dialog.getByLabel("우선순위").selectOption("HIGH");
+  await dialog.getByRole("button", { name: "변경 저장" }).click();
+
+  await expect.poll(() => transitionBody).toEqual({
+    status: "OPEN",
+    assignTo: "staff-sokcho",
+    priority: "HIGH",
+  });
+  await expect(page.getByText("담당자 미지정 → 속초 직원")).toBeVisible();
+  await expect(page.getByText("우선순위 NORMAL → HIGH")).toBeVisible();
+});
+
+test("keeps the assignment dialog keyboard accessible at 390px", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.addInitScript(seedStaffScript("BRANCH_STAFF"));
+  const detail = {
+    ...REQUEST,
+    body: "모바일 대화상자 검증",
+    guestEmail: "guest@example.com",
+    guestPhone: null,
+    assignedTo: null,
+    events: [],
+  };
+  await page.route("**/api/staff/guest-requests*", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/notifications")) {
+      return route.fulfill({ json: { notifications: [], totalCount: 0 } });
+    }
+    if (url.pathname.endsWith("/assignees")) {
+      return route.fulfill({
+        json: {
+          assignees: [
+            {
+              id: "staff-sokcho",
+              displayName: "속초 직원",
+              role: "BRANCH_STAFF",
+              hotelId: HOTEL_ID,
+            },
+          ],
+        },
+      });
+    }
+    if (url.pathname === `/api/staff/guest-requests/${REQUEST.id}`) {
+      return route.fulfill({ json: detail });
+    }
+    return route.fulfill({
+      contentType: "application/json",
+      body: listBody("OPEN", [REQUEST]),
+    });
+  });
+
+  await page.goto("/dashboard/guest-requests");
+  await page.getByTestId(`guest-request-open-${REQUEST.id}`).click();
+  const trigger = page.getByRole("button", { name: "담당·우선순위 변경" });
+  await trigger.focus();
+  await page.keyboard.press("Enter");
+
+  const dialog = page.getByRole("dialog", { name: "담당자와 우선순위 변경" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel("담당자")).toBeFocused();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+    ),
+  ).toBe(true);
+
+  await page.keyboard.press("Escape");
+  await expect(dialog).not.toBeVisible();
+  await expect(trigger).toBeFocused();
+});
