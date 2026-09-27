@@ -67,4 +67,13 @@
 
 ## 배포 결과
 
-- 커밋·푸시·테스트 서버 배포와 공개 경로 확인 후 기록한다.
+- RED 체크포인트 `9c26a5f`와 GREEN 구현 `9beda35`를 `origin/main`에 푸시하고 Zorin 테스트
+  서버에 배포했다. Flyway가 V66·V67을 적용해 스키마 버전 67이 됐고 API·고객 웹·관리자 웹과
+  세 Cloudflare Tunnel 공개 경로의 상태 검사가 모두 통과했다.
+- 테스트 DB에 공개 API로 고객 요청 샘플 1건을 접수한 뒤 본사 계정으로 담당자 지정,
+  우선순위 `NORMAL → HIGH`, 상태 `OPEN → IN_PROGRESS`를 실행했다. 라이브 감사 API에서
+  생성·담당자·우선순위·상태 변경 4건이 최신순으로 조회됐고 고객명은 `****객`으로 마스킹됐다.
+  생성 행위자는 `CUSTOMER`, 변경 행위자는 실제 본사 관리자로 반환됐다.
+- 같은 라이브 세션과 `masked=true&limit=20&offset=0` 조건에서 XLSX가 200,
+  `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`, `Cache-Control: no-store`로
+  내려왔으며 크기는 4,117바이트였다. 검증용 세션은 확인 직후 폐기했다.

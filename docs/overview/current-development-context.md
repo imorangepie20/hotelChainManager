@@ -23,6 +23,9 @@
 - 서버 대상 테스트 49건, 관리자 Chromium 19건, TypeScript와 API 컴파일이 통과했다. 실제
   OOXML 재열기, CSV/XLSX 열·값 계약, 개인정보 비노출, 390px도 확인했다. 상세 기록은
   [변경 기록](../changes/2026-09-27-guest-request-audit-xlsx.md)을 따른다.
+- `9beda35`를 `origin/main`과 Zorin 테스트 서버에 배포했고 Flyway V67, API·고객·관리자 상태와
+  공개 터널을 확인했다. 테스트 DB에 고객 요청 샘플 1건과 생성·담당자·우선순위·상태 변경 이력
+  4건을 만들었으며, 라이브 마스킹 조회와 XLSX 200·`no-store` 응답을 확인했다.
 
 ## 테스트 운영 통계 샘플 데이터 (2026-09-27)
 
