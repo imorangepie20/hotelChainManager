@@ -2019,10 +2019,7 @@ export async function retrySettlementRun(
   }
 }
 
-// AI 도우미의 LLM 호출 결과를 본사가 읽기 전용으로 확인한다.
-// concierge에는 세션 검증이 없으므로 next.config의 rewrite가 도우미로만 보낸다.
-// 도우미가 없는 배포에서는 rewrite 자체가 없어서 404가 돌아온다.
-// 그럴 때는 서버 오류가 아니라 "도우미가 실행 중이 아니다"로 안내한다.
+// AI 도우미의 영구 지표를 본사가 읽기 전용으로 확인한다.
 export type ConciergeLlmOutcome =
   | "success"
   | "schema_rejected"
@@ -2032,24 +2029,47 @@ export type ConciergeLlmOutcome =
   | "no_key";
 
 export type ConciergeLlmMetrics = {
-  model: string;
+  timezone: string;
+  period: "24H" | "7D" | "30D";
+  bucket: "HOUR" | "DAY";
+  fromInclusive: string;
+  toExclusive: string;
+  retentionDays: number;
+  models: string[];
+  totals: { calls: number; avgElapsedMs: number; policyViolations: number };
   outcomes: Record<
     ConciergeLlmOutcome,
     { count: number; totalElapsedMs: number; avgElapsedMs: number }
   >;
+  series: Array<{
+    startAt: string;
+    endAt: string;
+    calls: number;
+    avgElapsedMs: number;
+    policyViolations: number;
+    outcomes?: Record<
+      ConciergeLlmOutcome,
+      { count: number; totalElapsedMs: number; avgElapsedMs: number }
+    >;
+  }>;
 };
 
-const CONCIERGE_UNAVAILABLE_HTTP_STATUS = 404;
-
-export async function getConciergeLlmMetrics(): Promise<ConciergeLlmMetrics> {
-  const response = await fetch("/concierge/metrics/llm");
+export async function getConciergeLlmMetrics(
+  token: string,
+  period: "24H" | "7D" | "30D",
+  signal?: AbortSignal,
+): Promise<ConciergeLlmMetrics> {
+  const response = await fetch(`/api/staff/ai-operations/metrics?period=${period}`, {
+    headers: { "X-Staff-Session": token },
+    cache: "no-store",
+    signal,
+  });
   if (!response.ok) {
-    const unavailable = response.status === CONCIERGE_UNAVAILABLE_HTTP_STATUS;
+    const error = (await response.json().catch(() => ({}))) as ApiErrorPayload;
     throw new StaffApiError(
-      unavailable
-        ? "AI 도우미가 실행 중이 아닙니다. 이 배포에는 도우미가 포함되지 않았습니다."
-        : "AI 도우미 측정을 불러오지 못했습니다. 도우미가 실행 중인지 확인해 주세요.",
+      error.message ?? "AI 도우미 운영 지표를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.",
       response.status,
+      error.code,
     );
   }
   return (await response.json()) as ConciergeLlmMetrics;

@@ -19,7 +19,7 @@ export function ConciergePanel({ criteria, onApply, previewMode = false }: Props
     setBusy(true); setError(''); setInput('')
     setMessages(current => [...current, { role: 'user', text: message }])
     try {
-      const response = await fetch(`${import.meta.env.VITE_CONCIERGE_URL ?? 'http://127.0.0.1:9000'}/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message, criteria: requestCriteria }) })
+      const response = await fetch(`${import.meta.env.VITE_CONCIERGE_URL ?? '/concierge'}/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message, criteria: requestCriteria }) })
       // 400은 도우미가 정책상 다루지 않는 조건을 거부한 것이다. 연결 장애(502)와 안내를 나눈다.
       if (response.status === 400) { if (requestVersion === criteriaVersion.current) setError('도우미가 처리할 수 없는 조건입니다. 객실 검색에서 직접 선택해 주세요.'); return }
       if (!response.ok) throw new Error()

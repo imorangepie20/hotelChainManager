@@ -9,6 +9,7 @@ from time import perf_counter
 from typing import Any, Callable, Literal
 
 from .policy import assert_no_forbidden_fields
+from .telemetry import publish_llm_outcome
 
 logger = logging.getLogger("app.llm")
 
@@ -131,12 +132,9 @@ def _strip_code_fence(text: str) -> str:
 
 def extract_with_llm(message: str) -> dict[str, Any] | None:
     """Gemini로 조건을 추출한다. 실패·불량 출력이면 None을 반환해 폴백으로 넘긴다."""
-    try:
-        from google import genai
-    except ImportError:
-        return None
-
     def call() -> Any:
+        from google import genai
+
         client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
         return client.models.generate_content(
             model=MODEL_ID,
@@ -154,6 +152,7 @@ def extract_with_llm(message: str) -> dict[str, Any] | None:
     # message 원문은 쓰지 않는다. outcome별 카운터로 실패율·평균 지연을 집계한다.
     logger.info("llm.outcome model=%s outcome=%s elapsed_ms=%s", MODEL_ID, outcome, elapsed_ms)
     _record_outcome(outcome, elapsed_ms)
+    publish_llm_outcome(model=MODEL_ID, outcome=outcome, elapsed_ms=elapsed_ms)
     if outcome != "success":
         return None
     return criteria

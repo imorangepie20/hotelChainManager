@@ -69,9 +69,19 @@ class AiTelemetryIngestIntegrationTest {
                 .andExpect(status().isBadRequest());
 
         String policy = """
-                {"eventId":"%s","eventType":"POLICY_VIOLATION"}
+                {"eventId":"%s","eventType":"POLICY_VIOLATION","occurredAt":"2026-09-27T00:00:00Z"}
                 """.formatted(UUID.randomUUID());
         ingest(policy, "Bearer test-ingest-token").andExpect(status().isAccepted());
+    }
+
+    @Test
+    void databaseRejectsAnIncompleteLlmEventEvenOutsideTheIngestService() {
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> jdbc.update("""
+                insert into ai_telemetry_event
+                    (event_id, event_hash, event_type, model, elapsed_ms, occurred_at)
+                values (?, repeat('a', 64), 'LLM_CALL', 'gemini-3.6-flash', 10, current_timestamp)
+                """, UUID.randomUUID()))
+                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
     }
 
     private org.springframework.test.web.servlet.ResultActions ingest(String body, String authorization) throws Exception {
@@ -84,7 +94,7 @@ class AiTelemetryIngestIntegrationTest {
 
     private String callBody(UUID id, String outcome, double elapsedMs) {
         return """
-                {"eventId":"%s","eventType":"LLM_CALL","model":"gemini-3.6-flash","outcome":"%s","elapsedMs":%s}
+                {"eventId":"%s","eventType":"LLM_CALL","model":"gemini-3.6-flash","outcome":"%s","elapsedMs":%s,"occurredAt":"2026-09-27T00:00:00Z"}
                 """.formatted(id, outcome, elapsedMs);
     }
 

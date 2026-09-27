@@ -140,6 +140,23 @@ class AiOperationsMetricsIntegrationTest {
     }
 
     @Test
+    void thirtyDayPeriodReturnsThirtySeoulDayBuckets() throws Exception {
+        insertCall("success", 50, Instant.parse("2026-08-28T15:00:00Z"));
+        insertPolicyViolation(Instant.parse("2026-09-27T14:59:59Z"));
+        insertCall("success", 100, Instant.parse("2026-09-27T15:00:00Z"));
+
+        mvc.perform(MockMvcRequestBuilders.get("/api/staff/ai-operations/metrics")
+                .header("X-Staff-Session", hqToken)
+                .param("period", "30D"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.fromInclusive").value("2026-08-28T15:00:00Z"))
+                .andExpect(jsonPath("$.toExclusive").value("2026-09-27T15:00:00Z"))
+                .andExpect(jsonPath("$.series", Matchers.hasSize(30)))
+                .andExpect(jsonPath("$.totals.calls").value(1))
+                .andExpect(jsonPath("$.totals.policyViolations").value(1));
+    }
+
+    @Test
     void metricsRequireHeadquartersAndValidatePeriod() throws Exception {
         mvc.perform(MockMvcRequestBuilders.get("/api/staff/ai-operations/metrics"))
                 .andExpect(status().isUnauthorized());

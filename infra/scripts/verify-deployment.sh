@@ -40,6 +40,35 @@ else
   fail=1
 fi
 
+echo "  concierge health"
+if docker compose "${COMPOSE_ARGS[@]}" --profile tunnel exec -T concierge \
+     python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:9000/health', timeout=2).read().decode())" 2>/dev/null | grep -q UP; then
+  echo "  ok concierge"
+else
+  echo "  FAIL concierge 가 응답하지 않는다"
+  fail=1
+fi
+
+echo "  concierge telemetry round trip"
+before_events="$(docker compose "${COMPOSE_ARGS[@]}" --profile tunnel exec -T postgres \
+  sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select count(*) from ai_telemetry_event"' 2>/dev/null || echo error)"
+if docker compose "${COMPOSE_ARGS[@]}" --profile tunnel exec -T web \
+     wget -q -O - --header='Content-Type: application/json' \
+       --post-data='{"message":"속초 숙소를 찾고 싶어요","criteria":{}}' \
+       http://127.0.0.1:3110/concierge/chat 2>/dev/null | grep -q 'nextAction'; then
+  after_events="$(docker compose "${COMPOSE_ARGS[@]}" --profile tunnel exec -T postgres \
+    sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select count(*) from ai_telemetry_event"' 2>/dev/null || echo error)"
+  if [[ "$before_events" =~ ^[0-9]+$ && "$after_events" =~ ^[0-9]+$ && "$after_events" -gt "$before_events" ]]; then
+    echo "  ok chat -> telemetry -> PostgreSQL"
+  else
+    echo "  FAIL 채팅은 응답했지만 영구 지표가 증가하지 않았다"
+    fail=1
+  fi
+else
+  echo "  FAIL 고객 웹을 통한 concierge 채팅이 응답하지 않는다"
+  fail=1
+fi
+
 echo
 echo "터널 경유 (Cloudflare)"
 

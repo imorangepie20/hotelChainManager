@@ -179,13 +179,11 @@ docker compose --env-file infra/secrets/compose.env \
 
 - **실결제·정산은 기본적으로 꺼져 있다.** `PAYMENT_PROVIDER=fake`,
   `PAYMENT_CHECKOUT_ENABLED=false`, `TOSS_SETTLEMENT_ENABLED=false`.
-- **AI 컨시어지는 이 배포에 포함하지 않는다.** `GOOGLE_API_KEY`가
-  필요하다. `CONCIERGE_PROXY_TARGET`을 비워두면 관리자의 `/concierge`
-  rewrite를 만들지 않고, AI 운영 메뉴가 "AI 도우미가 실행 중이
-  아닙니다"를 보여준다. 고객 웹의 `/concierge` 호출이 빈 응답을
-  받아도 나머지 기능은 동작한다. 도우미를 넣으려면 `compose.env`의
-  `CONCIERGE_PROXY_TARGET=http://concierge:9000`과 `GOOGLE_API_KEY`를
-  채우고 `docker compose ... up -d --build`로 다시 기동한다.
+- **AI 컨시어지는 내부 서비스로 포함한다.** 고객 웹 nginx는
+  `/concierge/chat`만 프록시하고 다른 concierge 경로는 404로 막는다.
+  `AI_TELEMETRY_INGEST_TOKEN`은 필수이며 API와 concierge가 같은 값을
+  사용한다. `GOOGLE_API_KEY`가 비어 있으면 정규식 폴백과 `no_key`
+  측정만 동작한다. 실제 토큰은 저장소가 아니라 `compose.env`에 둔다.
 - **DB를 호스트에 노출하지 않는다.** 서버의 DB는 컨테이너 네트워크
   안에서만 통신한다. 개발용 `55432` 포트 노출은 로컬 Windows
   `compose.yaml`만 해당한다.

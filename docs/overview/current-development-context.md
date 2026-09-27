@@ -458,6 +458,15 @@
 - `next.config.ts`의 rewrite가 `/concierge/:path*`를 `127.0.0.1:9000`으로 보낸다. concierge에 세션 검증이 없으므로 노출 범위는 compose의 루프백 포트 바인딩으로 제한한다.
 - Python `pytest` 27건, 관리자 `tsc --noEmit`·`eslint`(경고 1건)·AI 운영 Playwright 4건이 종료 코드 0이다. concierge 재빌드 뒤 라이브 `/chat` 200으로 `success count=1 avgElapsedMs=3392.3`이 쌓이고 `/metrics/llm` 200으로 같은 값이 내려왔다. 관리자 4001의 `/concierge/metrics/llm`도 200이다. 상세 범위와 미검증 항목은 [변경 기록](../changes/2026-09-19-concierge-llm-metrics-and-admin-menu.md)을 따른다.
 
+## AI 운영 지표 영구 저장·시계열 (2026-09-27)
+
+- V70 `ai_telemetry_event`를 추가해 LLM 호출과 정책 위반을 PostgreSQL에 영구 저장한다. UUID 기본키와 payload hash로 같은 이벤트 재전송은 한 번만 집계하고 다른 payload의 ID 재사용은 409로 거부한다. prompt·criteria·응답·고객 식별자 컬럼은 두지 않았다.
+- concierge는 `AI_TELEMETRY_INGEST_TOKEN`으로 인증된 `POST /api/internal/concierge/telemetry`에 250ms timeout으로 최소 이벤트만 보낸다. 수집 장애는 고객 채팅을 실패시키지 않는다. 발생 시각은 producer UTC, 수집 시각은 서버 UTC로 분리한다.
+- `GET /api/staff/ai-operations/metrics?period=24H|7D|30D`는 서버에서 `HQ_ADMIN`을 재검증하고 `Asia/Seoul` 기준 `[from,to)` 버킷, outcome별 호출 수·가중 평균 지연, 정책 위반 건수와 0값 구간을 반환한다. 원본 보존은 90일이며 하루 한 번 제한된 batch로 정리한다.
+- 관리자 AI 운영 화면은 Spring API만 직원 세션과 함께 호출하며 기간 버튼, 전체 호출·평균 지연·정책 위반 카드, 접근 가능한 시계열 차트와 동일 수치 표를 제공한다. 기간 전환 때 이전 응답을 지워 오래된 값에 새 기간 라벨이 붙지 않게 했다.
+- Zorin compose에 내부 concierge 서비스를 포함했다. 고객 nginx는 `/concierge/chat`만 공개하며 IP당 분당 10회·동시 2개로 제한하고 `/concierge/metrics/llm` 등 나머지는 404로 차단한다. 배포 검증은 chat→telemetry→PostgreSQL 왕복을 건수로 확인한다.
+- Python 39건, API 통합 10건, 관리자 AI Playwright 8건, 관리자·고객 production build가 통과했다. 로컬 실제 컨테이너에서 chat 후 이벤트가 2→3으로 증가했고 concierge와 API를 각각 재시작한 뒤에도 3건이 유지됐다. 같은 UUID를 두 번 수집했을 때는 3→4로 한 건만 증가했다. 상세는 [변경 기록](../changes/2026-09-27-persistent-ai-operations-metrics.md)을 따른다.
+
 ## 관리자 메뉴 로드맵 (2026-09-19)
 
 - 구현된 관리자 메뉴 5종(운영 대시보드·예약 관리·오늘의 운영·정산·대사·웹사이트 CMS)과 설계서의 본사 범위를 비교해 8개 메뉴를 [로드맵](../plans/admin-menu-roadmap.md)으로 정리했다. 지점·객실 유형, 재고·가격, 직원 계정, 통계·리포트, 공통 정책, 고객 요청, 감사 이력, AI 운영이다.

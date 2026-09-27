@@ -10,6 +10,8 @@ from pydantic import BaseModel, Field
 
 from .graph import workflow
 from .llm import MODEL_ID
+from .policy import PolicyViolationError
+from .telemetry import publish_policy_violation
 
 # uvicorn은 access 로그만 자체 구성한다. root 로거는 기본 WARNING에 핸들러가 없고
 # app 로거는 NOTSET이라 root의 WARNING에 억제돼 llm.outcome 측정이 운영 로그에 나타나지 않는다.
@@ -62,8 +64,9 @@ def metrics_llm() -> dict[str, Any]:
 def chat(request: ChatRequest) -> ChatResponse:
     try:
         result = workflow.invoke({"message": request.message, "criteria": request.criteria})
-    except ValueError as error:
+    except PolicyViolationError as error:
         # 정책 위반(금지 필드·API 외 후보)은 도우미가 회피하지 않고 400으로 알린다.
+        publish_policy_violation()
         raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:
         raise HTTPException(status_code=502, detail="예약 정보를 조회하지 못했습니다.") from error

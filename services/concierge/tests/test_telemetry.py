@@ -11,6 +11,7 @@ def test_llm_event_contains_only_the_approved_operational_fields(monkeypatch: py
     captured: list[dict[str, object]] = []
     event_id = uuid.UUID("92000000-0000-0000-0000-000000000001")
     monkeypatch.setattr(telemetry, "_post_event", captured.append)
+    monkeypatch.setattr(telemetry, "_utc_now", lambda: "2026-09-27T00:00:00Z")
 
     telemetry.publish_llm_outcome(
         model="gemini-3.6-flash",
@@ -25,6 +26,7 @@ def test_llm_event_contains_only_the_approved_operational_fields(monkeypatch: py
         "model": "gemini-3.6-flash",
         "outcome": "success",
         "elapsedMs": 123.45,
+        "occurredAt": "2026-09-27T00:00:00Z",
     }]
     serialized = repr(captured)
     for forbidden in ("message", "criteria", "response", "apiKey", "customer"):
@@ -37,12 +39,14 @@ def test_policy_violation_event_does_not_include_the_rejected_input(monkeypatch:
     captured: list[dict[str, object]] = []
     event_id = uuid.UUID("92000000-0000-0000-0000-000000000002")
     monkeypatch.setattr(telemetry, "_post_event", captured.append)
+    monkeypatch.setattr(telemetry, "_utc_now", lambda: "2026-09-27T00:00:00Z")
 
     telemetry.publish_policy_violation(event_id=event_id)
 
     assert captured == [{
         "eventId": str(event_id),
         "eventType": "POLICY_VIOLATION",
+        "occurredAt": "2026-09-27T00:00:00Z",
     }]
 
 
@@ -76,6 +80,27 @@ def test_llm_extraction_publishes_the_measured_outcome(monkeypatch: pytest.Monke
     assert llm.extract_with_llm("예약 조건") is None
     assert len(published) == 1
     assert published[0][0:2] == ("gemini-3.6-flash", "no_key")
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    ["success", "schema_rejected", "unparsable", "empty_response", "api_error", "no_key"],
+)
+def test_every_llm_outcome_is_published(monkeypatch: pytest.MonkeyPatch, outcome: str) -> None:
+    from app import llm
+
+    published: list[tuple[str, str, float]] = []
+    criteria = {} if outcome == "success" else None
+    monkeypatch.setattr(llm, "_run_llm", lambda _call: (outcome, 12.5, criteria))
+    monkeypatch.setattr(
+        llm,
+        "publish_llm_outcome",
+        lambda *, model, outcome, elapsed_ms: published.append((model, outcome, elapsed_ms)),
+    )
+
+    llm.extract_with_llm("원문은 publisher에 전달하지 않는다")
+
+    assert published == [("gemini-3.6-flash", outcome, 12.5)]
 
 
 def test_only_policy_errors_are_counted_as_policy_violations(monkeypatch: pytest.MonkeyPatch) -> None:

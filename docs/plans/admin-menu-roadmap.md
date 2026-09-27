@@ -78,9 +78,9 @@
 ### 8. AI 도우미 운영 (HQ_ADMIN)
 
 - `/chat` 응답 정책 위반 건수·LLM `outcome` 측정(`success`·`schema_rejected`·`unparsable`·`empty_response`·`api_error`·`no_key`)·지연 추이.
-- 현재: `/metrics/llm`이 프로세스 단위 측정을 노출하고 `AI 운영` (`/dashboard/ai-operations`) 메뉴가 결과별 호출 수·평균 지연을 읽기 전용으로 보여준다. 메뉴와 측정은 `HQ_ADMIN`만 쓸 수 있다.
-- **후보 메뉴**: `AI 운영` (`/dashboard/ai-operations`) — **1차 구현됨**
-- 남음: 측정이 프로세스 재시작으로 0으로 돌아간다. 영구 보관·시계열 집계·정책 위반 건수 노출은 아직이다.
+- 현재: V70 `ai_telemetry_event`가 최소 이벤트를 90일 보존하고, concierge는 인증된 내부 Spring 수집 API로 LLM outcome·지연·정책 위반을 멱등 기록한다. `GET /api/staff/ai-operations/metrics`는 `HQ_ADMIN`만 24시간·7일·30일의 서울 시간 버킷과 가중 평균을 읽을 수 있다. `AI 운영` (`/dashboard/ai-operations`)은 기간 선택, 요약 카드, 접근 가능한 시계열 차트와 동일 데이터 표를 제공한다.
+- **후보 메뉴**: `AI 운영` (`/dashboard/ai-operations`) — **영구 보관·시계열·정책 위반 구현됨**
+- 남음: 없음. 기존 concierge `/metrics/llm`은 내부 진단 호환용이며 관리자 화면과 고객 공개 프록시는 사용하지 않는다.
 
 ## 완료 기준
 

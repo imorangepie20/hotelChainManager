@@ -70,9 +70,16 @@ test("loads persistent time-series metrics through the authenticated Spring API"
 
   await expect(page.getByText("5").first()).toBeVisible();
   await expect(page.getByText("2,600ms")).toBeVisible();
-  await expect(page.getByText("정책 위반")).toBeVisible();
+  await expect(page.getByText("정책 위반", { exact: true }).first()).toBeVisible();
+  await expect(
+    page.locator('[data-slot="card"]').filter({ hasText: "정책 위반" }).first().getByText("2", { exact: true }),
+  ).toBeVisible();
   await expect(page.getByRole("figure", { name: "LLM 호출 및 정책 위반 시계열" })).toBeVisible();
-  await expect(page.getByRole("table", { name: "시간 구간별 LLM 운영 지표" })).toBeVisible();
+  const seriesTable = page.getByRole("table", { name: "시간 구간별 LLM 운영 지표" });
+  await expect(seriesTable).toBeVisible();
+  await expect(seriesTable.getByRole("row").nth(1)).toContainText("2");
+  await expect(seriesTable.getByRole("row").nth(1)).toContainText("2,000ms");
+  await expect(seriesTable.getByRole("row").nth(2)).toContainText("3,000ms");
   expect(sessionHeader).toBe("test-session-token");
 });
 
@@ -90,6 +97,10 @@ test("switches periods with the keyboard and fits a 390px viewport", async ({ pa
   await sevenDays.focus();
   await page.keyboard.press("Enter");
   await expect.poll(() => periods).toContain("7D");
+  const thirtyDays = page.getByRole("button", { name: "30일" });
+  await thirtyDays.focus();
+  await page.keyboard.press("Space");
+  await expect.poll(() => periods).toContain("30D");
 
   const hasHorizontalOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,

@@ -62,6 +62,13 @@ website:
         bucket: ${WEBSITE_MEDIA_S3_BUCKET:}
         path-style: ${WEBSITE_MEDIA_S3_PATH_STYLE:false}
 
+ai:
+  telemetry:
+    ingest-token: ${AI_TELEMETRY_INGEST_TOKEN:}
+  metrics:
+    retention-job-enabled: ${AI_METRICS_RETENTION_JOB_ENABLED:true}
+    retention-cron: ${AI_METRICS_RETENTION_CRON:0 15 3 * * *}
+
 management:
   endpoint:
     health:

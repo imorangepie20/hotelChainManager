@@ -56,6 +56,7 @@ services:
       TOSS_SETTLEMENT_DELAY_DAYS: ${TOSS_SETTLEMENT_DELAY_DAYS:-2}
       WEBSITE_MEDIA_STORAGE_DIR: /app/media
       WEBSITE_MEDIA_STORAGE_MODE: ${WEBSITE_MEDIA_STORAGE_MODE:-local}
+      AI_TELEMETRY_INGEST_TOKEN: ${AI_TELEMETRY_INGEST_TOKEN:?AI_TELEMETRY_INGEST_TOKEN is required}
       # 터널이 https로 들어오므로 미리보기 링크도 https를 쓴다.
       WEBSITE_PREVIEW_REQUIRE_HTTPS: ${WEBSITE_PREVIEW_REQUIRE_HTTPS:-true}
       HOTEL_SEED_DEFAULT_RATE_KRW: ${HOTEL_SEED_DEFAULT_RATE_KRW:-100000}
@@ -83,6 +84,30 @@ services:
     networks: [backend, frontend]
     logging: *default-logging
 
+  concierge:
+    image: hcm-concierge:${APP_VERSION:-local}
+    build:
+      context: ../services/concierge
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      CONCIERGE_API_BASE_URL: http://api:4080
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      AI_TELEMETRY_INGEST_TOKEN: ${AI_TELEMETRY_INGEST_TOKEN:?AI_TELEMETRY_INGEST_TOKEN is required}
+    expose:
+      - "9000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/health', timeout=2)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks: [backend, frontend]
+    logging: *default-logging
+
   # 고객 웹. 빌드된 정적 파일을 nginx로 서비스하고 /api는 API 컨테이너로
   # 보낸다. 같은 도메인에서 서비스하므로 브라우저의 상대 경로 호출이
   # 그대로 동작한다.
@@ -94,12 +119,15 @@ services:
     restart: unless-stopped
     environment:
       API_PROXY_TARGET: ${API_PROXY_TARGET:-http://api:4080}
+      CONCIERGE_PROXY_TARGET: ${CONCIERGE_PROXY_TARGET:-http://concierge:9000}
     # 80·8080·3000 은 쓰지 않는다. 프로젝트 전용 대역인 3110 을
     # 컨테이너 포트로 쓰고 호스트 포트는 열지 않는다.
     expose:
       - "3110"
     depends_on:
       api:
+        condition: service_healthy
+      concierge:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3110/ | grep -q '<html' || exit 1"]
@@ -126,9 +154,6 @@ services:
         # NEXT_PUBLIC_* 변수도 빌드 시점에 구워진다. 런타임 environment 의
         # 값을 쓰면 배포 주소가 아니라 로컬 개발 주소가 들어간다.
         NEXT_PUBLIC_CUSTOMER_WEB_ORIGIN: ${CUSTOMER_WEB_ORIGIN:-https://hcm.approid.team}
-        # 이 배포에 AI 도우미가 없다. 빈 값을 주면 /concierge rewrite 를
-        # 만들지 않아서 관리자 AI 메뉴가 컨테이너 자신을 가리키지 않는다.
-        CONCIERGE_PROXY_TARGET: ${CONCIERGE_PROXY_TARGET-}
     restart: unless-stopped
     environment:
       # 관리자 화면이 고객 웹 미리보기를 열 때 쓰는 공개 도메인이다.

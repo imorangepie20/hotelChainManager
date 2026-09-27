@@ -1,15 +1,23 @@
 import { expect, test } from "@playwright/test";
 
 const METRICS_BODY = JSON.stringify({
-  model: "gemini-3.6-flash",
+  timezone: "Asia/Seoul",
+  period: "24H",
+  bucket: "HOUR",
+  fromInclusive: "2026-09-26T01:00:00Z",
+  toExclusive: "2026-09-27T01:00:00Z",
+  retentionDays: 90,
+  models: ["gemini-3.6-flash"],
+  totals: { calls: 5, avgElapsedMs: 2600, policyViolations: 1 },
   outcomes: {
-    success: { count: 3, totalElapsedMs: 9000.0, avgElapsedMs: 3000.0 },
-    schema_rejected: { count: 1, totalElapsedMs: 1500.0, avgElapsedMs: 1500.0 },
-    unparsable: { count: 0, totalElapsedMs: 0.0, avgElapsedMs: 0.0 },
-    empty_response: { count: 0, totalElapsedMs: 0.0, avgElapsedMs: 0.0 },
-    api_error: { count: 1, totalElapsedMs: 2500.0, avgElapsedMs: 2500.0 },
-    no_key: { count: 0, totalElapsedMs: 0.0, avgElapsedMs: 0.0 },
+    success: { count: 3, totalElapsedMs: 9000, avgElapsedMs: 3000 },
+    schema_rejected: { count: 1, totalElapsedMs: 1500, avgElapsedMs: 1500 },
+    unparsable: { count: 0, totalElapsedMs: 0, avgElapsedMs: 0 },
+    empty_response: { count: 0, totalElapsedMs: 0, avgElapsedMs: 0 },
+    api_error: { count: 1, totalElapsedMs: 2500, avgElapsedMs: 2500 },
+    no_key: { count: 0, totalElapsedMs: 0, avgElapsedMs: 0 },
   },
+  series: [],
 });
 
 function seedStaffScript(role: "HQ_ADMIN" | "BRANCH_STAFF") {
@@ -18,8 +26,8 @@ function seedStaffScript(role: "HQ_ADMIN" | "BRANCH_STAFF") {
       ? { id: "test", email: "hq@example.com", displayName: "본사 관리자", role, hotelId: null }
       : {
           id: "test",
-          email: "sokcho@example.com",
-          displayName: "속초 직원",
+          email: "branch@example.com",
+          displayName: "지점 직원",
           role,
           hotelId: "11000000-0000-0000-0000-000000000001",
         };
@@ -38,23 +46,20 @@ test.beforeEach(async ({ page }) => {
 test("exposes the AI operations menu to headquarters only", async ({ page }) => {
   await page.addInitScript(seedStaffScript("HQ_ADMIN"));
   await page.goto("/dashboard/default");
-
   await expect(page.getByRole("link", { name: "AI 도우미 운영" })).toBeVisible();
 
   await page.addInitScript(seedStaffScript("BRANCH_STAFF"));
   await page.goto("/dashboard/default");
-
   await expect(page.getByRole("link", { name: "AI 도우미 운영" })).toHaveCount(0);
 });
 
 test("reports LLM outcome counts and latency to headquarters", async ({ page }) => {
   await page.addInitScript(seedStaffScript("HQ_ADMIN"));
-  await page.route("**/concierge/metrics/llm", (route) =>
+  await page.route("**/api/staff/ai-operations/metrics?period=24H", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: METRICS_BODY }),
   );
 
   await page.goto("/dashboard/ai-operations");
-  await page.getByRole("button", { name: "새로고침" }).click();
 
   await expect(page.getByText("gemini-3.6-flash")).toBeVisible();
   await expect(page.getByText("5").first()).toBeVisible();
@@ -70,23 +75,28 @@ test("tells a branch employee the AI operations view is headquarters only", asyn
   await expect(page.getByRole("button", { name: "새로고침" })).toBeDisabled();
 });
 
-test("shows a recovery notice when the concierge is unreachable", async ({ page }) => {
+test("shows a recovery notice when the metrics API is unavailable", async ({ page }) => {
   await page.addInitScript(seedStaffScript("HQ_ADMIN"));
-  await page.route("**/concierge/metrics/llm", (route) => route.fulfill({ status: 502 }));
+  await page.route("**/api/staff/ai-operations/metrics?period=24H", (route) =>
+    route.fulfill({ status: 502 }),
+  );
 
   await page.goto("/dashboard/ai-operations");
-  await page.getByRole("button", { name: "새로고침" }).click();
 
-  await expect(page.getByText("AI 도우미 측정을 불러오지 못했습니다.")).toBeVisible();
+  await expect(page.getByText("AI 도우미 운영 지표를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.")).toBeVisible();
 });
 
-test("explains that the concierge is not part of this deployment", async ({ page }) => {
-  // 도우미가 없는 배포에서는 /concierge rewrite 자체가 없어서 404가 돌아온다.
+test("shows the authenticated API error without relying on concierge availability", async ({ page }) => {
   await page.addInitScript(seedStaffScript("HQ_ADMIN"));
-  await page.route("**/concierge/metrics/llm", (route) => route.fulfill({ status: 404 }));
+  await page.route("**/api/staff/ai-operations/metrics?period=24H", (route) =>
+    route.fulfill({
+      status: 403,
+      contentType: "application/json",
+      body: JSON.stringify({ message: "본사 관리자 권한이 필요합니다." }),
+    }),
+  );
 
   await page.goto("/dashboard/ai-operations");
-  await page.getByRole("button", { name: "새로고침" }).click();
 
-  await expect(page.getByText("AI 도우미가 실행 중이 아닙니다.")).toBeVisible();
+  await expect(page.getByText("본사 관리자 권한이 필요합니다.")).toBeVisible();
 });

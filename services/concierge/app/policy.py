@@ -21,6 +21,10 @@ REQUIRED_FIELDS: dict[str, str] = {
 _IS_MISSING: Callable[[Any], bool] = lambda value: not value
 
 
+class PolicyViolationError(ValueError):
+    """AI가 허용되지 않은 조건이나 API 외 후보를 처리하려 할 때만 사용한다."""
+
+
 def missing_fields(criteria: dict[str, Any]) -> list[str]:
     """필수 조건 중 비어 있는 항목의 라벨을 순서대로 반환한다."""
     return [label for key, label in REQUIRED_FIELDS.items() if _IS_MISSING(criteria.get(key))]
@@ -30,7 +34,7 @@ def assert_no_forbidden_fields(criteria: dict[str, Any]) -> None:
     """정책상 도우미가 다루지 않는 필드가 조건에 들어가면 거부한다."""
     for forbidden in ("payment", "paymentMethod", "confirm", "reservationId", "roomId"):
         if forbidden in criteria:
-            raise ValueError(f"AI는 {forbidden} 조건을 처리할 수 없습니다.")
+            raise PolicyViolationError(f"AI는 {forbidden} 조건을 처리할 수 없습니다.")
 
 
 def assert_offers_from_api(offers: list[dict[str, Any]]) -> None:
@@ -38,4 +42,4 @@ def assert_offers_from_api(offers: list[dict[str, Any]]) -> None:
     for offer in offers:
         for field in ("roomTypeName", "ratePlanName", "total", "remaining"):
             if offer.get(field) is None:
-                raise ValueError(f"추천 후보에 {field} 값이 없습니다. API 응답만 사용해야 합니다.")
+                raise PolicyViolationError(f"추천 후보에 {field} 값이 없습니다. API 응답만 사용해야 합니다.")
