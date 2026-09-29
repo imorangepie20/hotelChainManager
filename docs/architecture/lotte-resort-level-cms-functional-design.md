@@ -1,7 +1,7 @@
 # 롯데리조트급 콘텐츠 운영 CMS 기능 설계
 
-최종 갱신: 2026-09-11  
-상태: **설계 완료, 구현 대기**  
+최종 갱신: 2026-09-30
+상태: **설계 완료, 기준선 감사와 단계별 구현 게이트 분리**
 적용 대상: 고객 웹 `4000`, 본사 관리자 `4001`, Spring API `4080`
 
 ## 1. 재정의 이유
@@ -224,15 +224,17 @@ stateDiagram-v2
 
 ## 13. 구현 순서와 완료 기준
 
-이 문서는 구현 계획이 아니다. 아래 순서는 이후 기능별 계획을 분리할 때의 의존성 순서다.
+이 문서는 구현 계획이 아니다. V9~V27과 후속 구현에 이미 포함된 범위를 기준선으로 채택한다. 1단계 문서는 read-only 기준선 감사의 실행 계획이고, 2~5단계 문서는 감사 결과와 앞 단계 계약이 승인되기 전에는 실행하지 않는 구현 게이트다.
 
-1. **콘텐츠 기반**: page identity·content kind·깊은 트리·block ID·읽기 전용 migration·공개 read model.
-2. **상세 페이지 기반**: 갤러리·사양 표·운영 시간·FAQ·관련 컬렉션·예약 CTA와 고객/관리자 렌더러.
-3. **도메인 연결**: `ROOM`-`room_type`, `PROMOTION`-지점·객실 유형, 다이닝·시설·경험 페이지와 목록 필터.
-4. **편집 운영**: 페이지 이동·redirect·미디어 variant·교체·삭제 유예, 비교와 모바일 preview.
-5. **다국어와 거버넌스**: locale별 초안/발행, 검토·승인, 예약 발행, sitemap·OG·robots.
+1. [콘텐츠 기반 기준선 감사](../superpowers/plans/2026-09-27-lotte-cms-step-1-content-foundation-gaps.md): 현재 page identity·content kind·트리·block ID·공개 read model을 파일과 실행 결과로 분류한다.
+2. [상세 페이지 구현 게이트](../superpowers/plans/2026-09-27-lotte-cms-step-2-detail-page-foundation-gaps.md): 갤러리·사양 표·운영 시간·FAQ·관련 컬렉션·예약 CTA의 실제 남은 격차만 받는다.
+3. [도메인 연결 구현 게이트](../superpowers/plans/2026-09-27-lotte-cms-step-3-domain-connections-gaps.md): `ROOM`-`room_type`, `PROMOTION`-지점·객실 유형과 삭제 보호의 실제 남은 격차만 받는다.
+4. [편집 운영 구현 게이트](../superpowers/plans/2026-09-27-lotte-cms-step-4-editorial-operations-gaps.md): 페이지 이동·redirect·미디어 variant·교체·삭제 유예, 비교와 preview의 실제 남은 격차만 받는다.
+5. [다국어와 거버넌스 구현 게이트](../superpowers/plans/2026-09-27-lotte-cms-step-5-localization-governance-gaps.md): locale별 검토·예약 발행·SEO의 실제 남은 격차만 받는다.
 
-완료 판단은 특정 화면이 보이는지로 하지 않는다. 각 단계는 migration, 서버 권한·정합성 테스트, 관리자 E2E, 고객 웹 빌드와 핵심 브라우저 상호작용, 변경 기록을 함께 통과해야 한다. 실제 사용자 페이지·자산은 검증 목적으로 보관·삭제·재발행하지 않는다.
+실행 의존성은 `1단계 감사 → 실제 격차별 상세 구현 계획 승인 → 2 → 3 → 4 → 5`다. 4단계의 미디어 하위 작업은 2단계 이미지 계약 확정 뒤 3단계와 병행할 수 있다.
+
+완료 판단은 특정 화면이 보이는지로 하지 않는다. 각 단계는 fresh DB migration, 서버 권한·정합성 테스트, 관리자 E2E, 고객 웹 build·핵심 브라우저 상호작용, migration 전후 콘텐츠 checksum, rollback rehearsal와 한국어 변경 기록을 함께 통과해야 한다. 실제 사용자 페이지·자산은 검증 목적으로 저장·보관·삭제·재발행하지 않는다.
 
 ## 14. 설계 산출물
 
