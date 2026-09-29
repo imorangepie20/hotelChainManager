@@ -414,6 +414,7 @@ public class WebsiteTranslationService {
         if (!source.pageType().equals("CONTENT_PAGE") && !WebsitePageConnections.empty().equals(connections)) {
             throw new IllegalArgumentException("홈과 지점 랜딩에는 콘텐츠 연결을 둘 수 없습니다.");
         }
+        if (source.pageType().equals("HOTEL_LANDING")) WebContentService.validateLandingStructure(content);
         Map<String, Object> normalized = source.pageType().equals("HOTEL_LANDING") ? media.normalizeLandingContent(content) : media.normalizeStructuredContent(content);
         if (source.pageType().equals("HOTEL_LANDING")) WebContentService.validateLandingContent(normalized);
         else if (source.pageType().equals("HOME_PAGE")) contentValidator.validate(normalized);

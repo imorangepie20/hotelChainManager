@@ -116,6 +116,71 @@ export function runContentPageTests() {
   expectEqual(uploadedLanding.heroImage, `/api/website/media/${uploadedAssetId}/content`, '자산 UUID와 일치하는 업로드 랜딩 이미지를 사용한다')
   expectEqual((uploadedLanding as DestinationContent & { heroVariants?: unknown }).heroVariants, [responsiveVariant], '랜딩 HERO에 공개 WebP variant를 연결한다')
 
+  const carouselAssetIds = Array.from({ length: 5 }, (_, index) => `323e4567-e89b-12d3-a456-42661417400${index}`)
+  const carouselSlides = carouselAssetIds.map((assetId, index) => ({
+    assetId,
+    image: `/api/website/media/${assetId}/content`,
+    alt: `속초 메인 이미지 ${index + 1}`,
+  }))
+  const carouselVariants = Object.fromEntries(carouselAssetIds.map(assetId => [assetId, [{
+    targetWidth: 640,
+    deliveryUrl: `/api/website/media/${assetId}/variants/640.webp`,
+    mimeType: 'image/webp',
+  }]]))
+  const carouselLanding = destinationContentFromPublished('속초', {
+    title: '속초의 이야기',
+    heroAssetId: carouselAssetIds[0],
+    heroImage: carouselSlides[0].image,
+    heroAlt: carouselSlides[0].alt,
+    heroSlides: carouselSlides,
+    mediaVariants: carouselVariants,
+  })
+  expectEqual(carouselLanding.heroSlides, carouselSlides.map(slide => ({
+    assetId: slide.assetId,
+    image: slide.image,
+    alt: slide.alt,
+    variants: carouselVariants[slide.assetId],
+  })), '랜딩 HERO 5장의 순서와 자산별 WebP variant를 보존한다')
+  expectEqual(
+    { assetId: carouselLanding.heroAssetId, image: carouselLanding.heroImage, alt: carouselLanding.heroAlt },
+    { assetId: carouselSlides[0].assetId, image: carouselSlides[0].image, alt: carouselSlides[0].alt },
+    '첫 랜딩 슬라이드를 기존 HERO 필드에 미러한다',
+  )
+  const legacyCarouselFields = {
+    title: '속초의 이야기',
+    heroAssetId: uploadedAssetId,
+    heroImage: `/api/website/media/${uploadedAssetId}/content`,
+    heroAlt: '업로드한 속초 해안',
+    mediaVariants: { [uploadedAssetId]: [responsiveVariant] },
+  }
+  expectEqual(
+    destinationContentFromPublished('속초', { ...legacyCarouselFields, heroSlides: carouselSlides.slice(0, 4) }).heroSlides,
+    uploadedLanding.heroSlides,
+    '정확히 5장이 아닌 배열은 기존 단일 HERO로 되돌린다',
+  )
+  expectEqual(
+    destinationContentFromPublished('속초', { ...legacyCarouselFields, heroSlides: [...carouselSlides.slice(0, 4), carouselSlides[0]] }).heroSlides,
+    uploadedLanding.heroSlides,
+    '중복 자산이 있는 배열은 기존 단일 HERO로 되돌린다',
+  )
+  const caseVariantDuplicateSlides = [...carouselSlides]
+  caseVariantDuplicateSlides[4] = {
+    ...carouselSlides[0],
+    assetId: carouselSlides[0].assetId.toUpperCase(),
+    image: `/api/website/media/${carouselSlides[0].assetId.toUpperCase()}/content`,
+  }
+  expectEqual(
+    destinationContentFromPublished('속초', { ...legacyCarouselFields, heroSlides: caseVariantDuplicateSlides }).heroSlides,
+    uploadedLanding.heroSlides,
+    '대소문자만 다른 동일 UUID가 있는 배열은 기존 단일 HERO로 되돌린다',
+  )
+  const excessiveAltSlides = carouselSlides.map((slide, index) => index === 4 ? { ...slide, alt: '가'.repeat(201) } : slide)
+  expectEqual(
+    destinationContentFromPublished('속초', { ...legacyCarouselFields, heroSlides: excessiveAltSlides }).heroSlides,
+    uploadedLanding.heroSlides,
+    '대체 텍스트가 200자를 넘는 배열은 기존 단일 HERO로 되돌린다',
+  )
+
   const fallbackHero = destinationContentByRegion('속초').heroImage
   expectEqual(
     destinationContentFromPublished('속초', { title: '속초의 이야기', heroAssetId: 'not-a-uuid', heroImage: '/images/sokcho-coast-hero.png' }).heroImage,

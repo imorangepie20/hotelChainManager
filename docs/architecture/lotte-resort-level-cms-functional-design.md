@@ -114,6 +114,22 @@ CMS의 `최저가`, 혜택, 판매·투숙 기간은 마케팅 표시 정보다.
 - 대체는 새 자산을 만들고 사용 위치를 명시적으로 이동한다. 기존 자산을 덮어쓰지 않는다.
 - 참조 0건의 보관 자산만 영구 삭제 후보가 된다. 번들 자산·발행 snapshot이 참조하는 자산·삭제 유예 기간 안의 자산은 삭제하지 않는다.
 
+### 6.4 지점 랜딩 5장 히어로
+
+`HOTEL_LANDING`은 기존 단일 `heroAssetId`/`heroImage`/`heroAlt`를 제거하지 않고 순서 있는 `heroSlides`를 추가한다. 신규 배열은 정확히 5개의 서로 다른 활성 자산을 요구하며 각 항목은 `assetId`, 서버가 정규화한 전달 경로 `image`, locale별 `alt`를 가진다.
+
+- Spring Boot는 배열 개수·UUID 형식·UUID 정규 값 기준 중복·필수 구조를 미디어 조회보다 먼저 검증하고, 저장·발행 시 alt·자산 상태·전달 경로를 검증한다. 첫 슬라이드 alt를 trim한 뒤 동일 값을 기존 단일 필드에 미러링한다.
+- `website_media_usage`는 `heroSlides[0].assetId`~`heroSlides[4].assetId`를 기록하며 legacy 미러는 중복 usage로 계산하지 않는다.
+- 경로 기반 공개 페이지와 legacy 호텔 콘텐츠 API는 저장 snapshot을 바꾸지 않고 응답 시점에 유효한 다섯 자산의 READY `mediaVariants`를 합친다. 배열이 불완전하거나 손상돼 고객 parser가 legacy 이미지로 복귀하더라도 `heroAssetId` variant를 항상 함께 제공한다.
+- `heroSlides`가 없는 과거 snapshot은 단일 이미지로 계속 읽고 발행한다. 일부만 유효한 배열과 legacy 이미지를 혼합하지 않는다.
+- 관리자는 한국어·영어 각각 5개 고정 슬롯을 편집한다. 2~5번을 사용해 배열 계약으로 승격한 뒤에는 다섯 슬롯을 모두 채워야 저장하며, 완성된 배열은 위로·아래로 이동해 인접 슬롯 순서를 원자적으로 교환한다.
+- 고객 웹은 발행 snapshot의 배열 전체가 유효할 때만 캐러셀로 렌더링한다. Motion은 표현만 담당하고 자산 순서·alt·공개 권한을 결정하지 않는다.
+- 자동 이동은 5초 간격이며 사용자가 명시적으로 일시정지·재생할 수 있다. 이미지 제어와 고정 예약 링크를 포함한 전체 히어로 hover·focus, 문서 hidden 중에는 일시정지하고, 자동 이동은 live region으로 읽지 않는다. `prefers-reduced-motion`에서는 자동 이동을 시작하지 않는다.
+- 캐러셀 제어는 예약 CTA와 겹치지 않는 우측 영역에 두고, 380px 이하에서는 2행 grid로 바꿔 320px에서도 모든 버튼을 viewport 안에 유지한다.
+- 첫 이미지는 LCP 대상으로 즉시 렌더링하고 다음 한 장만 preload한다. Motion feature는 동적 chunk로 분리한다.
+
+상세 애니메이션·모바일·오류 처리·검증 계약은 [리조트 랜딩 5장 히어로·격자 전환 설계](../superpowers/specs/2026-09-30-resort-hero-carousel-design.md)를 따른다.
+
 ## 7. 편집·검토·발행 흐름
 
 ### 7.1 역할
@@ -242,5 +258,6 @@ stateDiagram-v2
 - [구조도 원본](lotte-resort-cms-target.architecture.json): 구조도 수정용 JSON.
 - [현재 구현 CMS 명세](cms-functional-specification.md): 이 설계 이전에 실제 완료된 범위와 API.
 - [전체 플랫폼 설계](full-site-implementation-design.md): 예약·직원 운영·AI를 포함한 제품 경계.
+- [리조트 랜딩 5장 히어로·격자 전환 설계](../superpowers/specs/2026-09-30-resort-hero-carousel-design.md): `heroSlides` 계약, Motion 전환, 접근성·성능·legacy 호환 기준.
 
 Archify artifact는 9개 구조 검사와 1440×900, 1600×1000, 1920×1080, 2048×1320 브라우저 containment 검사를 통과했다. Viewer의 고정 UI는 영어 fallback이며 구조도 본문은 한국어다.

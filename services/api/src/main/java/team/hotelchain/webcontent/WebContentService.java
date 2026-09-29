@@ -1,7 +1,10 @@
 package team.hotelchain.webcontent;
 
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -48,7 +51,7 @@ public class WebContentService {
     }
 
     static void validateLandingContent(Map<String, Object> content) {
-        if (content == null) throw invalid("콘텐츠 문서가 필요합니다.");
+        validateLandingStructure(content);
         requireText(content, "heroImage", "heroImage");
         requireText(content, "heroAlt", "heroAlt");
         requireText(content, "eyebrow", "eyebrow");
@@ -63,6 +66,35 @@ public class WebContentService {
         validateCards(content, "experiences", List.of("category", "title", "description"));
         validateCards(content, "offers", List.of("title", "detail", "bookingPeriod", "stayPeriod"));
         if (content.containsKey("seo")) validateSeo(content);
+    }
+
+    static void validateLandingStructure(Map<String, Object> content) {
+        if (content == null) throw invalid("콘텐츠 문서가 필요합니다.");
+        if (content.containsKey("heroSlides")) validateHeroSlides(content.get("heroSlides"));
+    }
+
+    private static void validateHeroSlides(Object value) {
+        if (!(value instanceof List<?> slides)) throw invalid("heroSlides는 배열이어야 합니다.");
+        if (slides.size() != 5) throw invalid("heroSlides는 정확히 5개여야 합니다.");
+        Set<UUID> assetIds = new HashSet<>();
+        for (int index = 0; index < slides.size(); index++) {
+            if (!(slides.get(index) instanceof Map<?, ?> slide)) {
+                throw invalid("heroSlides[" + index + "]는 객체여야 합니다.");
+            }
+            String path = "heroSlides[" + index + "]";
+            requireText(slide, "assetId", path + ".assetId");
+            requireText(slide, "image", path + ".image");
+            requireTextWithinLimit(slide, "alt", path + ".alt", 200);
+            UUID assetId;
+            try {
+                assetId = UUID.fromString(((String) slide.get("assetId")).trim());
+            } catch (IllegalArgumentException exception) {
+                throw invalid(path + ".assetId는 미디어 UUID여야 합니다.");
+            }
+            if (!assetIds.add(assetId)) {
+                throw invalid("heroSlides에는 중복된 미디어 자산을 사용할 수 없습니다.");
+            }
+        }
     }
 
     private static void validateSeo(Map<String, Object> content) {

@@ -48,7 +48,9 @@ class WebContentIntegrationTest {
 
         content.publish(session.token(), HOTEL, 2, 1);
 
-        assertThat(content.published(HOTEL)).containsExactlyInAnyOrderEntriesOf(draft);
+        Map<String, Object> published = new HashMap<>(draft);
+        published.put("mediaVariants", Map.of());
+        assertThat(content.published(HOTEL)).containsExactlyInAnyOrderEntriesOf(published);
     }
 
     @Test

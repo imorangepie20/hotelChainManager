@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ContentPageEditor } from "@/components/hotel-admin/content-page-editor";
 import { WebsiteSavedDraftPreviewAction } from "@/components/hotel-admin/website-saved-draft-preview-action";
-import { MediaField } from "@/components/hotel-admin/media-field";
+import { LandingHeroMediaFields } from "@/components/hotel-admin/landing-hero-media-fields";
 import { WebsiteTranslationReviewActions } from "@/components/hotel-admin/website-translation-review-actions";
 import {
   getWebsitePage, getWebsiteTranslation, getWebsiteTranslationReview, getWebsiteTranslationVersions, initializeWebsiteTranslation,
@@ -79,8 +79,7 @@ function LandingTranslationEditor({ token, document, externalBusy, previewDisabl
       </section>
       <section className="grid gap-4 rounded-xl border p-4"><h2 className="font-semibold">히어로</h2>
         {([['eyebrow', '상단 문구'], ['title', '히어로 제목'], ['description', '히어로 설명']] as const).map(([key, label]) => <TranslationField key={key} label={label} value={content[key]} onChange={(value) => change({ ...content, [key]: value })} />)}
-        <MediaField token={token} assetId={text(content.heroAssetId)} deliveryUrl={text(content.heroImage)} altText={text(content.heroAlt)} protectedAssetIds={[text(content.heroAssetId)]}
-          onAssetSelect={(asset, heroAlt) => change({ ...content, heroAssetId: asset.id, heroImage: asset.deliveryUrl, heroAlt })} onAltTextChange={(heroAlt) => change({ ...content, heroAlt })} />
+        <LandingHeroMediaFields token={token} content={content} onChange={change} />
       </section>
       <section className="grid gap-4 rounded-xl border p-4"><h2 className="font-semibold">도착 안내</h2>
         {([['address', '주소'], ['checkInOut', '체크인·체크아웃'], ['highlight', '도착 안내 설명']] as const).map(([key, label]) => <TranslationField key={key} label={label} value={arrival[key]} onChange={(value) => change({ ...content, arrival: { ...arrival, [key]: value } })} />)}

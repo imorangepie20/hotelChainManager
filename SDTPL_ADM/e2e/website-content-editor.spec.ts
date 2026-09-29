@@ -437,7 +437,7 @@ test("saves, reviews, approves and publishes English landing content with one dr
   await page.getByRole("button", { name: "영어", exact: true }).click();
   await expect(page.getByLabel("영어 발행 이력")).toContainText("발행본 v1");
   await page.getByLabel("히어로 제목", { exact: true }).fill("Sokcho by the sea");
-  await page.getByLabel("이미지 대체 텍스트").fill("English coastal hotel");
+  await page.getByLabel("메인 이미지 1 대체 텍스트", { exact: true }).fill("English coastal hotel");
   await page.getByLabel("SEO 제목", { exact: true }).fill("Sokcho English SEO");
   await page.getByLabel("경험 1 제목").fill("Ocean suite");
   await page.getByRole("button", { name: "초안 저장", exact: true }).click();
@@ -1943,6 +1943,75 @@ test("shows bulk draft media replacement impact at 390px", async ({ page }) => {
   await expect(dialog).not.toBeVisible();
 });
 
+for (const width of [1280, 390]) {
+  test(`edits exactly five ordered landing hero images (${width}px)`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    const assets = Array.from({ length: 5 }, (_, index) => mediaAsset({
+      id: `14000000-0000-0000-0000-${String(index + 1).padStart(12, "0")}`,
+      displayName: `속초 메인 이미지 ${index + 1}`,
+      deliveryUrl: index === 0 ? "/images/sokcho-coast-hero.png" : `/api/website/media/14000000-0000-0000-0000-${String(index + 1).padStart(12, "0")}/content`,
+      defaultAltText: `속초 메인 이미지 ${index + 1} 대체 텍스트`,
+      usageCount: index === 0 ? 4 : 0,
+    }));
+    await page.route("**/api/staff/website/media**", (route) => {
+      if (route.request().method() === "GET") return route.fulfill({ json: assets });
+      return route.fallback();
+    });
+    await page.route("**/api/website/media/*/content", (route) => route.fulfill({
+      contentType: "image/png", path: "../apps/web/public/images/sokcho-coast-hero.png",
+    }));
+
+    await page.goto("/dashboard/website");
+    for (let index = 0; index < 5; index++) {
+      await expect(page.getByRole("region", { name: `메인 이미지 ${index + 1}`, exact: true })).toBeVisible();
+    }
+    await expect(page.getByLabel("메인 이미지 1 대체 텍스트", { exact: true })).toHaveValue("속초 해안");
+    await expect(page.getByRole("status").filter({ hasText: "메인 이미지 4개를 더 선택" })).toBeVisible();
+
+    const second = page.getByRole("region", { name: "메인 이미지 2", exact: true });
+    await second.getByRole("button", { name: "메인 이미지 2 선택", exact: true }).click();
+    let picker = page.getByRole("dialog", { name: "미디어 선택" });
+    await picker.getByRole("button", { name: "속초 메인 이미지 1 선택", exact: true }).click();
+    await picker.getByRole("button", { name: "선택", exact: true }).click();
+    await expect(picker).not.toBeVisible();
+    await expect(page.getByRole("alert").filter({ hasText: "이미 선택한 자산" })).toBeVisible();
+    await expect(page.getByLabel("메인 이미지 2 대체 텍스트", { exact: true })).toHaveValue("");
+
+    for (let index = 1; index < 5; index++) {
+      const slot = page.getByRole("region", { name: `메인 이미지 ${index + 1}`, exact: true });
+      await slot.getByRole("button", { name: `메인 이미지 ${index + 1} 선택`, exact: true }).click();
+      picker = page.getByRole("dialog", { name: "미디어 선택" });
+      await picker.getByRole("button", { name: `속초 메인 이미지 ${index + 1} 선택`, exact: true }).click();
+      await picker.getByRole("button", { name: "선택", exact: true }).click();
+      await expect(picker).not.toBeVisible();
+    }
+    await expect(page.getByText("서로 다른 메인 이미지 5개가 순서대로 준비되었습니다.", { exact: true })).toBeVisible();
+    await page.getByLabel("메인 이미지 2 대체 텍스트", { exact: true }).fill("속초 두 번째 장면");
+    const moveSecondFirst = page.getByRole("region", { name: "메인 이미지 2", exact: true })
+      .getByRole("button", { name: "메인 이미지 2 위로 이동", exact: true });
+    await moveSecondFirst.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByLabel("메인 이미지 1 대체 텍스트", { exact: true })).toHaveValue("속초 두 번째 장면");
+    await expect(page.getByLabel("메인 이미지 2 대체 텍스트", { exact: true })).toHaveValue("속초 해안");
+    if (width === 390) await expectNoHorizontalOverflow(page);
+
+    const save = page.waitForRequest((request) => request.method() === "PUT" && request.url().includes(SOKCHO));
+    await page.getByRole("button", { name: "초안 저장", exact: true }).click();
+    const payload = (await save).postDataJSON() as { content: Record<string, unknown> };
+    const slides = payload.content.heroSlides as Record<string, unknown>[];
+    expect(slides).toHaveLength(5);
+    expect(slides.map((slide) => slide.assetId)).toEqual([
+      assets[1].id, assets[0].id, assets[2].id, assets[3].id, assets[4].id,
+    ]);
+    expect(slides[0]).toMatchObject({ image: assets[1].deliveryUrl, alt: "속초 두 번째 장면" });
+    expect(payload.content).toMatchObject({
+      heroAssetId: assets[1].id,
+      heroImage: assets[1].deliveryUrl,
+      heroAlt: "속초 두 번째 장면",
+    });
+  });
+}
+
 for (const mobile of [false, true]) {
   test(`replaces only the current landing image after upload and confirmation${mobile ? " on mobile" : ""}`, async ({ page }) => {
     if (mobile) await page.setViewportSize({ width: 390, height: 844 });
@@ -1954,7 +2023,8 @@ for (const mobile of [false, true]) {
         writes.push(`${request.method()} ${new URL(request.url()).pathname}`);
       }
     });
-    await page.getByRole("button", { name: "파일 교체", exact: true }).click();
+    const primary = page.getByRole("region", { name: "메인 이미지 1", exact: true });
+    await primary.getByRole("button", { name: "파일 교체", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "미디어 파일 교체", exact: true });
     await expect(dialog.getByRole("button", { name: "교체 확인" })).toBeDisabled();
     await dialog.getByLabel("이미지 파일").setInputFiles({ name: "replacement.jpg", mimeType: "image/jpeg", buffer: Buffer.from("mock-jpeg") });
@@ -1972,7 +2042,7 @@ for (const mobile of [false, true]) {
     if (process.env.MEDIA_REPLACEMENT_SCREENSHOTS) await page.screenshot({ path: `../.tmp/media-replacement-${mobile ? "mobile" : "desktop"}.png` });
     await confirmation.getByRole("button", { name: "교체하기" }).click();
     await expect(dialog).not.toBeVisible();
-    await expect(page.getByLabel("대표 이미지 대체 텍스트")).toHaveValue("속초 해안");
+    await expect(primary.getByLabel("메인 이미지 1 대체 텍스트", { exact: true })).toHaveValue("속초 해안");
     expect(writes).toEqual(["POST /api/staff/website/media"]);
     await expect(page.getByRole("button", { name: "발행", exact: true })).toBeDisabled();
     const save = page.waitForRequest((request) => request.method() === "PUT" && request.url().includes(SOKCHO));
@@ -1984,7 +2054,8 @@ for (const mobile of [false, true]) {
 
 test("cancels file replacement without applying an uploaded asset and resets the next attempt", async ({ page }) => {
   await page.goto("/dashboard/website");
-  const trigger = page.getByRole("button", { name: "파일 교체", exact: true });
+  const primary = page.getByRole("region", { name: "메인 이미지 1", exact: true });
+  const trigger = primary.getByRole("button", { name: "파일 교체", exact: true });
   await trigger.click();
   const dialog = page.getByRole("dialog", { name: "미디어 파일 교체", exact: true });
   await dialog.getByLabel("이미지 파일").setInputFiles({ name: "replacement.jpg", mimeType: "image/jpeg", buffer: Buffer.from("mock-jpeg") });
@@ -1996,7 +2067,7 @@ test("cancels file replacement without applying an uploaded asset and resets the
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "취소", exact: true }).click();
   await expect(trigger).toBeFocused();
-  await expect(page.getByLabel("대표 이미지 대체 텍스트")).toHaveValue("속초 해안");
+  await expect(primary.getByLabel("메인 이미지 1 대체 텍스트", { exact: true })).toHaveValue("속초 해안");
   await expect(page.getByRole("button", { name: "발행", exact: true })).toBeEnabled();
   await trigger.click();
   await expect(dialog.getByRole("button", { name: "교체 확인" })).toBeDisabled();
@@ -2006,7 +2077,8 @@ test("cancels file replacement without applying an uploaded asset and resets the
 
 test("rejects invalid replacement uploads without enabling confirmation or changing the page", async ({ page }) => {
   await page.goto("/dashboard/website");
-  await page.getByRole("button", { name: "파일 교체", exact: true }).click();
+  const primary = page.getByRole("region", { name: "메인 이미지 1", exact: true });
+  await primary.getByRole("button", { name: "파일 교체", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "미디어 파일 교체", exact: true });
   await dialog.getByLabel("이미지 파일").setInputFiles({ name: "invalid.svg", mimeType: "image/svg+xml", buffer: Buffer.from("invalid") });
   await dialog.getByLabel("자산명", { exact: true }).fill("실패 이미지");
@@ -2015,7 +2087,7 @@ test("rejects invalid replacement uploads without enabling confirmation or chang
   await expect(dialog.getByRole("alert")).toContainText("PNG 또는 JPEG");
   await expect(dialog.getByRole("button", { name: "교체 확인" })).toBeDisabled();
   await dialog.getByRole("button", { name: "취소", exact: true }).click();
-  await expect(page.getByLabel("대표 이미지 대체 텍스트")).toHaveValue("속초 해안");
+  await expect(primary.getByLabel("메인 이미지 1 대체 텍스트", { exact: true })).toHaveValue("속초 해안");
   await expect(page.getByRole("button", { name: "발행", exact: true })).toBeEnabled();
 });
 
@@ -2061,7 +2133,8 @@ test("does not apply a late replacement upload after cancel and reopen", async (
     await route.fulfill({ contentType: "application/json", body: JSON.stringify(mediaAsset({ id: UPLOADED_ASSET, deliveryUrl: `/api/website/media/${UPLOADED_ASSET}/content`, usageCount: 0 })) });
   });
   await page.goto("/dashboard/website");
-  const trigger = page.getByRole("button", { name: "파일 교체", exact: true });
+  const primary = page.getByRole("region", { name: "메인 이미지 1", exact: true });
+  const trigger = primary.getByRole("button", { name: "파일 교체", exact: true });
   await trigger.click();
   const dialog = page.getByRole("dialog", { name: "미디어 파일 교체", exact: true });
   await dialog.getByLabel("이미지 파일").setInputFiles({ name: "replacement.jpg", mimeType: "image/jpeg", buffer: Buffer.from("mock-jpeg") });
@@ -2078,7 +2151,7 @@ test("does not apply a late replacement upload after cancel and reopen", async (
   await expect(dialog.getByRole("button", { name: "교체 확인" })).toBeDisabled();
   await expect(dialog.getByRole("button", { name: "업로드", exact: true })).toBeEnabled();
   await dialog.getByRole("button", { name: "취소", exact: true }).click();
-  await expect(page.getByLabel("대표 이미지 대체 텍스트")).toHaveValue("속초 해안");
+  await expect(primary.getByLabel("메인 이미지 1 대체 텍스트", { exact: true })).toHaveValue("속초 해안");
   await expect(page.getByRole("button", { name: "발행", exact: true })).toBeEnabled();
 });
 
@@ -2097,7 +2170,7 @@ test("uploads an asset for a landing page and keeps its page-specific alt text",
   await expect(dialog.getByRole("status")).toContainText("업로드되었습니다");
   await dialog.getByRole("button", { name: "새로운 제주 이미지 선택" }).click();
   await dialog.getByRole("button", { name: "선택", exact: true }).click();
-  await page.getByLabel("대표 이미지 대체 텍스트").fill("석양을 바라보는 제주 스테이");
+  await page.getByLabel("메인 이미지 1 대체 텍스트", { exact: true }).fill("석양을 바라보는 제주 스테이");
 
   const saveRequest = page.waitForRequest((request) => request.method() === "PUT" && request.url().includes(SOKCHO));
   await page.getByRole("button", { name: "초안 저장" }).click();
@@ -2273,7 +2346,7 @@ test("shows the upload validation error without changing the selected page image
   await dialog.getByLabel("기본 대체 텍스트", { exact: true }).fill("유효하지 않은 파일");
   await dialog.getByRole("button", { name: "업로드" }).click();
   await expect(dialog.getByRole("alert")).toContainText("PNG 또는 JPEG 이미지만 업로드할 수 있습니다.");
-  await expect(page.getByLabel("대표 이미지 대체 텍스트")).toHaveValue("속초 해안");
+  await expect(page.getByLabel("메인 이미지 1 대체 텍스트", { exact: true })).toHaveValue("속초 해안");
 });
 
 test("updates selected catalog metadata at the asset version and protects used media from archive", async ({ page }) => {

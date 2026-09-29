@@ -26,7 +26,7 @@
 
 ## Migration 계획
 
-- [ ] redirect, media variant/job/claim token, preview grant, delete/quarantine schema와 index를 현재 DB에서 audit한다.
+- [ ] redirect, media variant/job/claim token, preview grant, delete/quarantine schema와 index를 현재 DB에서 audit한다. 현재 `website_redirect(source_path PK, target_path UNIQUE)`에는 active/superseded revision이 없으므로 canonical 보상 이동을 열기 전에 활성 read model과 append-only revision/audit을 분리할 schema 계약을 확정한다.
 - [ ] 누락 필드는 최신 Flyway 다음 번호의 expand migration으로 추가하고 FK/unique/check는 기존 데이터 검증 후 validate한다.
 - [ ] media object migration은 DB metadata와 object store copy를 분리하고 digest·size·count audit 뒤 pointer를 전환한다. raw key나 secret을 로그에 남기지 않는다.
 - [ ] cleanup/영구 삭제는 migration에서 실행하지 않는다. retention 만료와 reference 0을 재확인하는 별도 승인 명령으로 둔다.
@@ -42,7 +42,7 @@
 
 ## 권한·정합성
 
-- [ ] editor는 draft move/compare/preview, publisher는 published move·redirect 승인·archive, admin은 영구 삭제/운영 복구만 수행하도록 서버에서 나눈다.
+- [ ] 1~4단계에서는 현재 `HQ_ADMIN` 전용 서버 경계를 유지하고 move/compare/preview/archive/영구 삭제를 명령별 검증·감사로 분리한다. editor/publisher 역할 확대는 5단계의 명시적 role matrix와 권한 회귀 테스트가 승인된 뒤 별도 gate로만 연다.
 - [ ] move는 descendants path, snapshot, redirect, audit을 한 transaction으로 처리하고 충돌·stale·chain이면 전부 rollback한다.
 - [ ] move transaction은 새 immutable version과 audit을 추가하되 기존 version snapshot을 UPDATE하지 않는 계약을 통합 테스트로 고정한다.
 - [ ] replacement는 source/target asset 상태와 usage version을 잠근 뒤 draft usage만 원자적으로 옮긴다.
@@ -69,6 +69,6 @@
 
 1. read-compatible schema/worker → impact/compare API → 관리자 명령 → 공개 redirect/variant 순으로 flag를 연다.
 2. redirect hop, media 404, variant queue age, preview 410 비율과 orphan usage를 관찰한다.
-3. 문제 시 move write, worker claim, preview write를 각각 끈다. 이미 이동된 canonical path는 flag로 원복되지 않으므로 redirect read를 끄지 않는다. canonical을 되돌려야 하면 충돌을 재검증한 보상 이동으로 새 version·audit·직접 redirect를 남긴다. 자동 data cleanup은 하지 않는다.
+3. 문제 시 move write, worker claim, preview write를 각각 끈다. 이미 이동된 canonical path는 flag로 원복되지 않으므로 redirect read 전체를 끄지 않는다. canonical을 A→B 이동한 뒤 A로 되돌려야 하면 한 transaction에서 A/B와 descendant 충돌을 잠그고 A를 canonical로 복구하며, 기존 활성 A→B를 공개 read model에서 제외하고 append-only revision/audit에는 보존한 뒤 B→A만 활성화한다. 완료 조건은 A가 `200` canonical, B가 A로 한 번만 `301`, 두 번째 hop·chain·cycle이 0인 것이다. 현재 schema처럼 active/superseded 상태가 없으면 이 보상 이동을 실행하지 않고 먼저 additive redirect revision/active 계약을 배포한다. 자동 data cleanup은 하지 않는다.
    variant worker rollback은 새 claim을 먼저 중지하고 in-flight lease를 drain한 뒤 이전 worker/API를 배포한다.
 4. 1단계 감사가 실제 격차와 정확한 Create/Modify/Test 경로·명령을 확정한 별도 구현 계획을 승인하기 전에는 이 절을 실행하지 않는다. 이후 migration/API/권한·원자성, 관리자/고객 E2E, TTL 실제 경과, redirect를 유지하는 rollback rehearsal, 사용자 콘텐츠 무변경 증거가 있어야 완료다.

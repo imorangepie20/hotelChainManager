@@ -26,7 +26,7 @@
 - backfill은 identity·경로·초안/발행 JSON·version·audit·media UUID를 바꾸지 않는다. 분류가 모호한 기존 `CONTENT_PAGE`는 자동 추론하지 않고 호환 kind로 둔다.
 - 과거 snapshot JSON은 읽기 전용이다. 누락 block ID는 응답 copy에 결정적으로 보강하고, 저장 또는 재발행으로 과거 행을 고치지 않는다.
 - 저장 실패, stale version, 권한 실패, schema 검증 실패는 현재 공개본과 navigation을 바꾸지 않는다.
-- 실제 사용자 페이지·자산을 계획 검증용으로 저장·발행·보관·삭제하지 않는다. 별도 fixture와 격리 DB만 사용한다.
+- 실제 사용자 페이지·자산을 계획 검증용으로 저장·발행·보관·삭제하지 않는다. 통합 테스트의 Flyway·fixture 쓰기는 `hotel_chain_test`/`hotel_test` 격리 DB에서만 허용하며, 운영·배포 DB에는 `READ ONLY` transaction 외 명령을 보내지 않는다.
 
 ## 감사 대상 파일
 
@@ -73,18 +73,33 @@
 
 ## 실행 명령과 기대 결과
 
-- [ ] API 기준선: `cd services/api && ./mvnw -Dtest=WebsitePageIntegrationTest,WebContentIntegrationTest,WebsiteTranslationIntegrationTest test`. 기대 결과는 실패 0이며, 실패하면 새 구현으로 가리지 않고 감사 기록에 현재 재현으로 남긴다. 이 저장소에는 Testcontainers 의존성이 없으므로 도입을 가정하지 않는다.
-- [ ] 고객 parser/build: `cd apps/web && pnpm exec tsx src/lib/content-page.test.ts && pnpm exec tsx src/lib/content-collection.test.ts && pnpm run build`. 기대 결과는 두 계약 검사와 production build 종료 코드 0이다.
-- [ ] 관리자 기준선: `cd SDTPL_ADM && pnpm exec playwright test e2e/website-content-editor.spec.ts e2e/website-saved-draft-preview.spec.ts && pnpm exec tsc --noEmit`. 기대 결과는 대상 Chromium 실패 0과 TypeScript 종료 코드 0이다.
+- [ ] 테스트 DB preflight: 저장소 루트에서 `docker compose up -d db-test` 후 `docker compose exec -T db-test psql -U hotel_test -d hotel_chain_test -v ON_ERROR_STOP=1 -Atc "select current_database(), current_user"`를 실행한다. 결과가 정확히 `hotel_chain_test|hotel_test`가 아니면 API 테스트를 중단한다. `services/api/src/test/resources/application.yml`의 기본 URL `jdbc:postgresql://localhost:55433/hotel_chain_test` 외 값을 쓰려면 승인된 격리 DB allowlist와 먼저 대조하고 운영·배포 DB host/database면 거부한다.
+- [ ] API 기준선(Windows/Git Bash): 저장소 루트에서 `cmd.exe /c "set \"TEST_DATABASE_URL=jdbc:postgresql://127.0.0.1:55433/hotel_chain_test\"&& set \"TEST_DATABASE_USER=hotel_test\"&& set \"TEST_DATABASE_PASSWORD=hotel_test\"&& services\api\mvnw.cmd -f services\api\pom.xml -Dtest=WebsitePageIntegrationTest,WebContentIntegrationTest,WebsiteTranslationIntegrationTest test"`. 기대 결과는 실패 0이며, suite가 격리 DB에 Flyway schema와 fixture를 쓰고 정리하는 것은 허용한다. 실패하면 새 구현으로 가리지 않고 감사 기록에 현재 재현으로 남긴다. 이 저장소에는 Testcontainers 의존성이 없으므로 도입을 가정하지 않는다.
+- [ ] 고객 parser/build(Windows/Git Bash): `cmd.exe /c "cd apps\web && pnpm.cmd exec tsx src/lib/content-page.test.ts && pnpm.cmd exec tsx src/lib/content-collection.test.ts && pnpm.cmd run build"`. 기대 결과는 두 계약 검사와 production build 종료 코드 0이다.
+- [ ] 관리자 기준선(Windows/Git Bash): `cmd.exe /c "cd SDTPL_ADM && pnpm.cmd exec playwright test e2e/website-content-editor.spec.ts e2e/website-saved-draft-preview.spec.ts && pnpm.cmd exec tsc --noEmit"`. 기대 결과는 대상 Chromium 실패 0과 TypeScript 종료 코드 0이다.
 - [ ] 정적 매핑: migration/Java/TypeScript/Playwright 각 항목을 `구현`, `부분 구현`, `미구현`, `결함` 중 하나로 분류하고 파일:줄과 검증 명령을 기록한다.
-- [ ] DB를 읽을 수 있는 격리 환경에서 page/version/audit/media usage/relation 행 수와 대표 published JSON SHA-256을 읽기 전용으로 기록한다. 운영 사용자 행에는 write를 실행하지 않는다.
+- [ ] 운영·배포 census는 승인된 `CMS_AUDIT_DATABASE_URL`에만 연결하고 다음과 같이 transaction 자체를 read-only로 강제한다. 연결 직후 database/user/server를 승인된 allowlist와 대조하며 불일치하면 `BEGIN` 전에 중단한다. 비밀값이 포함될 수 있는 연결 문자열은 출력하지 않는다.
+
+```bash
+psql "$CMS_AUDIT_DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+  -c "select current_database(), current_user, inet_server_addr(), inet_server_port()" \
+  -c "begin transaction read only" \
+  -c "show transaction_read_only" \
+  -c "select count(*) from website_page" \
+  -c "select count(*) from website_page_version" \
+  -c "select count(*) from website_page_audit" \
+  -c "select count(*) from website_media_usage" \
+  -c "rollback"
+```
+
+  `transaction_read_only`가 `on`이 아니거나 승인된 database/server와 다르면 census를 차단한다. relation별 추가 count와 published JSON SHA-256도 같은 transaction 안의 `SELECT`로만 실행한다.
 
 ## 감사 작업 순서
 
 1. 위 파일을 읽고 현재 구현 매트릭스를 작성한다.
 2. 세 검증 명령을 실행해 현재 기준선을 기록한다.
-3. 운영 또는 배포 DB는 `READ ONLY` transaction만 사용해 행 수·hash를 확인한다.
+3. 격리 테스트 DB에서만 suite의 Flyway·fixture 쓰기를 허용하고, 운영 또는 배포 DB는 allowlist preflight 뒤 `READ ONLY` transaction만 사용해 행 수·hash를 확인한다.
 4. 실제 격차마다 변경 파일, 실패 테스트 이름, 최소 구현, 배포/롤백, 데이터 보호 조건을 적는다.
 5. 격차가 확인된 경우에만 별도 상세 구현 계획을 작성하고 사용자 검토를 받는다.
 
-완료 기준은 감사 기록에 모든 항목의 근거가 있고, product code·DB·사용자 콘텐츠 변경이 0건이며, 다음 구현 계획이 현재 기능을 재작성하지 않는다고 독립 리뷰에서 확인되는 것이다.
+완료 기준은 감사 기록에 모든 항목의 근거가 있고, product code·운영/배포 DB·사용자 콘텐츠의 영구 변경이 0건이며, 격리 테스트 DB fixture는 suite 종료 뒤 잔존하지 않고, 다음 구현 계획이 현재 기능을 재작성하지 않는다고 독립 리뷰에서 확인되는 것이다.

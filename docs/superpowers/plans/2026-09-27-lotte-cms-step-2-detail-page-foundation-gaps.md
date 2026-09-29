@@ -43,7 +43,7 @@
 
 ## 권한·정합성
 
-- [ ] 초안 저장과 발행 권한을 분리하고 발행 직전에 block, media 상태, 내부 URL, 필수 block을 서버가 다시 검증한다.
+- [ ] 1~4단계에서는 현재 `HQ_ADMIN` 전용 경계를 유지한다. 동일 역할 안에서도 초안 저장과 발행을 별도 서버 명령·검증 경로로 분리하고, 발행 직전에 block, media 상태, 내부 URL, 필수 block을 다시 검증한다. `HQ_EDITOR`/`HQ_PUBLISHER` 확대는 5단계 role matrix와 보안 테스트가 별도로 승인되기 전에는 이 단계에 포함하지 않는다.
 - [ ] kind별 required/allowed block matrix, block ID 유일성, 갤러리 2~12개, 운영 시간 `Asia/Seoul`·예외, CTA 대상 범위를 테스트로 고정한다.
 - [ ] page 저장, media usage 교체, version snapshot, audit을 한 transaction으로 처리한다.
 - [ ] 실패 또는 동시 수정 때 기존 publishedVersion과 공개 media usage가 그대로인지 확인한다.

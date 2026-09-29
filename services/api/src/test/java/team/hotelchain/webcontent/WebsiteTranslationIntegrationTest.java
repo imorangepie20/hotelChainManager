@@ -472,21 +472,81 @@ class WebsiteTranslationIntegrationTest {
         assertThat(pages.homeDraft(token)).isEqualTo(home);
         UUID hotelId = UUID.randomUUID();
         jdbc.update("insert into hotel values (?, '번역 호텔', '속초', 'Asia/Seoul')", hotelId);
+        var heroSlides = new java.util.ArrayList<Map<String, Object>>();
+        for (int index = 1; index <= 5; index++) {
+            UUID assetId = UUID.randomUUID();
+            String deliveryPath = "/api/website/media/" + assetId + "/content";
+            jdbc.update("""
+                    insert into website_media_asset (
+                        id, origin, delivery_path, storage_key, display_name, default_alt_text,
+                        mime_type, byte_size, width, height, status, version
+                    ) values (?, 'UPLOADED', ?, ?, ?, ?, 'image/jpeg', 1000, 1600, 900, 'ACTIVE', 1)
+                    """, assetId, deliveryPath, assetId + ".jpg", "영문 랜딩 " + index, "한국어 장면 " + index);
+            jdbc.update("""
+                    insert into website_media_variant (
+                        id, asset_id, format, target_width, status, storage_key,
+                        mime_type, byte_size, width, height, attempt_count
+                    ) values (?, ?, 'WEBP', 1280, 'READY', ?, 'image/webp', 500, 1280, 720, 1)
+                    """, UUID.randomUUID(), assetId, assetId + "-1280.webp");
+            heroSlides.add(Map.of("assetId", assetId.toString(), "image", deliveryPath, "alt", "한국어 장면 " + index));
+        }
         var landing = pages.landingDraft(token, hotelId);
-        var content = Map.<String, Object>of("heroAssetId", WebsiteMediaService.BUNDLED_ASSET_ID.toString(), "heroImage", "/images/sokcho-coast-hero.png", "heroAlt", "한국어 해안",
-                "eyebrow", "SOKCHO", "title", "한국어 호텔", "description", "호텔 설명", "arrival", Map.of("address", "주소", "checkInOut", "15:00 / 11:00", "highlight", "도착"),
-                "experiences", List.of(Map.of("category", "ROOM", "title", "객실", "description", "설명")),
-                "offers", List.of(Map.of("title", "오퍼", "detail", "상세", "bookingPeriod", "9월", "stayPeriod", "10월")));
+        var content = new java.util.LinkedHashMap<String, Object>();
+        content.put("heroAssetId", heroSlides.getFirst().get("assetId"));
+        content.put("heroImage", heroSlides.getFirst().get("image"));
+        content.put("heroAlt", heroSlides.getFirst().get("alt"));
+        content.put("heroSlides", List.copyOf(heroSlides));
+        content.put("eyebrow", "SOKCHO");
+        content.put("title", "한국어 호텔");
+        content.put("description", "호텔 설명");
+        content.put("arrival", Map.of("address", "주소", "checkInOut", "15:00 / 11:00", "highlight", "도착"));
+        content.put("experiences", List.of(Map.of("category", "ROOM", "title", "객실", "description", "설명")));
+        content.put("offers", List.of(Map.of("title", "오퍼", "detail", "상세", "bookingPeriod", "9월", "stayPeriod", "10월")));
         landing = pages.saveLandingDraft(token, hotelId, landing.draftVersion(), new WebsitePageDraftMetadata("locale-hotel", "호텔", true, 10), content);
+        UUID landingPageId = landing.id();
         translations.initialize(token, landing.id(), landing.draftVersion(), landing.lifecycleVersion());
+        var invalidEnglishLandingContent = new java.util.LinkedHashMap<>(content);
+        var staleAndTooShort = new java.util.ArrayList<Map<String, Object>>(heroSlides.subList(0, 4));
+        var staleFirst = new java.util.LinkedHashMap<>(staleAndTooShort.getFirst());
+        staleFirst.put("assetId", UUID.randomUUID().toString());
+        staleAndTooShort.set(0, staleFirst);
+        invalidEnglishLandingContent.put("heroSlides", staleAndTooShort);
+        assertThatThrownBy(() -> translations.save(token, landingPageId, new SaveWebsitePageRequest(1,
+                new WebsitePageDraftMetadata("locale-hotel", "English hotel", true, 10),
+                invalidEnglishLandingContent, WebsitePageConnections.empty())))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("heroSlides").hasMessageContaining("5개");
         var englishLandingContent = new java.util.LinkedHashMap<>(content);
+        var englishSlides = new java.util.ArrayList<Map<String, Object>>();
+        for (int index = 0; index < heroSlides.size(); index++) {
+            var englishSlide = new java.util.LinkedHashMap<>(heroSlides.get(index));
+            englishSlide.put("alt", "English scene " + (index + 1));
+            englishSlides.add(englishSlide);
+        }
+        englishLandingContent.put("heroSlides", List.copyOf(englishSlides));
         englishLandingContent.put("title", "English hotel");
-        englishLandingContent.put("heroAlt", "English coast");
+        englishLandingContent.put("heroAlt", "English scene 1");
         translations.save(token, landing.id(), new SaveWebsitePageRequest(1, new WebsitePageDraftMetadata("locale-hotel", "English hotel", true, 10), englishLandingContent, WebsitePageConnections.empty()));
+        assertThat(jdbc.queryForObject("""
+                select count(*) from website_media_usage
+                where page_id = ? and locale = 'en' and document_state = 'DRAFT'
+                """, Integer.class, landing.id())).isEqualTo(5);
         approveEnglish(token, landing.id(), 2);
         translations.publish(token, landing.id(), new PublishWebsitePageRequest(2, 0));
-        assertThat(translations.resolve("/en/stays/locale-hotel").type()).isEqualTo("HOTEL_LANDING");
-        assertThat(translations.resolve("/en/stays/locale-hotel").content()).containsEntry("title", "English hotel").containsEntry("heroAlt", "English coast");
+        PublishedWebsitePage englishLanding = translations.resolve("/en/stays/locale-hotel");
+        assertThat(englishLanding.type()).isEqualTo("HOTEL_LANDING");
+        assertThat(englishLanding.content()).containsEntry("title", "English hotel")
+                .containsEntry("heroAssetId", englishSlides.getFirst().get("assetId"))
+                .containsEntry("heroImage", englishSlides.getFirst().get("image"))
+                .containsEntry("heroAlt", "English scene 1")
+                .containsEntry("heroSlides", List.copyOf(englishSlides));
+        assertThat(englishLanding.mediaVariants()).hasSize(5)
+                .allSatisfy((assetId, variants) -> assertThat(variants).singleElement()
+                        .satisfies(variant -> assertThat(variant.targetWidth()).isEqualTo(1280)));
+        assertThat(jdbc.queryForObject("""
+                select count(*) from website_media_usage
+                where page_id = ? and locale = 'en' and document_state = 'PUBLISHED'
+                """, Integer.class, landing.id())).isEqualTo(5);
         assertThat(pages.landingDraft(token, hotelId)).isEqualTo(landing);
         landing = pages.saveLandingDraft(token, hotelId, landing.draftVersion(), new WebsitePageDraftMetadata("moved-hotel", "이동", true, 10), content);
         pages.publishPage(token, landing.id(), landing.draftVersion(), landing.publishedVersion());

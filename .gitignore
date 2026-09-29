@@ -20,3 +20,4 @@ infra/secrets/compose.env
 infra/secrets/*.env
 !infra/secrets/*.env.example
 backup/
+artifacts/

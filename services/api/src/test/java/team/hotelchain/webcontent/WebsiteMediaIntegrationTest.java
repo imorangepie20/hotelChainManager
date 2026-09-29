@@ -376,6 +376,125 @@ class WebsiteMediaIntegrationTest {
 
     @Test
     @SuppressWarnings("unchecked")
+    void replacesALandingCarouselSlideAndKeepsTheLegacyHeroMirrorInSync() throws IOException {
+        String token = staffAccess.login("media-hq@example.com", "hq-password").token();
+        WebsiteMediaAsset source = media.upload(token,
+                new MemoryMultipartFile("carousel-source.png", "image/png", image("png")), "캐러셀 원본", "원본 alt");
+        WebsiteMediaAsset target = media.upload(token,
+                new MemoryMultipartFile("carousel-target.jpg", "image/jpeg", image("jpeg")), "캐러셀 대상", "대상 alt");
+        List<WebsiteMediaAsset> slides = new ArrayList<>();
+        slides.add(source);
+        for (int index = 2; index <= 5; index++) {
+            slides.add(media.upload(token,
+                    new MemoryMultipartFile("carousel-" + index + ".jpg", "image/jpeg", image("jpeg")),
+                    "캐러셀 " + index, "캐러셀 " + index + " alt"));
+        }
+        WebsitePageDocument landing = pages.landingDraft(token, BRANCH_HOTEL);
+        WebsitePageDocument saved = pages.saveLandingDraft(token, BRANCH_HOTEL, landing.draftVersion(),
+                new WebsitePageDraftMetadata(landing.draftMetadata().slug(), landing.draftMetadata().menuLabel(),
+                        landing.draftMetadata().menuVisible(), landing.draftMetadata().menuOrder()),
+                landingCarouselContent(slides));
+
+        WebsiteMediaDraftReplacementImpact impact = replacements.impact(token, source.id(), target.id());
+        assertThat(impact.replaceableUsages()).singleElement().satisfies(usage -> {
+            assertThat(usage.pageId()).isEqualTo(saved.id());
+            assertThat(usage.fieldPath()).isEqualTo("heroSlides[0].assetId");
+        });
+        WebsiteMediaDraftReplacementUsage usage = impact.replaceableUsages().getFirst();
+        WebsiteMediaDraftReplacementResult result = replacements.replace(token, source.id(),
+                new WebsiteMediaDraftReplacementRequest(target.id(), source.version(), target.version(), List.of(
+                        new WebsiteMediaDraftReplacementTarget(
+                                usage.pageId(), usage.locale(), usage.fieldPath(), usage.expectedDraftVersion()))));
+
+        assertThat(result.replacedUsageCount()).isOne();
+        Map<String, Object> changed = pages.landingDraft(token, BRANCH_HOTEL).draftContent();
+        List<Map<String, Object>> changedSlides = (List<Map<String, Object>>) changed.get("heroSlides");
+        assertThat(changedSlides.getFirst()).containsEntry("assetId", target.id().toString())
+                .containsEntry("image", target.deliveryUrl()).containsEntry("alt", "첫 번째 지점 alt");
+        assertThat(changed).containsEntry("heroAssetId", target.id().toString())
+                .containsEntry("heroImage", target.deliveryUrl()).containsEntry("heroAlt", "첫 번째 지점 alt");
+        assertThat(changedSlides.subList(1, 5)).extracting(slide -> slide.get("assetId"))
+                .containsExactlyElementsOf(slides.subList(1, 5).stream().map(asset -> asset.id().toString()).toList());
+        assertThat(media.usages(token, source.id())).isEmpty();
+        assertThat(media.usages(token, target.id())).singleElement()
+                .satisfies(changedUsage -> assertThat(changedUsage.fieldPath()).isEqualTo("heroSlides[0].assetId"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void replacesANonFirstLandingCarouselSlideWithoutChangingTheLegacyHeroMirror() throws IOException {
+        String token = staffAccess.login("media-hq@example.com", "hq-password").token();
+        List<WebsiteMediaAsset> slides = new ArrayList<>();
+        for (int index = 1; index <= 5; index++) {
+            slides.add(media.upload(token,
+                    new MemoryMultipartFile("non-first-" + index + ".jpg", "image/jpeg", image("jpeg")),
+                    "비첫 슬롯 " + index, "비첫 슬롯 " + index + " alt"));
+        }
+        WebsiteMediaAsset source = slides.get(2);
+        WebsiteMediaAsset target = media.upload(token,
+                new MemoryMultipartFile("non-first-target.png", "image/png", image("png")),
+                "비첫 슬롯 교체 대상", "교체 대상 alt");
+        WebsitePageDocument landing = pages.landingDraft(token, BRANCH_HOTEL);
+        WebsitePageDocument saved = pages.saveLandingDraft(token, BRANCH_HOTEL, landing.draftVersion(),
+                new WebsitePageDraftMetadata(landing.draftMetadata().slug(), landing.draftMetadata().menuLabel(),
+                        landing.draftMetadata().menuVisible(), landing.draftMetadata().menuOrder()),
+                landingCarouselContent(slides));
+
+        WebsiteMediaDraftReplacementUsage usage = replacements.impact(token, source.id(), target.id())
+                .replaceableUsages().getFirst();
+        assertThat(usage.fieldPath()).isEqualTo("heroSlides[2].assetId");
+        replacements.replace(token, source.id(), new WebsiteMediaDraftReplacementRequest(
+                target.id(), source.version(), target.version(), List.of(new WebsiteMediaDraftReplacementTarget(
+                        saved.id(), usage.locale(), usage.fieldPath(), usage.expectedDraftVersion()))));
+
+        Map<String, Object> changed = pages.landingDraft(token, BRANCH_HOTEL).draftContent();
+        List<Map<String, Object>> changedSlides = (List<Map<String, Object>>) changed.get("heroSlides");
+        assertThat(changedSlides.get(2)).containsEntry("assetId", target.id().toString())
+                .containsEntry("image", target.deliveryUrl()).containsEntry("alt", "3번째 지점 alt");
+        assertThat(changed).containsEntry("heroAssetId", slides.getFirst().id().toString())
+                .containsEntry("heroImage", slides.getFirst().deliveryUrl()).containsEntry("heroAlt", "첫 번째 지점 alt");
+        assertThat(media.usages(token, source.id())).isEmpty();
+        assertThat(media.usages(token, target.id())).singleElement()
+                .satisfies(changedUsage -> assertThat(changedUsage.fieldPath()).isEqualTo("heroSlides[2].assetId"));
+    }
+
+    @Test
+    void rollsBackALandingCarouselReplacementThatWouldDuplicateAnotherSlot() throws IOException {
+        String token = staffAccess.login("media-hq@example.com", "hq-password").token();
+        List<WebsiteMediaAsset> slides = new ArrayList<>();
+        for (int index = 1; index <= 5; index++) {
+            slides.add(media.upload(token,
+                    new MemoryMultipartFile("duplicate-target-" + index + ".jpg", "image/jpeg", image("jpeg")),
+                    "중복 검증 " + index, "중복 검증 " + index + " alt"));
+        }
+        WebsiteMediaAsset target = slides.get(1);
+        WebsiteMediaAsset source = slides.get(4);
+        WebsitePageDocument landing = pages.landingDraft(token, BRANCH_HOTEL);
+        WebsitePageDocument saved = pages.saveLandingDraft(token, BRANCH_HOTEL, landing.draftVersion(),
+                new WebsitePageDraftMetadata(landing.draftMetadata().slug(), landing.draftMetadata().menuLabel(),
+                        landing.draftMetadata().menuVisible(), landing.draftMetadata().menuOrder()),
+                landingCarouselContent(slides));
+        WebsiteMediaDraftReplacementUsage usage = replacements.impact(token, source.id(), target.id())
+                .replaceableUsages().getFirst();
+        assertThat(usage.fieldPath()).isEqualTo("heroSlides[4].assetId");
+
+        assertThatThrownBy(() -> replacements.replace(token, source.id(), new WebsiteMediaDraftReplacementRequest(
+                target.id(), source.version(), target.version(), List.of(new WebsiteMediaDraftReplacementTarget(
+                        saved.id(), usage.locale(), usage.fieldPath(), usage.expectedDraftVersion())))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("heroSlides").hasMessageContaining("중복");
+
+        WebsitePageDocument unchanged = pages.landingDraft(token, BRANCH_HOTEL);
+        assertThat(unchanged.draftVersion()).isEqualTo(saved.draftVersion());
+        assertThat(unchanged.draftContent()).isEqualTo(saved.draftContent());
+        assertThat(media.usages(token, source.id())).singleElement()
+                .satisfies(sourceUsage -> assertThat(sourceUsage.fieldPath()).isEqualTo("heroSlides[4].assetId"));
+        assertThat(media.usages(token, target.id())).singleElement()
+                .satisfies(targetUsage -> assertThat(targetUsage.fieldPath()).isEqualTo("heroSlides[1].assetId"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
     void rejectsAStaleConfirmedUsageSetBeforeWritingAnyDraft() throws IOException {
         String token = staffAccess.login("media-hq@example.com", "hq-password").token();
         WebsiteMediaAsset source = media.upload(token,
@@ -808,6 +927,25 @@ class WebsiteMediaIntegrationTest {
         return Map.of(
                 "heroAssetId", asset.id().toString(), "heroImage", asset.deliveryUrl(), "heroAlt", "지점 위치 alt",
                 "eyebrow", "SOKCHO · EAST SEA", "title", "지점 일괄 교체", "description", "지점 초안 이미지 교체",
+                "arrival", Map.of("address", "가상 해안로 186", "checkInOut", "15:00 / 11:00", "highlight", "바다 곁의 하루"),
+                "experiences", List.of(Map.of("category", "ROOM", "title", "수평선 객실", "description", "바다를 담은 객실")),
+                "offers", List.of(Map.of("title", "푸른 아침", "detail", "조식 포함", "bookingPeriod", "2026.09.01 ~ 2026.12.31", "stayPeriod", "2026.09.15 ~ 2027.02.28")));
+    }
+
+    private Map<String, Object> landingCarouselContent(List<WebsiteMediaAsset> assets) {
+        List<Map<String, Object>> slides = new ArrayList<>();
+        for (int index = 0; index < assets.size(); index++) {
+            WebsiteMediaAsset asset = assets.get(index);
+            slides.add(Map.of(
+                    "assetId", asset.id().toString(),
+                    "image", asset.deliveryUrl(),
+                    "alt", (index == 0 ? "첫 번째" : (index + 1) + "번째") + " 지점 alt"));
+        }
+        WebsiteMediaAsset first = assets.getFirst();
+        return Map.of(
+                "heroAssetId", first.id().toString(), "heroImage", first.deliveryUrl(), "heroAlt", "첫 번째 지점 alt",
+                "heroSlides", List.copyOf(slides),
+                "eyebrow", "SOKCHO · EAST SEA", "title", "지점 캐러셀", "description", "다섯 장 지점 이미지",
                 "arrival", Map.of("address", "가상 해안로 186", "checkInOut", "15:00 / 11:00", "highlight", "바다 곁의 하루"),
                 "experiences", List.of(Map.of("category", "ROOM", "title", "수평선 객실", "description", "바다를 담은 객실")),
                 "offers", List.of(Map.of("title", "푸른 아침", "detail", "조식 포함", "bookingPeriod", "2026.09.01 ~ 2026.12.31", "stayPeriod", "2026.09.15 ~ 2027.02.28")));

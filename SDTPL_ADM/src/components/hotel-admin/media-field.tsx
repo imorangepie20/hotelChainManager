@@ -21,13 +21,16 @@ function assetDetails(asset: WebsiteMediaAsset) {
   return `${asset.width} × ${asset.height} · ${size}`;
 }
 
-export function MediaField({ token, assetId, deliveryUrl, altText, protectedAssetIds = [assetId], onAssetSelect, onAltTextChange }: {
+export function MediaField({ token, assetId, deliveryUrl, altText, label = "대표 이미지", altLabel = "대표 이미지 대체 텍스트", selectLabel = "미디어 선택", protectedAssetIds = [assetId], onAssetSelect, onAltTextChange }: {
   token: string;
   assetId: string;
   deliveryUrl: string;
   altText: string;
+  label?: string;
+  altLabel?: string;
+  selectLabel?: string;
   protectedAssetIds?: readonly string[];
-  onAssetSelect: (asset: WebsiteMediaAsset, altText: string) => void;
+  onAssetSelect: (asset: WebsiteMediaAsset, altText: string) => boolean | void;
   onAltTextChange: (value: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -58,17 +61,17 @@ export function MediaField({ token, assetId, deliveryUrl, altText, protectedAsse
         </div>
         <div className="flex min-w-0 flex-col items-start justify-center gap-2">
           <div>
-            <p className="text-sm font-medium">대표 이미지</p>
+            <p className="text-sm font-medium">{label}</p>
             {asset ? <><p className="mt-1 truncate text-sm text-muted-foreground">{asset.displayName}</p><p className="mt-1 text-xs text-muted-foreground">{assetDetails(asset)} · 사용 {asset.usageCount}곳</p></> : <p className="mt-1 text-xs text-muted-foreground">선택된 자산 정보를 불러오는 중이거나 카탈로그에 없습니다.</p>}
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="outline" onClick={() => { setReplacing(false); setOpen(true); }}>미디어 선택</Button>
-            <Button type="button" variant="outline" disabled={!assetId || !deliveryUrl} onClick={() => { setReplacing(true); setOpen(true); }}>파일 교체</Button>
+            <Button type="button" variant="outline" onClick={() => { setReplacing(false); setOpen(true); }}>{selectLabel}</Button>
+            {assetId && deliveryUrl && <Button type="button" variant="outline" onClick={() => { setReplacing(true); setOpen(true); }}>파일 교체</Button>}
           </div>
         </div>
       </div>
-      <label className="grid gap-1 text-sm font-medium">대표 이미지 대체 텍스트
-        <Input aria-label="대표 이미지 대체 텍스트" value={altText} maxLength={200} required onChange={(event) => onAltTextChange(event.target.value)} />
+      <label className="grid gap-1 text-sm font-medium">{altLabel}
+        <Input aria-label={altLabel} value={altText} maxLength={200} required onChange={(event) => onAltTextChange(event.target.value)} />
       </label>
       <p className="text-xs text-muted-foreground">이 페이지에 맞는 대체 텍스트를 입력해 주세요. 자산의 기본 문구는 선택할 때만 복사됩니다.</p>
       <MediaPickerDialog
@@ -79,8 +82,8 @@ export function MediaField({ token, assetId, deliveryUrl, altText, protectedAsse
         protectedAssetIds={protectedAssetIds}
         replacement={replacing ? { deliveryUrl, altText } : undefined}
         onSelect={(selected) => {
-          setAsset(selected);
-          onAssetSelect(selected, replacing ? altText : selected.defaultAltText);
+          const applied = onAssetSelect(selected, replacing ? altText : selected.defaultAltText);
+          if (applied !== false) setAsset(selected);
         }}
       />
     </section>

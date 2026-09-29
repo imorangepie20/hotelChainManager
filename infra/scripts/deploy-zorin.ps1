@@ -45,31 +45,21 @@ if (-not ($Push -or $Up -or $Down -or $Logs -or $Verify -or $Backup)) {
 if ($Push) {
   Write-Output "코드를 $Server`:$RemoteDir 로 보낸다"
 
-  # 로컬 산출물과 비밀값은 보내지 않는다. Windows PowerShell 5의 native
-  # pipeline은 tar의 binary stdout을 문자열로 변환할 수 있으므로 tar | ssh를
-  # 사용하지 않고 임시 archive를 만든 뒤 scp로 전송한다.
-  $excludes = @(
-    "--exclude=.git", "--exclude=.agents", "--exclude=.codex",
-    "--exclude=.pytest_cache", "--exclude=node_modules", "--exclude=target",
-    "--exclude=dist", "--exclude=.next", "--exclude=build",
-    "--exclude=.venv", "--exclude=__pycache__", "--exclude=.tmp",
-    "--exclude=.local-runtime", "--exclude=test-results",
-    "--exclude=apps/web/node_modules", "--exclude=SDTPL_ADM/node_modules",
-    "--exclude=apps/web/dist", "--exclude=SDTPL_ADM/.next",
-    "--exclude=infra/secrets/tunnel.env", "--exclude=infra/secrets/compose.env",
-    "--exclude=backup"
-  )
+  # 배포 입력은 검증·커밋된 HEAD로 한정한다. git archive는 ignored `.env`,
+  # 생성 이미지, Playwright 결과와 로컬 비밀값을 구조적으로 포함하지 않는다.
+  $repositoryStatus = & git status --porcelain --untracked-files=normal
+  if ($LASTEXITCODE -ne 0) { throw "Git 상태를 확인하지 못했습니다" }
+  if ($repositoryStatus) { throw "커밋되지 않은 변경이 있습니다. clean HEAD만 배포할 수 있습니다." }
   $deployArchive = Join-Path ([IO.Path]::GetTempPath()) "hotel-chain-manager-$([guid]::NewGuid().ToString('N')).tar.gz"
   $remoteArchive = "/tmp/hotel-chain-manager-$([guid]::NewGuid().ToString('N')).tar.gz"
   try {
-    $tarArgs = @("-czf", $deployArchive) + $excludes + @(".")
-    & tar @tarArgs
-    if ($LASTEXITCODE -ne 0) { throw "배포 archive 생성이 실패했습니다" }
+    & git archive --format=tar.gz --output=$deployArchive HEAD
+    if ($LASTEXITCODE -ne 0) { throw "커밋 archive 생성이 실패했습니다" }
 
     & scp -o ConnectTimeout=15 $deployArchive "$Server`:$remoteArchive"
     if ($LASTEXITCODE -ne 0) { throw "배포 archive 전송이 실패했습니다" }
 
-    Invoke-Remote "mkdir -p $RemoteDir; tar -xzf $remoteArchive -C $RemoteDir; chmod +x $RemoteDir/services/api/mvnw $RemoteDir/infra/scripts/*.sh; rm -f $remoteArchive"
+    Invoke-Remote "mkdir -p $RemoteDir; tar -xzf $remoteArchive -C $RemoteDir; rm -f $RemoteDir/.env; rm -rf $RemoteDir/artifacts $RemoteDir/playwright-report $RemoteDir/test-results $RemoteDir/apps/web/playwright-report $RemoteDir/apps/web/test-results $RemoteDir/SDTPL_ADM/playwright-report $RemoteDir/SDTPL_ADM/test-results; chmod +x $RemoteDir/services/api/mvnw $RemoteDir/infra/scripts/*.sh; rm -f $remoteArchive"
   } finally {
     if (Test-Path -LiteralPath $deployArchive) {
       Remove-Item -LiteralPath $deployArchive -Force

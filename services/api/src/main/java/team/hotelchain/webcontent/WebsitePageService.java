@@ -63,6 +63,7 @@ public class WebsitePageService {
         StaffPrincipal actor = access.requireHeadquarters(token);
         PageRow current = ensureLanding(hotelId);
         WebsitePageDraftMetadata next = metadata == null ? metadata(current) : metadata;
+        WebContentService.validateLandingStructure(content);
         Map<String, Object> normalized = mediaReferences.normalizeLandingContent(content);
         WebContentService.validateLandingContent(normalized);
         return saveDraft(actor, current, expectedDraftVersion, next, normalized, landingPath(next.slug()));
@@ -477,8 +478,12 @@ public class WebsitePageService {
 
     public Map<String, Object> publishedLandingContent(UUID hotelId) {
         PageRow page = landing(hotelId);
-        return page == null || !"ACTIVE".equals(page.lifecycleStatus()) || page.publishedContent().isEmpty()
-                ? Map.of() : page.publishedContent();
+        if (page == null || !"ACTIVE".equals(page.lifecycleStatus()) || page.publishedContent().isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Object> response = new LinkedHashMap<>(page.publishedContent());
+        response.put("mediaVariants", mediaReferences.publicVariants(page.pageType(), page.publishedContent()));
+        return response;
     }
 
     public PublishedWebsitePage resolvePublished(String path) {

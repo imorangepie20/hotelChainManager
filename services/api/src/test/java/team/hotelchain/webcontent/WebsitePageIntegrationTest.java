@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -91,6 +92,147 @@ class WebsitePageIntegrationTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void savesAndPublishesExactlyFiveOrderedLandingHeroSlidesWithALegacyMirror() {
+        StaffSessionView session = staffAccess.login("pages-hq@example.com", "hq-password");
+        WebsitePageDocument initial = pages.landingDraft(session.token(), HOTEL);
+        List<Map<String, Object>> slides = landingHeroSlides();
+        Map<String, Object> content = new LinkedHashMap<>(validContent("다섯 장 히어로"));
+        content.put("heroSlides", slides);
+        content.put("heroAssetId", slides.getLast().get("assetId"));
+        content.put("heroImage", slides.getLast().get("image"));
+        content.put("heroAlt", slides.getLast().get("alt"));
+
+        WebsitePageDocument saved = pages.saveLandingDraft(
+                session.token(), HOTEL, initial.draftVersion(), draftMetadata(initial), content);
+
+        Map<String, Object> first = slides.getFirst();
+        assertThat(saved.draftContent()).containsEntry("heroAssetId", first.get("assetId"))
+                .containsEntry("heroImage", first.get("image"))
+                .containsEntry("heroAlt", first.get("alt"));
+        assertThat((List<Map<String, Object>>) saved.draftContent().get("heroSlides"))
+                .containsExactlyElementsOf(slides);
+        assertThat(jdbc.queryForList("""
+                select field_path
+                  from website_media_usage
+                 where page_id = ? and document_state = 'DRAFT'
+                 order by field_path
+                """, String.class, saved.id())).containsExactly(
+                        "heroSlides[0].assetId", "heroSlides[1].assetId", "heroSlides[2].assetId",
+                        "heroSlides[3].assetId", "heroSlides[4].assetId");
+
+        WebsitePageDocument published = pages.publishLanding(
+                session.token(), HOTEL, saved.draftVersion(), saved.publishedVersion());
+        PublishedWebsitePage publicPage = pages.resolvePublished(published.publishedMetadata().path());
+        Map<String, Object> resolved = publicPage.content();
+        assertThat(resolved).containsEntry("heroAssetId", first.get("assetId"))
+                .containsEntry("heroImage", first.get("image"))
+                .containsEntry("heroAlt", first.get("alt"));
+        assertThat((List<Map<String, Object>>) resolved.get("heroSlides")).containsExactlyElementsOf(slides);
+        assertThat(publicPage.mediaVariants().keySet()).containsExactlyInAnyOrderElementsOf(slides.stream()
+                .map(item -> UUID.fromString(item.get("assetId").toString()))
+                .toList());
+
+        Map<String, Object> legacyPublic = pages.publishedLandingContent(HOTEL);
+        assertThat(legacyPublic).containsEntry("heroSlides", slides);
+        assertThat(legacyPublic.get("mediaVariants")).isInstanceOfSatisfying(Map.class,
+                variants -> assertThat(variants).hasSize(5));
+        assertThat(publicPage.mediaVariants().values()).allSatisfy(variants -> assertThat(variants).hasSize(1));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void trimsTheFirstSlideAltBeforeMirroringAndRecordingUsage() {
+        StaffSessionView session = staffAccess.login("pages-hq@example.com", "hq-password");
+        WebsitePageDocument initial = pages.landingDraft(session.token(), HOTEL);
+        List<Map<String, Object>> slides = new ArrayList<>(landingHeroSlides());
+        Map<String, Object> first = new LinkedHashMap<>(slides.getFirst());
+        first.put("alt", "  여백이 있는 첫 장면  ");
+        slides.set(0, first);
+        Map<String, Object> content = new LinkedHashMap<>(validContent("alt 정규화"));
+        content.put("heroSlides", slides);
+
+        WebsitePageDocument saved = pages.saveLandingDraft(
+                session.token(), HOTEL, initial.draftVersion(), draftMetadata(initial), content);
+
+        List<Map<String, Object>> normalizedSlides = (List<Map<String, Object>>) saved.draftContent().get("heroSlides");
+        assertThat(normalizedSlides.getFirst().get("alt")).isEqualTo("여백이 있는 첫 장면");
+        assertThat(saved.draftContent().get("heroAlt")).isEqualTo("여백이 있는 첫 장면");
+        assertThat(jdbc.queryForObject("""
+                select alt_text
+                  from website_media_usage
+                 where page_id = ? and document_state = 'DRAFT' and field_path = 'heroSlides[0].assetId'
+                """, String.class, saved.id())).isEqualTo("여백이 있는 첫 장면");
+    }
+
+    @Test
+    void rejectsLandingHeroSlidesWithTheWrongCountOrDuplicateAssets() {
+        StaffSessionView session = staffAccess.login("pages-hq@example.com", "hq-password");
+        WebsitePageDocument initial = pages.landingDraft(session.token(), HOTEL);
+        List<Map<String, Object>> slides = landingHeroSlides();
+        Map<String, Object> fourSlides = new LinkedHashMap<>(validContent("네 장 히어로"));
+        fourSlides.put("heroSlides", slides.subList(0, 4));
+
+        assertThatThrownBy(() -> pages.saveLandingDraft(
+                session.token(), HOTEL, initial.draftVersion(), draftMetadata(initial), fourSlides))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("heroSlides").hasMessageContaining("5개");
+
+        List<Map<String, Object>> staleAndTooShort = new ArrayList<>(slides.subList(0, 4));
+        Map<String, Object> staleFirst = new LinkedHashMap<>(staleAndTooShort.getFirst());
+        staleFirst.put("assetId", UUID.randomUUID().toString());
+        staleAndTooShort.set(0, staleFirst);
+        Map<String, Object> staleAndTooShortContent = new LinkedHashMap<>(validContent("구조 우선 검증"));
+        staleAndTooShortContent.put("heroSlides", staleAndTooShort);
+
+        assertThatThrownBy(() -> pages.saveLandingDraft(
+                session.token(), HOTEL, initial.draftVersion(), draftMetadata(initial), staleAndTooShortContent))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("heroSlides").hasMessageContaining("5개");
+
+        List<Map<String, Object>> duplicated = new ArrayList<>(slides);
+        duplicated.set(4, slides.getFirst());
+        Map<String, Object> duplicateContent = new LinkedHashMap<>(validContent("중복 히어로"));
+        duplicateContent.put("heroSlides", duplicated);
+
+        assertThatThrownBy(() -> pages.saveLandingDraft(
+                session.token(), HOTEL, initial.draftVersion(), draftMetadata(initial), duplicateContent))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("heroSlides").hasMessageContaining("중복");
+
+        List<Map<String, Object>> malformedAfterStale = new ArrayList<>(slides);
+        Map<String, Object> staleFirstWithMalformedTail = new LinkedHashMap<>(malformedAfterStale.getFirst());
+        staleFirstWithMalformedTail.put("assetId", UUID.randomUUID().toString());
+        malformedAfterStale.set(0, staleFirstWithMalformedTail);
+        Map<String, Object> malformedTail = new LinkedHashMap<>(malformedAfterStale.get(4));
+        malformedTail.put("assetId", "not-a-uuid");
+        malformedAfterStale.set(4, malformedTail);
+        Map<String, Object> malformedContent = new LinkedHashMap<>(validContent("UUID 구조 우선 검증"));
+        malformedContent.put("heroSlides", malformedAfterStale);
+
+        assertThatThrownBy(() -> pages.saveLandingDraft(
+                session.token(), HOTEL, initial.draftVersion(), draftMetadata(initial), malformedContent))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("heroSlides[4].assetId").hasMessageContaining("UUID");
+
+        UUID staleDuplicateId = UUID.randomUUID();
+        List<Map<String, Object>> canonicalDuplicate = new ArrayList<>(slides);
+        Map<String, Object> staleLowercase = new LinkedHashMap<>(canonicalDuplicate.get(0));
+        staleLowercase.put("assetId", staleDuplicateId.toString());
+        canonicalDuplicate.set(0, staleLowercase);
+        Map<String, Object> staleUppercase = new LinkedHashMap<>(canonicalDuplicate.get(1));
+        staleUppercase.put("assetId", staleDuplicateId.toString().toUpperCase());
+        canonicalDuplicate.set(1, staleUppercase);
+        Map<String, Object> canonicalDuplicateContent = new LinkedHashMap<>(validContent("UUID 중복 우선 검증"));
+        canonicalDuplicateContent.put("heroSlides", canonicalDuplicate);
+
+        assertThatThrownBy(() -> pages.saveLandingDraft(
+                session.token(), HOTEL, initial.draftVersion(), draftMetadata(initial), canonicalDuplicateContent))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("heroSlides").hasMessageContaining("중복");
+    }
+
+    @Test
     void exposesOnlyReadyResponsiveVariantsInPublishedAndPreviewResponsesWithoutPersistingThem() throws Exception {
         StaffSessionView session = staffAccess.login("pages-hq@example.com", "hq-password");
         UUID assetId = UUID.randomUUID();
@@ -132,6 +274,31 @@ class WebsitePageIntegrationTest {
         }
         assertThat(jdbc.queryForObject("select jsonb_exists(published_content, 'mediaVariants') from website_page where id = ?",
                 Boolean.class, published.id())).isFalse();
+
+        jdbc.update("""
+                update website_page
+                set published_content = jsonb_set(published_content, '{heroSlides}', '[]'::jsonb, true)
+                where id = ?
+                """, published.id());
+        JsonNode malformedCarouselFallback = json.valueToTree(pages.resolvePublished("/stays/responsive-media"));
+        assertThat(malformedCarouselFallback.path("mediaVariants").path(assetId.toString())).hasSize(1);
+
+        List<Map<String, Object>> apparentlyCompleteButMalformed = new ArrayList<>();
+        for (int index = 0; index < 5; index++) {
+            UUID slideAssetId = UUID.randomUUID();
+            apparentlyCompleteButMalformed.add(new LinkedHashMap<>(Map.of(
+                    "assetId", slideAssetId.toString(),
+                    "image", index == 0 ? "/api/website/media/" + UUID.randomUUID() + "/content"
+                            : "/api/website/media/" + slideAssetId + "/content",
+                    "alt", index == 1 ? "가".repeat(201) : "손상된 저장 이미지 " + index)));
+        }
+        jdbc.update("""
+                update website_page
+                set published_content = jsonb_set(published_content, '{heroSlides}', cast(? as jsonb), true)
+                where id = ?
+                """, json.writeValueAsString(apparentlyCompleteButMalformed), published.id());
+        JsonNode completeMalformedFallback = json.valueToTree(pages.resolvePublished("/stays/responsive-media"));
+        assertThat(completeMalformedFallback.path("mediaVariants").path(assetId.toString())).hasSize(1);
     }
 
     @Test
@@ -1135,6 +1302,31 @@ class WebsitePageIntegrationTest {
                 "arrival", Map.of("address", "가상 해안로 186", "checkInOut", "15:00 / 11:00", "highlight", "바다 곁의 하루"),
                 "experiences", List.of(Map.of("category", "ROOM", "title", "수평선 객실", "description", "바다를 담은 객실")),
                 "offers", List.of(Map.of("title", "푸른 아침", "detail", "조식 포함", "bookingPeriod", "2026.09.01 ~ 2026.12.31", "stayPeriod", "2026.09.15 ~ 2027.02.28")));
+    }
+
+    private List<Map<String, Object>> landingHeroSlides() {
+        List<Map<String, Object>> slides = new ArrayList<>();
+        for (int index = 1; index <= 5; index++) {
+            UUID assetId = UUID.randomUUID();
+            String deliveryPath = "/api/website/media/" + assetId + "/content";
+            jdbc.update("""
+                    insert into website_media_asset (
+                        id, origin, delivery_path, storage_key, display_name, default_alt_text,
+                        mime_type, byte_size, width, height, status, version
+                    ) values (?, 'UPLOADED', ?, ?, ?, ?, 'image/jpeg', 1000, 1600, 900, 'ACTIVE', 1)
+                    """, assetId, deliveryPath, assetId + ".jpg", "히어로 이미지 " + index, "히어로 대체 텍스트 " + index);
+            jdbc.update("""
+                    insert into website_media_variant (
+                        id, asset_id, format, target_width, status, storage_key,
+                        mime_type, byte_size, width, height, attempt_count
+                    ) values (?, ?, 'WEBP', 640, 'READY', ?, 'image/webp', 500, 640, 360, 1)
+                    """, UUID.randomUUID(), assetId, assetId + "-640.webp");
+            slides.add(Map.of(
+                    "assetId", assetId.toString(),
+                    "image", deliveryPath,
+                    "alt", "속초 해안 호텔 " + index + "번째 전경"));
+        }
+        return List.copyOf(slides);
     }
 
     private Map<String, Object> validContentPage(String title) {

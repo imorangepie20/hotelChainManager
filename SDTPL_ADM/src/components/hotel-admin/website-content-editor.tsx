@@ -49,7 +49,7 @@ import { ContentPageEditor } from "@/components/hotel-admin/content-page-editor"
 import { ContentPageCreateDialog } from "@/components/hotel-admin/content-page-create-dialog";
 import { ContentPageVersionCompareDialog } from "@/components/hotel-admin/content-page-version-compare-dialog";
 import { ContentPageMoveDialog } from "@/components/hotel-admin/content-page-move-dialog";
-import { MediaField } from "@/components/hotel-admin/media-field";
+import { LandingHeroMediaFields } from "@/components/hotel-admin/landing-hero-media-fields";
 
 const hotels = [
   { id: "11000000-0000-0000-0000-000000000001", name: "속초", slug: "sokcho", menuOrder: 10 },
@@ -595,7 +595,7 @@ export function WebsiteContentEditor() {
                 <EditorField label="영문 지점 표기" value={textValue(content, "eyebrow")} onChange={(next) => changeText("eyebrow", next)} />
                 <EditorField label="히어로 제목" value={textValue(content, "title")} onChange={(next) => changeText("title", next)} />
                 <div className="md:col-span-2"><EditorField multiline label="히어로 설명" value={textValue(content, "description")} onChange={(next) => changeText("description", next)} /></div>
-                <MediaField token={token ?? ""} assetId={textValue(content, "heroAssetId")} deliveryUrl={textValue(content, "heroImage")} altText={textValue(content, "heroAlt")} onAssetSelect={(asset, imageAlt) => changeDocument((next) => { next.heroAssetId = asset.id; next.heroImage = asset.deliveryUrl; next.heroAlt = imageAlt; })} onAltTextChange={(heroAlt) => changeText("heroAlt", heroAlt)} />
+                <LandingHeroMediaFields token={token ?? ""} content={content} onChange={(next) => changeDocument((content) => { Object.assign(content, next); })} />
               </div>
             </section>
 

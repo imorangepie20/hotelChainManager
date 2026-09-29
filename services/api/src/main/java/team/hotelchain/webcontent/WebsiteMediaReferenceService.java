@@ -30,6 +30,8 @@ public class WebsiteMediaReferenceService {
     public Map<UUID, List<PublicWebsiteMediaVariant>> publicVariants(String pageType, Map<String, Object> content) {
         Set<UUID> assetIds = new LinkedHashSet<>();
         if ("HOTEL_LANDING".equals(pageType)) {
+            Object slidesValue = content.get("heroSlides");
+            collectCompleteLandingCarousel(assetIds, slidesValue);
             addAssetId(assetIds, content.get("heroAssetId"));
         } else if ("HOME_PAGE".equals(pageType) || "CONTENT_PAGE".equals(pageType)) {
             Object blocksValue = content.get("blocks");
@@ -47,6 +49,23 @@ public class WebsiteMediaReferenceService {
             }
         }
         return variants.findPublicReadyByAssetIds(List.copyOf(assetIds));
+    }
+
+    private boolean collectCompleteLandingCarousel(Set<UUID> assetIds, Object slidesValue) {
+        if (!(slidesValue instanceof List<?> slides) || slides.size() != 5) return false;
+        Set<UUID> slideAssetIds = new LinkedHashSet<>();
+        for (Object value : slides) {
+            if (!(value instanceof Map<?, ?> slide)
+                    || !(slide.get("image") instanceof String image) || image.isBlank()
+                    || !(slide.get("alt") instanceof String alt) || alt.isBlank() || alt.trim().length() > 200) return false;
+            try {
+                if (!slideAssetIds.add(UUID.fromString(String.valueOf(slide.get("assetId"))))) return false;
+            } catch (IllegalArgumentException exception) {
+                return false;
+            }
+        }
+        assetIds.addAll(slideAssetIds);
+        return true;
     }
 
     public Map<String, Object> normalizeStructuredContent(Map<String, Object> content) {
@@ -69,6 +88,22 @@ public class WebsiteMediaReferenceService {
 
     public Map<String, Object> normalizeLandingContent(Map<String, Object> content) {
         Map<String, Object> normalized = copy(content);
+        if (normalized.containsKey("heroSlides")) {
+            Object slidesValue = normalized.get("heroSlides");
+            if (!(slidesValue instanceof List<?> slides)) return normalized;
+            for (int index = 0; index < slides.size(); index++) {
+                if (!(slides.get(index) instanceof Map<?, ?> rawSlide)) continue;
+                Map<String, Object> slide = asWritableMap(rawSlide);
+                normalizeHero(slide, "assetId", "image", "heroSlides[" + index + "]");
+                slide.put("alt", text(slide.get("alt"), "heroSlides[" + index + "].alt"));
+            }
+            if (!slides.isEmpty() && slides.getFirst() instanceof Map<?, ?> first) {
+                normalized.put("heroAssetId", first.get("assetId"));
+                normalized.put("heroImage", first.get("image"));
+                normalized.put("heroAlt", text(first.get("alt"), "heroSlides[0].alt"));
+            }
+            return normalized;
+        }
         normalizeHero(normalized, "heroAssetId", "heroImage", "hero");
         return normalized;
     }
@@ -85,8 +120,19 @@ public class WebsiteMediaReferenceService {
         jdbc.update("delete from website_media_usage where page_id = ? and locale = ? and document_state = ?", pageId, locale, state);
         if (content == null || content.isEmpty()) return;
         if ("HOTEL_LANDING".equals(pageType)) {
-            insertUsage(pageId, locale, state, "heroAssetId", assetId(content.get("heroAssetId"), "heroAssetId"),
-                    text(content.get("heroAlt"), "heroAlt"));
+            Object slidesValue = content.get("heroSlides");
+            if (slidesValue instanceof List<?> slides) {
+                for (int index = 0; index < slides.size(); index++) {
+                    if (!(slides.get(index) instanceof Map<?, ?> slide)) continue;
+                    String path = "heroSlides[" + index + "]";
+                    insertUsage(pageId, locale, state, path + ".assetId",
+                            assetId(slide.get("assetId"), path + ".assetId"),
+                            text(slide.get("alt"), path + ".alt"));
+                }
+            } else {
+                insertUsage(pageId, locale, state, "heroAssetId", assetId(content.get("heroAssetId"), "heroAssetId"),
+                        text(content.get("heroAlt"), "heroAlt"));
+            }
             return;
         }
         if (!"HOME_PAGE".equals(pageType) && !"CONTENT_PAGE".equals(pageType)) return;
@@ -112,7 +158,16 @@ public class WebsiteMediaReferenceService {
         Map<String, Object> replaced = copy(content);
         List<String> fieldPaths = new ArrayList<>();
         if ("HOTEL_LANDING".equals(pageType)) {
-            replacePair(replaced, "heroAssetId", "heroImage", "heroAssetId", source, target, fieldPaths);
+            Object slidesValue = replaced.get("heroSlides");
+            if (slidesValue instanceof List<?> slides) {
+                for (int index = 0; index < slides.size(); index++) {
+                    if (!(slides.get(index) instanceof Map<?, ?> rawSlide)) continue;
+                    replacePair(asWritableMap(rawSlide), "assetId", "image", "heroSlides[" + index + "].assetId",
+                            source, target, fieldPaths);
+                }
+            } else {
+                replacePair(replaced, "heroAssetId", "heroImage", "heroAssetId", source, target, fieldPaths);
+            }
             return new MediaReferenceReplacement(normalizeLandingContent(replaced), List.copyOf(fieldPaths));
         }
         if (!"HOME_PAGE".equals(pageType) && !"CONTENT_PAGE".equals(pageType)) {
