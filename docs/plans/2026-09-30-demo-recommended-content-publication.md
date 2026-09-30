@@ -24,6 +24,10 @@
 
 ## 재개 체크포인트
 
+### 최종 완료
+
+한국어 상세 9개·세 랜딩 추천 3개씩 발행을 완료했다. `07469c6` 고객 경로 보완을 커밋·푸시·운영 고객 웹 재배포했고 CI success·healthy·소스 manifest·다른 서비스 보존을 확인했다. 공개 resolve·컬렉션·이미지, 운영 카드 anchor 9개 활성화 후 실제 제목·데모 고지·이미지 렌더, 최종 관리 API 원본 콘텐츠 보존 감사가 통과했다. 전체 ID·경로·검증·미수행 범위는 [운영 발행 완료 기록](../changes/2026-09-30-demo-details-publication.md)에 남겼다. 아래 항목은 작업 과정의 역사적 체크포인트이며 현재 미완료 상태가 아니다.
+
 - 인증된 CMS API로 구조 SECTION 3개와 한국어 상세 9개를 생성·발행했다. 세 랜딩에 `MANUAL_CARD` 연결을 식음→시설→체험 순으로 저장·발행했고 원본 콘텐츠 보존 및 공개 snapshot 3개씩을 확인했다.
 - 공개 resolve·컬렉션·이미지 200 확인 후 고객 브라우저에서 `/stays/sokcho/discover/pado-table`이 PAGE NOT FOUND였다. 고객 라우터가 4단계 상세의 SECTION slug를 `rooms|dining|facilities|experiences`로 제한하지만 서버는 사용자 정의 slug를 지원하는 계약 불일치다.
 - 보완 설계: `/stays/{hotelSlug}/{sectionSlug}/{detailSlug}`만 일반 CMS 상세로 해석한다. 컬렉션 우선순위·영어 locale·slug 유효성·4단계 제한·구조 SECTION의 공개 거절은 유지한다. 한국어/영어 회귀 테스트 RED→GREEN, 고객 타입/빌드, 고객 웹만 커밋 기반 재배포, 운영 상세 9개 카드 이동·제목·데모 고지·이미지 렌더가 완료 기준이다. API·관리자·DB는 다시 빌드하지 않는다.

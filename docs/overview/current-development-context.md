@@ -19,7 +19,7 @@
 - `HQ_ADMIN` 전용 `POST /api/staff/website/sections`와 한국어 관리자 `섹션 추가`를 구현했다. 지점 카탈로그·메타데이터·경로 충돌을 검증하고 메뉴 비노출·빈 문서·CREATED 감사로 생성한다. 기존 지점 랜딩과 공개본은 바꾸지 않는다.
 - SQL SECTION 사전 준비 없는 상세 생성·발행·추천 연결·공개 resolve를 실제 테스트 DB와 Spring MockMvc로 검증했다. 대상 API 클래스 40건, 관리자 대상 Playwright 9건, TypeScript·production build가 통과했다. ESLint는 오류 0·기존 경고 6건이다. 관리자 1280px·390px·키보드·403/409·생성 후 목록 재조회 실패 시 GET만 재시도하는 흐름을 확인했다.
 - 독립 읽기 전용 코드 리뷰는 중요한 논리 오류·보안 우려 없이 통과했다. 추가 승인으로 기능 커밋 `b6e5049`를 main에 푸시했고 해당 SHA의 GitHub CI success를 확인했다. Zorin 운영 DB 논리 백업·clean archive 소스 1,463개 SHA-256 검증·API/관리자 이미지 재빌드·healthy·내부 및 공개 smoke를 통과했다.
-- 사용자 준비 Chrome HQ_ADMIN 세션의 정상 관리 API로 한국어 데모 상세 9개와 세 지점 추천을 발행했다. 공개 resolve 9개·유형별 컬렉션 9개·추천 3개씩·기존 이미지 6개의 200을 확인했다. 고객 라우터가 사용자 정의 SECTION `discover` 상세를 거절하는 계약 불일치를 발견해 한국어/영어 회귀 테스트 RED→GREEN 및 고객 타입/빌드를 완료했다. 고객 웹만 운영 재배포하고 실제 상세 렌더를 재검증하는 단계다. [등록 ID·경로·보존·장애·검증 기록](../changes/2026-09-30-demo-details-publication.md)을 따른다.
+- 사용자 준비 Chrome HQ_ADMIN 세션의 정상 관리 API로 한국어 데모 상세 9개와 세 지점 추천을 발행했다. 공개 resolve 9개·유형별 컬렉션 9개·추천 3개씩·기존 이미지 6개의 200을 확인했다. 고객 라우터의 사용자 정의 SECTION 상세 거절을 `07469c6`으로 보완·푸시했고 회귀 테스트 RED→GREEN·타입/빌드·독립 리뷰·CI success를 확인했다. 고객 웹만 운영 재빌드·healthy·소스 1,464개 SHA-256·다른 5개 서비스 ID 보존을 검증했다. 운영 Chrome 추천 anchor 9개 활성화 후 상세 제목·데모 고지·이미지 렌더를 확인했고 최종 CMS GET 감사에서 원본 랜딩 보존 및 상세 9개 PUBLISHED를 확인했다. 영어 발행·모바일 전체 회귀·운영 pointer/keyboard 입력·백업 restore는 미수행이다. [등록 ID·경로·보존·배포·검증 기록](../changes/2026-09-30-demo-details-publication.md)을 따른다.
 
 ## 지점 랜딩 추천 즐길 거리 상세 페이지 연결 (2026-09-30)
 

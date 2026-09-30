@@ -1,7 +1,7 @@
 # 한국어 데모 상세 9개 운영 발행과 사용자 정의 SECTION 상세 경로 보완
 
 작성일: 2026-09-30
-상태: CMS 발행·공개 JSON 검증 완료, 고객 경로 수정 로컬 검증 완료, 고객 웹 배포·브라우저 재검증 대기
+상태: 한국어 상세 9개·추천 3지점 발행, 고객 경로 수정 커밋·푸시·운영 배포, 공개 API·고객 상세 렌더 검증 완료
 
 ## 승인·등록 범위
 
@@ -45,6 +45,17 @@ API 발행 뒤 실제 고객 랜딩 링크를 활성화하자 상세에 PAGE NOT
 - 존재하지 않는 destination-content.test.ts 실행은 모듈 없음으로 실패했다. 해당 테스트를 통과했다고 보고하지 않았고 실제 존재하는 두 대상 테스트와 빌드를 실행했다.
 - 고객 웹만 clean commit archive 기반으로 재빌드·배포한다. API·관리자·DB·concierge·tunnel의 이미지나 설정을 다시 변경하지 않는다.
 
-## 남은 검증
+## 운영 배포·최종 검증
 
-고객 웹 운영 배포 뒤 세 랜딩에서 9개 링크 이동, 실제 상세 제목·데모 고지·이미지 로드, 공개 API 재조회, 소스/컨테이너 read-back을 확인한다. 관리 API 등록/발행은 검증했지만 관리자 생성 다이얼로그에 수동 입력하는 운영 UI 흐름을 이번 작업에서 재시험하지 않았다. 모바일 전체 회귀·영어 발행·백업 restore 훈련은 범위 밖이다.
+- 독립 정적 리뷰는 passed=true, security_concerns·logic_errors 없음이다. 경로 해석과 API 발행 판정을 구별하는 테스트 설명 개선 제안만 있었다.
+- 고객 경로 보완 커밋 `07469c6777e3fdf3f4b0f43bbbc523c55ab93a4b`를 main에 푸시하고 원격 HEAD 동일 SHA를 확인했다. 필수 검사 실행 전 push 우회 경고가 있었으나 이후 정확한 SHA의 Customer Web Playwright CI completed/success를 직접 조회했다: https://github.com/imorangepie20/hotelChainManager/actions/runs/36700011941.
+- clean commit archive SHA-256 `4a97d37d5161f0c1453501f71c94566bf50298fd437bd19654c3e2075b752baa`, 일반 파일 1,464개 manifest를 운영 추출 전후 및 별도 SSH read-back으로 검증했다. 임시 발행 스크립트·미디어 파일·자격 증명은 배포 archive에 넣지 않았다.
+- 운영 고객 웹만 build 및 `up -d --no-deps --wait`로 재생성했다. 이미지 `sha256:be0372c18a505cf8358457e946cbaaab8b7f8cf63883d002fb9bde8ebd68a7f7`, 새 web 컨테이너 ID `3666fb85c79b`, running/healthy다. admin·api·concierge·postgres·tunnel은 전후 ID 동일한 것을 독립 검사했다.
+- 고객 웹 재배포 전 현재 CMS 콘텐츠를 포함한 PostgreSQL 논리 백업 `/home/approid/apps/hotel-chain-manager/backup/pre-demo-web-07469c6.dump`를 만들었다. 335,695 bytes·mode 600·non-empty 확인, restore 훈련은 하지 않았다.
+- 운영 Chrome에서 세 랜딩의 실제 추천 anchor를 DOM click으로 활성화하고 9개 경로 이동·해당 제목 h1·가상 호텔 데모 고지·본문 이미지 로드를 모두 확인했다. CDP pointer/Enter 입력은 이동 효과를 확인하지 못해 성공으로 보고하지 않았으며, 마우스·키보드 입력 수단 자체의 운영 검증은 미완료다. URL 직접 이동만으로 카드 연결 완료라고 판단하지 않았다.
+- 고객 웹 배포 후 공개 API를 다시 조회했다. 중복 없는 상세 9개, 지점별 3개, 유형별 1개, 랜딩 추천 3개씩, 이미지 delivery 6개 200이다. CMS 트리를 children까지 펼쳐 ID로 중복 제거한 최종 GET 감사에서 9개 PUBLISHED, 세 SECTION 비노출, 세 랜딩 원본 초안·발행 문서·메타데이터 보존을 다시 확인했다.
+- 이 최종 검증 기록은 documentation-only 후속 커밋으로 푸시하고 운영 문서만 갱신한다. 실제 고객 웹 애플리케이션 커밋은 `07469c6`, API·관리자 애플리케이션 커밋은 이전 `b6e5049`로 구분한다.
+
+## 범위 밖·다음 작업
+
+관리 API 등록/발행과 고객 카드 링크 활성화는 검증했지만 관리자 생성 다이얼로그에 수동 입력하는 운영 UI 흐름·운영 pointer/keyboard 입력·모바일 전체 회귀는 이번 작업에서 재시험하지 않았다. 영어 상세/랜딩 발행과 백업 restore 훈련도 미수행이다. 승인된 한국어 상세 9개 발행·추천 연결에는 남은 작업이 없다.
