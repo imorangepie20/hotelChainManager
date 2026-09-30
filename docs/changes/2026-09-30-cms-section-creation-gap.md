@@ -1,6 +1,6 @@
 # CMS 지점 섹션 생성 경로 누락 재개 점검
 
-상태: 제한된 보완 구현·대상 검증·독립 코드 리뷰 완료. 운영 DB 변경·커밋·배포·실제 콘텐츠 발행은 수행하지 않았다.
+상태: 제한된 보완 구현·검증·독립 리뷰·커밋·푸시·운영 배포 완료. 실제 데모 콘텐츠 발행은 운영 관리자 인증 세션 미연결로 대기 중이다.
 
 ## 중단 지점과 원인
 
@@ -52,8 +52,21 @@
 - `git diff --check` 통과. 고객 웹 코드·DB migration은 변경하지 않았고 전체 시스템·고객 브라우저 회귀는 범위 밖으로 실행하지 않았다.
 - 독립 읽기 전용 코드 리뷰는 `passed=true`, 중요한 논리 오류·보안 우려·수정 제안 없음으로 완료됐다. 기존 파일 diff와 신규 파일 2개의 권한·초기값·경로 검증·parameterized SQL·편집본 보존·재조회 실패 처리를 검토했다. 리뷰는 런타임 테스트 결과와 별개의 정적 판정이다.
 
+### 추가 승인 후 커밋·운영 배포 결과
+
+- 사용자가 커밋·푸시·운영 배포와 실제 한국어 상세 9개 발행을 명시적으로 요청했다. 기능 커밋 `b6e50499a0067549616d4063e977c0202ebfd243`를 main에 커밋·푸시했고 `git ls-remote origin refs/heads/main`에서 동일 SHA를 확인했다.
+- GitHub `Customer Web Playwright` CI가 해당 SHA에서 completed/success다: `https://github.com/imorangepie20/hotelChainManager/actions/runs/36691514237`. push 시 필수 검사가 아직 실행 전이라 서버가 우회 경고를 출력했으며 이후 성공 판정을 직접 조회했다.
+- clean commit archive SHA-256은 `09d0b2a17d227b0fd87007862716fff7aff7dc314640fc84cb866ea13f8d138a`다. Zorin `/home/approid/apps/hotel-chain-manager`로 전송했고 archive bytes 기준 일반 파일 1,463개 manifest를 배포 전후 및 별도 SSH read-back에서 확인했다. 기존 비밀 파일·다른 프로젝트·미디어 볼륨·호스트 포트는 변경하지 않았다.
+- 배포 전 운영 PostgreSQL 논리 백업: `/home/approid/apps/hotel-chain-manager/backup/pre-section-b6e5049.dump`, 316,523 bytes, mode 600. 백업은 non-empty를 확인했지만 restore 훈련은 하지 않았다.
+- 운영 API·관리자 이미지만 실제 재빌드·컨테이너 재생성했다. `up -d --wait --wait-timeout 240 api admin` 성공. API 이미지 `sha256:662aabba4f18d3d2836ea8bf1233c01c8ecbe89d0816573daf0c6cf27ac20728`, 관리자 이미지 `sha256:7144ece00bc3694290fc40c9fb203e7df2298b840d9d969eb815fdf9495f772b`. 두 컨테이너의 running/healthy와 새 생성 시각을 독립 read-back으로 확인했다. 고객 웹·DB·concierge·tunnel은 기존 서비스를 유지했다.
+- `verify-deployment.sh` 내부 API·고객 웹·관리자·concierge health, chat→telemetry→PostgreSQL, Cloudflare API·고객·관리자 검사를 모두 통과했다. 이 검사는 테스트 채팅 telemetry를 기록하지만 예약·결제·CMS 콘텐츠 쓰기는 하지 않는다.
+- 배포 후 공개 JSON read-back: 한국어 `/stays/sokcho`, `/stays/seoraksan`, `/stays/jeju` 모두 200/HOTEL_LANDING·추천 0개. 영어 3개 경로는 기존대로 404. 한국어 공개 컬렉션은 지점 3곳 × DINING/FACILITY/EXPERIENCE 9조합 모두 200/0개다. 한국어 상세를 이번 작업에서 등록·발행하지 않았다.
+- Windows Python urllib은 해당 Cloudflare API에 403을 반환했지만 native curl 직접 조회는 200이었다. curl을 사용해 15개 JSON 응답을 파일에 수집한 뒤 지점·유형별로 집계했다. 실패 응답에서 콘텐츠 수를 추정하지 않았다.
+- 운영 관리자 URL: `https://admin-hcm.approid.team/dashboard/website`. browser-use doctor는 daemon alive·active browser connections=0이며 Aside 관리자 창도 현재 열려 있지 않았다. 로그인·브라우저 연결 준비를 사용자에게 요청했으나 응답이 시간 초과돼 세션 없이 콘텐츠 쓰기를 하지 않았다. 자격 증명·토큰을 조회/복사하거나 DB 직접 삽입으로 우회하지 않았다.
+
 ### 다음 작업과 미검증
 
 - 로컬 보완 구현과 검증은 완료했다. 독립 리뷰에서 추가 수정이 필요한 발견은 없었다.
-- 커밋·푸시·운영 배포는 미실행이다. 운영 API 이미지도 이번 변경으로 재빌드하지 않았다.
-- 운영 배포 권한·로그인 세션을 확인한 뒤 기존 승인된 한국어 상세 9개 생성/발행과 세 지점 추천 입력·공개 브라우저 클릭을 재개한다. 이번 테스트 데이터가 실제 CMS 운영 콘텐츠로 등록됐다고 보고하지 않는다.
+- 기능 커밋·푸시·운영 배포는 완료했다. 이 결과 문서는 별도 documentation-only 후속 커밋으로 푸시하고 운영 소스 문서만 갱신한다. 실행 애플리케이션 SHA는 `b6e5049`로 구분한다.
+- HQ_ADMIN 운영 로그인 세션이 연결되면 승인된 한국어 상세 9개 생성/발행과 세 지점 추천 입력·공개 브라우저 클릭을 재개한다. 로그인 벽을 우회하지 않으며 비밀번호를 대화로 받지 않는다.
+- 실제 상세 발행·추천 저장/발행·고객 카드 클릭, 운영 SECTION 생성 UI 상호작용은 아직 미완료다. 공개 HTML 200이나 테스트 fixture를 운영 콘텐츠 발행으로 취급하지 않는다.
