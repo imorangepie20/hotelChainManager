@@ -1528,6 +1528,123 @@ test("confirms before discarding landing edits and clears landing dirtiness afte
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
 });
 
+for (const width of [1280, 390]) test(`creates a hidden hotel section and refreshes scoped page parents (${width}px)`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 844 });
+  const sections: Record<string, unknown>[] = [];
+  await page.route("**/api/staff/website/pages", (route) => route.fulfill({ json: [{
+    id: "section-stays", hotelId: null, pageType: "SECTION", label: "숙소", draftPath: "/stays", publishedPath: "/stays", status: "PUBLISHED", lifecycleStatus: "ACTIVE", lifecycleVersion: 1,
+    children: [{ id: "sokcho-page", hotelId: SOKCHO, pageType: "HOTEL_LANDING", label: "속초 랜딩", draftPath: "/stays/sokcho", publishedPath: "/stays/sokcho", status: "PUBLISHED", lifecycleStatus: "ACTIVE", lifecycleVersion: 1, children: [] }],
+  }, ...sections] }));
+  const writes: unknown[] = [];
+  await page.route("**/api/staff/website/sections", (route) => {
+    writes.push(route.request().postDataJSON());
+    sections.push({ id: "new-hotel-section", hotelId: SEORAKSAN, pageType: "SECTION", label: "설악산 즐길 거리", draftPath: "/stays/seoraksan/experiences", publishedPath: "/stays/seoraksan/experiences", status: "DRAFT", lifecycleStatus: "ACTIVE", lifecycleVersion: 1, children: [] });
+    return route.fulfill({ json: { ...contentPageDocument(), id: "new-hotel-section", pageType: "SECTION", hotelId: SEORAKSAN, draftContent: {}, publishedContent: {}, draftMetadata: { slug: "experiences", path: "/stays/seoraksan/experiences", menuLabel: "설악산 즐길 거리", menuVisible: false, menuOrder: 10 } } });
+  });
+  await page.goto("/dashboard/website");
+  await expect(page.getByLabel("히어로 제목")).toHaveValue("속초 제목");
+  await page.getByLabel("히어로 제목").fill("보존할 랜딩 초안");
+  await expect(page.getByLabel("히어로 제목")).toHaveValue("보존할 랜딩 초안");
+  await page.getByRole("button", { name: "+ 페이지", exact: true }).click();
+  let dialog = page.getByRole("dialog", { name: "콘텐츠 페이지 만들기" });
+  await dialog.getByLabel("콘텐츠 유형").click();
+  await page.getByRole("option", { name: "경험", exact: true }).click();
+  await expect(dialog.getByText("지점 섹션이 없습니다. 대화상자를 닫고 섹션 추가로 먼저 만들어 주세요.")).toBeVisible();
+  await dialog.getByRole("button", { name: "취소", exact: true }).click();
+  const trigger = page.getByRole("button", { name: "섹션 추가", exact: true });
+  await trigger.focus();
+  await page.keyboard.press("Enter");
+  dialog = page.getByRole("dialog", { name: "지점 섹션 만들기" });
+  await expect(dialog.getByRole("button", { name: "섹션 만들기", exact: true })).toBeDisabled();
+  await dialog.getByRole("combobox", { name: "소유 지점" }).focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("option", { name: "설악산", exact: true })).toBeVisible();
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Enter");
+  await expect(dialog.getByRole("combobox", { name: "소유 지점" })).toContainText("설악산");
+  await dialog.getByLabel("섹션 이름").fill("설악산 즐길 거리");
+  await dialog.getByLabel("섹션 슬러그").fill("experiences");
+  await dialog.getByLabel("섹션 순서").fill("10");
+  const bounds = await dialog.boundingBox();
+  expect(bounds!.x).toBeGreaterThanOrEqual(0);
+  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+  await dialog.getByRole("button", { name: "섹션 만들기", exact: true }).focus();
+  await page.keyboard.press("Enter");
+  await expect(dialog).toHaveCount(0);
+  expect(writes).toEqual([{ hotelId: SEORAKSAN, slug: "experiences", menuLabel: "설악산 즐길 거리", menuOrder: 10 }]);
+  await expect(page.getByRole("navigation", { name: "웹사이트 페이지" }).getByRole("button", { name: "설악산 즐길 거리" })).toBeVisible();
+  await expect(page.getByLabel("히어로 제목")).toHaveValue("보존할 랜딩 초안");
+  await page.getByRole("button", { name: "+ 페이지", exact: true }).click();
+  dialog = page.getByRole("dialog", { name: "콘텐츠 페이지 만들기" });
+  await dialog.getByLabel("상위 섹션").click();
+  await page.getByRole("option", { name: "설악산 즐길 거리", exact: true }).click();
+  await expect(dialog.getByText("설악산 지점 범위로 생성합니다.", { exact: true })).toBeVisible();
+  await expect(dialog.getByRole("combobox", { name: "상위 섹션" })).toContainText("설악산 즐길 거리");
+});
+
+test("retries a created section tree refresh without sending a duplicate creation", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  let creates = 0;
+  let readsAfterCreate = 0;
+  const section = { id: "refreshed-section", hotelId: SEORAKSAN, pageType: "SECTION", label: "재조회 섹션", draftPath: "/stays/seoraksan/experiences", publishedPath: "/stays/seoraksan/experiences", status: "DRAFT", lifecycleStatus: "ACTIVE", lifecycleVersion: 1, children: [] };
+  await page.route("**/api/staff/website/sections", (route) => {
+    creates += 1;
+    return route.fulfill({ json: { ...contentPageDocument(), id: section.id, pageType: "SECTION", contentKind: null, hotelId: SEORAKSAN } });
+  });
+  await page.route("**/api/staff/website/pages", (route) => {
+    if (creates === 0) return route.fallback();
+    readsAfterCreate += 1;
+    return readsAfterCreate === 1
+      ? route.fulfill({ status: 503, json: { message: "트리 조회 실패" } })
+      : route.fulfill({ json: [section] });
+  });
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "섹션 추가", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "지점 섹션 만들기" });
+  await dialog.getByLabel("소유 지점").click();
+  await page.getByRole("option", { name: "설악산", exact: true }).click();
+  await dialog.getByLabel("섹션 이름").fill("재조회 섹션");
+  await dialog.getByLabel("섹션 슬러그").fill("experiences");
+  await dialog.getByRole("button", { name: "섹션 만들기", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toContainText("섹션 생성은 완료됐지만 목록을 불러오지 못했습니다.");
+  await expect(dialog.getByLabel("섹션 이름")).toBeDisabled();
+  await dialog.getByRole("button", { name: "취소", exact: true }).click();
+  await page.getByRole("button", { name: "섹션 추가", exact: true }).click();
+  await dialog.getByRole("button", { name: "목록 다시 불러오기", exact: true }).focus();
+  await page.keyboard.press("Enter");
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole("navigation", { name: "웹사이트 페이지" }).getByRole("button", { name: "재조회 섹션" })).toBeVisible();
+  expect(creates).toBe(1);
+  expect(readsAfterCreate).toBe(2);
+});
+
+for (const status of [403, 409]) test(`shows section creation server errors without losing form values (${status})`, async ({ page }) => {
+  const message = status === 403 ? "섹션 생성 권한이 없습니다." : "이미 사용 중인 페이지 경로입니다.";
+  await page.route("**/api/staff/website/sections", (route) => route.fulfill({ status, json: { message } }));
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "섹션 추가", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "지점 섹션 만들기" });
+  await dialog.getByLabel("소유 지점").click();
+  await page.getByRole("option", { name: "설악산", exact: true }).click();
+  await dialog.getByLabel("섹션 이름").fill("오류 확인 섹션");
+  await dialog.getByLabel("섹션 슬러그").fill("Invalid/slug");
+  await expect(dialog.getByRole("button", { name: "섹션 만들기", exact: true })).toBeDisabled();
+  await dialog.getByLabel("섹션 슬러그").fill("experiences");
+  await dialog.getByRole("button", { name: "섹션 만들기", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toHaveText(message);
+  await expect(dialog.getByLabel("섹션 이름")).toHaveValue("오류 확인 섹션");
+  await expect(dialog.getByRole("button", { name: "섹션 만들기", exact: true })).toBeEnabled();
+});
+
+for (const role of ["HQ_EDITOR", "HQ_PUBLISHER"]) test(`hides section creation from ${role}`, async ({ page }) => {
+  await page.addInitScript((staffRole) => {
+    localStorage.setItem("hotel-chain-staff", JSON.stringify({ id: "content-staff", email: "content@example.test", displayName: "콘텐츠 직원", role: staffRole, hotelId: null }));
+  }, role);
+  await page.goto("/dashboard/website");
+  await expect(page.getByRole("heading", { name: "웹사이트 콘텐츠" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "섹션 추가", exact: true })).toHaveCount(0);
+});
+
 test("creates, saves, and enables publishing a structured content page", async ({ page }) => {
   await page.goto("/dashboard/website");
 

@@ -58,6 +58,12 @@ public class WebsitePageManagementController {
         return pages.contentReference(token, locale);
     }
 
+    @PostMapping("/sections")
+    public WebsitePageDocument createSection(@RequestBody CreateWebsiteSectionRequest request,
+            @RequestHeader("X-Staff-Session") String token) {
+        return pages.createSection(token, request);
+    }
+
     @PostMapping("/pages")
     public WebsitePageDocument create(@RequestBody CreateWebsitePageRequest request,
             @RequestHeader("X-Staff-Session") String token) {

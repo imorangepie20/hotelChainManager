@@ -1,6 +1,6 @@
 # 고객 웹 CMS 기능 명세
 
-최종 갱신: 2026-09-13
+최종 갱신: 2026-09-30
 적용 대상: `STAY HANEUL` 고객 웹과 본사 관리자 `/dashboard/website`
 
 > 이 문서는 현재 구현된 CMS 기능을 기록한다. 롯데리조트급 콘텐츠 운영을 위한 재정의 목표와 이후 구현 경계는 [롯데리조트급 CMS 기능 설계](lotte-resort-level-cms-functional-design.md)를 따른다.
@@ -23,11 +23,11 @@
 | --- | --- | --- |
 | `HOME_PAGE` | 루트 `/`, 단일 페이지 | slug `home`, 메뉴 비노출, 부모·호텔 없음. 홈 전용 API로만 저장·발행 |
 | `HOTEL_LANDING` | `/stays/sokcho`, `/stays/seoraksan`, `/stays/jeju` | 각 호텔과 연결. 지점 소개·경험·오퍼·도착 안내를 운영 |
-| `SECTION` | 예: `/brand` | 공개 메뉴의 그룹. 현재 일반 페이지 생성용 부모 |
-| `CONTENT_PAGE` | 예: `/brand/story` | 호텔에 속하지 않는 브랜드·캠페인 페이지. 현재는 `SECTION`의 직계 자식만 허용 |
+| `SECTION` | 예: `/brand`, `/stays/sokcho/experiences` | 일반 페이지 생성용 부모. 본사 관리자가 지점 소유 섹션을 메뉴 비노출로 생성할 수 있음 |
+| `CONTENT_PAGE` | 예: `/brand/story`, `/stays/sokcho/experiences/coast-walk` | 종류에 따라 체인 공통·지점 소유. 부모 SECTION 또는 일반 페이지와 소유 범위가 일치해야 함 |
 | 미디어 자산 | 내장 이미지 또는 업로드 PNG/JPEG | 페이지별 alt와 별도의 기본 alt·사용 위치·상태·버전을 관리 |
 
-`CONTENT_PAGE`의 경로 깊이는 현재 두 단계까지이며, 임의의 깊은 트리와 부모 이동은 후속 범위다.
+페이지 경로는 최대 4개 segment·255자로 제한한다. 기존 부모 이동 계약은 유지하며 이번 섹션 생성은 기존 페이지를 이동하거나 재발행하지 않는다.
 
 ## 3. 초안, 발행본, 버전
 
@@ -70,6 +70,15 @@
 - 고객은 `#preview=<token>`을 요청 전에 주소에서 제거하고 해당 탭의 `sessionStorage`에만 보관한다. 일반 이동이나 종료 시 공개본으로 돌아가며, 잘못된 링크는 404, 만료·폐기·초안 변경은 410으로 처리하고 공개 콘텐츠로 대체하지 않는다.
 - 기존 고객 renderer, 만료 배너, `noindex,nofollow`, 응답 `no-store`를 사용한다. 만료 후 초안을 화면에서 제거하고 예약 검색·예약·결제·취소·AI·콘텐츠 CTA를 키보드와 포인터 모두에서 차단한다.
 - API는 HTTPS를 기본 요구하고 `dev` profile에서만 로컬 HTTP를 허용한다. 운영 TLS 프록시 설정은 배포 전 별도 확인한다. 상세 검증과 미검증 범위는 [변경 기록](../changes/2026-09-13-authenticated-saved-draft-url-preview.md)을 따른다.
+
+### 4.3.2 지점 섹션 생성
+
+- 한국어 관리자에서 `HQ_ADMIN`만 `섹션 추가`를 사용한다. 소유 지점은 서버 콘텐츠 참조 카탈로그에서 선택한다. 섹션 이름·슬러그·순서를 입력하며 슬러그는 영문 소문자·숫자·하이픈, 최대 120자다.
+- 생성 API는 실제 지점 존재, 메뉴명 1~100자, 순서 0 이상, 초안·공개 경로 및 한국어 redirect source 충돌을 검증한다. 편집자·게시자·지점 직원은 `403`이다.
+- 섹션은 기존 루트 SECTION으로 생성한다(`parentId=null`, `contentKind=null`). 경로는 지점 랜딩 초안 경로 아래 `/{slug}`이며 랜딩이 없으면 서버의 초기 지점 경로를 사용한다. 기존 랜딩·초안·발행본을 수정하거나 누락 랜딩을 생성하지 않는다.
+- 초안·공개 메뉴 노출은 서버가 false로 고정한다. 섹션은 콘텐츠 없는 구조 항목으로, CREATED 감사만 남고 발행 이력이나 공개 resolve 본문은 없다. 생성된 섹션의 편집·메뉴 발행·이동 UI는 이번 범위가 아니다.
+- 생성 후 페이지 트리를 재조회해 상세 페이지의 상위 섹션 선택기에 반영한다. 트리 재조회 실패는 생성 성공과 구분해서 안내하며 POST 없이 GET만 다시 시도한다. 기존 편집 중 페이지·미저장 내용은 유지한다.
+- 상세 페이지를 먼저 생성·발행한 뒤 지점 랜딩 추천으로 연결하고 발행한다. SQL로 SECTION을 미리 넣지 않는 관리 HTTP 경로를 실제 테스트 DB에서 검증했다. 운영 배포·데모 콘텐츠 발행 상태는 [변경 기록](../changes/2026-09-30-cms-section-creation-gap.md)을 따른다.
 
 ### 4.4 SEO
 
@@ -194,6 +203,7 @@
 | 본사 | `GET/PUT /api/staff/website/home` | 홈 초안 조회·저장 |
 | 본사 | `POST /api/staff/website/home/publish` | 홈 발행 |
 | 본사 | `GET /api/staff/website/pages` | 페이지 트리 조회 |
+| 본사 관리자 | `POST /api/staff/website/sections` | 지점 소유 비노출 SECTION 생성 (`hotelId`, `slug`, `menuLabel`, `menuOrder`) |
 | 본사 | `POST /api/staff/website/pages` | 일반 페이지 생성 |
 | 본사 | `GET/PUT /api/staff/website/pages/{pageId}` | 일반 페이지 초안 조회·저장 |
 | 본사 | `GET/POST/PUT /api/staff/website/pages/{pageId}/translations/en` | 영어 초안 조회·명시적 가져오기·저장 |

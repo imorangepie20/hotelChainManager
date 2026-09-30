@@ -119,6 +119,44 @@ public class WebsitePageService {
     }
 
     @Transactional
+    public WebsitePageDocument createSection(String token, CreateWebsiteSectionRequest request) {
+        StaffPrincipal actor = access.requireHeadquarters(token);
+        if (request == null || request.hotelId() == null) {
+            throw new IllegalArgumentException("섹션 소유 지점을 선택해 주세요.");
+        }
+        hotel(request.hotelId());
+        WebsitePageDraftMetadata metadata = new WebsitePageDraftMetadata(
+                request.slug(), request.menuLabel(), false, request.menuOrder());
+        validateMetadata(metadata);
+        PageRow landing = landing(request.hotelId());
+        String parentPath = landing == null ? landingPath(initialSlug(request.hotelId())) : landing.draftPath();
+        String path = childPath(parentPath, metadata.slug());
+        validatePathDepth(path);
+        rejectPathCollision(null, path);
+        UUID id = UUID.randomUUID();
+        try {
+            jdbc.update("""
+                    insert into website_page (
+                        id, hotel_id, parent_id, page_type, content_kind,
+                        draft_slug, published_slug, draft_path, published_path,
+                        draft_menu_label, published_menu_label, draft_menu_visible, published_menu_visible,
+                        draft_menu_order, published_menu_order, draft_content, published_content,
+                        draft_version, published_version, published_from_draft_version, updated_by
+                    ) values (?, ?, null, 'SECTION', null, ?, ?, ?, ?, ?, ?, false, false, ?, 0,
+                              '{}'::jsonb, '{}'::jsonb, 1, 1, null, ?)
+                    """, id, request.hotelId(), metadata.slug(), metadata.slug(), path, path,
+                    metadata.menuLabel(), metadata.menuLabel(), metadata.menuOrder(), actor.id());
+        } catch (DuplicateKeyException exception) {
+            throw pathConflict();
+        }
+        jdbc.update("""
+                insert into website_page_audit (page_id, action, actor_id, details)
+                values (?, 'CREATED', ?, jsonb_build_object('path', ?))
+                """, id, actor.id(), path);
+        return document(page(id));
+    }
+
+    @Transactional
     public WebsitePageDocument createContentPage(String token, UUID parentId,
             WebsitePageDraftMetadata metadata, Map<String, Object> content) {
         return createContentPage(token, parentId, ContentKind.BRAND, null, metadata, content, WebsitePageConnections.empty());
@@ -977,6 +1015,7 @@ public class WebsitePageService {
         if (metadata == null || metadata.slug() == null || !SLUG.matcher(metadata.slug()).matches()) {
             throw new IllegalArgumentException("페이지 슬러그는 영문 소문자, 숫자, 하이픈만 사용할 수 있습니다.");
         }
+        if (metadata.slug().length() > 120) throw new IllegalArgumentException("페이지 슬러그는 120자 이하여야 합니다.");
         if (RESERVED_SLUGS.contains(metadata.slug())) throw new IllegalArgumentException("예약된 페이지 슬러그는 사용할 수 없습니다.");
         if (metadata.menuLabel() == null || metadata.menuLabel().isBlank() || metadata.menuLabel().length() > 100) {
             throw new IllegalArgumentException("메뉴명은 1~100자로 입력해 주세요.");
@@ -1039,6 +1078,7 @@ public class WebsitePageService {
     }
 
     private void validatePathDepth(String path) {
+        if (path.length() > 255) throw new IllegalArgumentException("페이지 경로는 255자 이하여야 합니다.");
         int segments = (int) Stream.of(path.split("/", -1)).filter(segment -> !segment.isEmpty()).count();
         if (segments > 4) throw new IllegalArgumentException("페이지 경로는 최대 4개 segment까지 사용할 수 있습니다.");
     }
@@ -1092,6 +1132,8 @@ public class WebsitePageService {
                 : jdbc.queryForObject("select count(*) from website_page where (draft_path = ? or published_path = ?) and id <> ?",
                         Integer.class, path, path, pageId);
         if (count != null && count > 0) throw pathConflict();
+        Integer redirects = jdbc.queryForObject("select count(*) from website_redirect where source_path = ?", Integer.class, path);
+        if (redirects != null && redirects > 0) throw pathConflict();
     }
 
     private void requireExpectedDraftVersion(int expectedDraftVersion) {
@@ -1152,7 +1194,7 @@ public class WebsitePageService {
     }
 
     private WebsitePageDocument document(PageRow page) {
-        return new WebsitePageDocument(page.id(), page.pageType(), contentKind(page), page.hotelId(),
+        return new WebsitePageDocument(page.id(), page.pageType(), "SECTION".equals(page.pageType()) ? null : contentKind(page), page.hotelId(),
                 responseContent(page, page.draftContent(), page.draftVersion()), pageConnections(page.id(), "DRAFT"), page.draftVersion(),
                 new WebsitePageMetadata(page.draftSlug(), page.draftPath(), page.draftMenuLabel(), page.draftMenuVisible(), page.draftMenuOrder()),
                 responseContent(page, page.publishedContent(), page.publishedVersion()), pageConnections(page.id(), "PUBLISHED"), page.publishedVersion(),

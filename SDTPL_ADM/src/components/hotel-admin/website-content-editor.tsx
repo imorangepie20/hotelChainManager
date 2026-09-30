@@ -48,6 +48,7 @@ import {
 import { WebsitePageTree } from "@/components/hotel-admin/website-page-tree";
 import { ContentPageEditor } from "@/components/hotel-admin/content-page-editor";
 import { ContentPageCreateDialog } from "@/components/hotel-admin/content-page-create-dialog";
+import { WebsiteSectionCreateDialog } from "@/components/hotel-admin/website-section-create-dialog";
 import { ContentPageVersionCompareDialog } from "@/components/hotel-admin/content-page-version-compare-dialog";
 import { ContentPageMoveDialog } from "@/components/hotel-admin/content-page-move-dialog";
 import { LandingHeroMediaFields } from "@/components/hotel-admin/landing-hero-media-fields";
@@ -545,6 +546,15 @@ export function WebsiteContentEditor() {
         </div>
         <div className="flex flex-wrap gap-2">
           {localeControls}
+          {staff?.role === "HQ_ADMIN" && <WebsiteSectionCreateDialog
+            token={token ?? ""}
+            hotels={referenceCatalog.hotels}
+            disabled={busy || previewBusy || referenceCatalog.hotels.length === 0}
+            onCreated={async () => {
+              setPageTree(await getWebsitePageTree(token ?? ""));
+              setNotice("지점 섹션을 만들었습니다. + 페이지에서 상위 섹션을 선택해 주세요.");
+            }}
+          />}
           <ContentPageCreateDialog
             token={token ?? ""}
             sections={pageTree}

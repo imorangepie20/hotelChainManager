@@ -42,6 +42,7 @@ class WebsitePageIntegrationTest {
     @Autowired ContentPageValidator contentPages;
     @Autowired WebsitePageConnectionValidator connectionValidator;
     @Autowired WebsiteMediaService media;
+    @Autowired org.springframework.web.context.WebApplicationContext context;
 
     @BeforeEach
     void seed() {
@@ -52,6 +53,165 @@ class WebsitePageIntegrationTest {
                 UUID.randomUUID(), "pages-hq@example.com", "페이지 본사 관리자", encoder.encode("hq-password"));
         jdbc.update("insert into staff_member (id, email, display_name, password_hash, role, hotel_id) values (?, ?, ?, ?, 'BRANCH_STAFF', ?)",
                 UUID.randomUUID(), "pages-branch@example.com", "페이지 지점 직원", encoder.encode("branch-password"), HOTEL);
+    }
+
+    @Test
+    void createsHiddenHotelSectionThroughManagementApiWithoutInitializingOrPublishingALanding() throws Exception {
+        StaffSessionView session = staffAccess.login("pages-hq@example.com", "hq-password");
+        var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppContextSetup(context).build();
+        String body = json.writeValueAsString(Map.of(
+                "hotelId", HOTEL, "slug", "experiences", "menuLabel", "호텔 즐길 거리", "menuOrder", 10));
+        String response = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/api/staff/website/sections")
+                        .header("X-Staff-Session", session.token())
+                        .contentType("application/json").content(body))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andReturn().getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+        WebsitePageDocument section = json.readValue(response, WebsitePageDocument.class);
+        String expectedPath = "/stays/" + hotelSlug(HOTEL) + "/experiences";
+        assertThat(section.pageType()).isEqualTo("SECTION");
+        assertThat(section.hotelId()).isEqualTo(HOTEL);
+        assertThat(section.draftMetadata().path()).isEqualTo(expectedPath);
+        assertThat(section.draftMetadata().menuVisible()).isFalse();
+        assertThat(section.publishedMetadata().menuVisible()).isFalse();
+        assertThat(section.publishedContent()).isEmpty();
+        assertThat(pages.staffTree(session.token())).anySatisfy(item -> {
+            assertThat(item.id()).isEqualTo(section.id());
+            assertThat(item.status()).isEqualTo("DRAFT");
+        });
+        assertThat(pages.navigation()).extracting(WebsiteNavigationItem::id).doesNotContain(section.id());
+        assertThatThrownBy(() -> pages.resolvePublished(expectedPath)).isInstanceOf(WebsitePageNotFoundException.class);
+        assertThat(jdbc.queryForObject("select count(*) from website_page where hotel_id = ? and page_type = 'HOTEL_LANDING'", Integer.class, HOTEL)).isZero();
+        assertThat(jdbc.queryForObject("select count(*) from website_page_version where page_id = ?", Integer.class, section.id())).isZero();
+        assertThat(jdbc.queryForObject("select action from website_page_audit where page_id = ?", String.class, section.id())).isEqualTo("CREATED");
+    }
+
+    @Test
+    void rejectsSectionCreationAtAnExistingRedirectSource() {
+        StaffSessionView session = staffAccess.login("pages-hq@example.com", "hq-password");
+        String sourcePath = "/stays/" + hotelSlug(HOTEL) + "/old-experiences";
+        jdbc.update("insert into website_redirect (source_path, target_path, page_id) values (?, '/brand', ?)", sourcePath, BRAND_SECTION);
+        assertThatThrownBy(() -> pages.createSection(session.token(),
+                new CreateWebsiteSectionRequest(HOTEL, "old-experiences", "즐길 거리", 0)))
+                .isInstanceOf(BusinessConflictException.class);
+    }
+
+    @Test
+    void rejectsSectionSlugBeyondDatabaseLimitBeforeWriting() {
+        StaffSessionView session = staffAccess.login("pages-hq@example.com", "hq-password");
+        assertThatThrownBy(() -> pages.createSection(session.token(),
+                new CreateWebsiteSectionRequest(HOTEL, "a".repeat(121), "즐길 거리", 0)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void restrictsSectionCreationToHeadquartersAdminAndValidHotelMetadata() throws Exception {
+        var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppContextSetup(context).build();
+        StaffSessionView session = staffAccess.login("pages-hq@example.com", "hq-password");
+        Map<String, Object> body = Map.of("hotelId", HOTEL, "slug", "experiences", "menuLabel", "즐길 거리", "menuOrder", 0);
+        List<String> deniedTokens = new ArrayList<>();
+        deniedTokens.add(staffAccess.login("pages-branch@example.com", "branch-password").token());
+        for (String role : List.of("HQ_EDITOR", "HQ_PUBLISHER")) {
+            String email = role.toLowerCase() + "@section-test.example.com";
+            jdbc.update("insert into staff_member (id, email, display_name, password_hash, role) values (?, ?, ?, ?, ?)",
+                    UUID.randomUUID(), email, role, new BCryptPasswordEncoder().encode("section-test-password"), role);
+            deniedTokens.add(staffAccess.login(email, "section-test-password").token());
+        }
+        for (String token : deniedTokens) {
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/staff/website/sections")
+                    .header("X-Staff-Session", token).contentType("application/json").content(json.writeValueAsString(body)))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isForbidden());
+        }
+        List<Map<String, Object>> invalid = new ArrayList<>();
+        for (Map<String, Object> fields : List.of(
+                Map.<String, Object>of("hotelId", UUID.randomUUID()), Map.<String, Object>of("slug", "Invalid/slug"),
+                Map.<String, Object>of("slug", "booking"), Map.<String, Object>of("slug", "a".repeat(121)),
+                Map.<String, Object>of("menuLabel", " "), Map.<String, Object>of("menuLabel", "가".repeat(101)),
+                Map.<String, Object>of("menuOrder", -1))) {
+            Map<String, Object> request = new LinkedHashMap<>(body);
+            request.putAll(fields);
+            invalid.add(request);
+        }
+        Map<String, Object> withoutHotel = new LinkedHashMap<>(body);
+        withoutHotel.remove("hotelId");
+        invalid.add(withoutHotel);
+        for (Map<String, Object> request : invalid) {
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/staff/website/sections")
+                    .header("X-Staff-Session", session.token()).contentType("application/json").content(json.writeValueAsString(request)))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isBadRequest());
+        }
+        assertThat(jdbc.queryForObject("select count(*) from website_page where hotel_id = ?", Integer.class, HOTEL)).isZero();
+    }
+
+    @Test
+    void bootstrapsSectionDetailPublicationAndLandingRecommendationsUsingOnlyManagementHttpApis() throws Exception {
+        var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppContextSetup(context).build();
+        String token = staffAccess.login("pages-hq@example.com", "hq-password").token();
+        String landingUrl = "/api/staff/web-content/hotels/" + HOTEL;
+        JsonNode initial = cmsRequest(mvc, token, "GET", landingUrl, null);
+        JsonNode section = cmsRequest(mvc, token, "POST", "/api/staff/website/sections",
+                Map.of("hotelId", HOTEL, "slug", "experiences", "menuLabel", "즐길 거리", "menuOrder", 10));
+        JsonNode detail = cmsRequest(mvc, token, "POST", "/api/staff/website/pages", Map.of(
+                "parentId", section.get("id").asText(), "hotelId", HOTEL, "contentKind", "EXPERIENCE",
+                "page", new WebsitePageDraftMetadata("forest-walk", "숲 산책", false, 0),
+                "content", typedContent(ContentKind.EXPERIENCE), "connections", WebsitePageConnections.empty()));
+        String detailPath = detail.get("draftMetadata").get("path").asText();
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/website/pages/resolve").param("path", detailPath))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isNotFound());
+        JsonNode publishedDetail = cmsRequest(mvc, token, "POST", "/api/staff/website/pages/" + detail.get("id").asText() + "/publish",
+                Map.of("expectedDraftVersion", detail.get("draftVersion").asInt(), "expectedPublishedVersion", detail.get("publishedVersion").asInt()));
+        JsonNode catalog = cmsRequest(mvc, token, "GET", "/api/staff/website/content-reference", null);
+        assertThat(catalog.get("pages").findValuesAsText("id")).contains(detail.get("id").asText());
+        WebsitePageConnections selected = connections(UUID.fromString(detail.get("id").asText()), 0);
+        WebsitePageMetadata initialPage = json.treeToValue(initial.get("draftPage"), WebsitePageMetadata.class);
+        JsonNode saved = cmsRequest(mvc, token, "PUT", landingUrl, Map.of(
+                "expectedDraftVersion", initial.get("draftVersion").asInt(), "content", validContent("정상 생성 추천 랜딩"),
+                "page", new WebsitePageDraftMetadata(initialPage.slug(), initialPage.menuLabel(), initialPage.menuVisible(), initialPage.menuOrder()), "connections", selected));
+        JsonNode publishedLanding = cmsRequest(mvc, token, "POST", landingUrl + "/publish", Map.of(
+                "expectedDraftVersion", saved.get("draftVersion").asInt(), "expectedPublishedVersion", saved.get("publishedVersion").asInt()));
+        JsonNode resolvedLanding = cmsRequest(mvc, null, "GET", "/api/website/pages/resolve?path=" + publishedLanding.get("publishedPage").get("path").asText(), null);
+        JsonNode card = resolvedLanding.get("content").get("recommendedExperiences").get(0);
+        assertThat(card.get("pageId").asText()).isEqualTo(detail.get("id").asText());
+        assertThat(card.get("contentKind").asText()).isEqualTo("EXPERIENCE");
+        assertThat(card.get("path").asText()).isEqualTo(detailPath);
+        assertThat(card.get("title").asText()).isEqualTo(publishedDetail.get("publishedContent").get("blocks").get(0).get("title").asText());
+        JsonNode resolvedDetail = cmsRequest(mvc, null, "GET", "/api/website/pages/resolve?path=" + card.get("path").asText(), null);
+        assertThat(resolvedDetail.get("hotelId").asText()).isEqualTo(HOTEL.toString());
+        assertThat(resolvedDetail.get("contentKind").asText()).isEqualTo("EXPERIENCE");
+        assertThat(resolvedDetail.get("content")).isEqualTo(publishedDetail.get("publishedContent"));
+    }
+
+    @Test
+    void createsSectionBelowCurrentLandingDraftWithoutChangingExistingPublicContentAndRejectsDuplicatePaths() throws Exception {
+        var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppContextSetup(context).build();
+        String token = staffAccess.login("pages-hq@example.com", "hq-password").token();
+        WebsitePageDocument landing = pages.landingDraft(token, HOTEL);
+        landing = pages.saveLandingDraft(token, HOTEL, landing.draftVersion(),
+                new WebsitePageDraftMetadata("published-section-test", "공개 랜딩", true, 10), validContent("유지할 공개 랜딩"));
+        landing = pages.publishLanding(token, HOTEL, landing.draftVersion(), landing.publishedVersion());
+        WebsitePageDocument before = pages.saveLandingDraft(token, HOTEL, landing.draftVersion(),
+                new WebsitePageDraftMetadata("edited-section-test", "편집 중 랜딩", true, 20), validContent("유지할 랜딩 초안"));
+        JsonNode created = cmsRequest(mvc, token, "POST", "/api/staff/website/sections",
+                Map.of("hotelId", HOTEL, "slug", "experiences", "menuLabel", "즐길 거리", "menuOrder", 10, "menuVisible", true));
+        assertThat(created.get("contentKind").isNull()).isTrue();
+        assertThat(created.get("draftMetadata").get("path").asText()).isEqualTo("/stays/edited-section-test/experiences");
+        assertThat(created.get("draftMetadata").get("menuVisible").asBoolean()).isFalse();
+        assertThat(pages.landingDraft(token, HOTEL)).isEqualTo(before);
+        assertThat(pages.resolvePublished("/stays/published-section-test").content()).containsEntry("title", "유지할 공개 랜딩");
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/staff/website/sections")
+                .header("X-Staff-Session", token).contentType("application/json")
+                .content(json.writeValueAsString(Map.of("hotelId", HOTEL, "slug", "experiences", "menuLabel", "중복 섹션", "menuOrder", 0))))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isConflict());
+        assertThat(jdbc.queryForObject("select count(*) from website_page where hotel_id = ? and page_type = 'SECTION'", Integer.class, HOTEL)).isEqualTo(1);
+    }
+
+    private JsonNode cmsRequest(org.springframework.test.web.servlet.MockMvc mvc, String token, String method, String url, Object body) throws Exception {
+        var request = org.springframework.test.web.servlet.request.MockMvcRequestBuilders.request(org.springframework.http.HttpMethod.valueOf(method), url);
+        if (token != null) request.header("X-Staff-Session", token);
+        if (body != null) request.contentType("application/json").content(json.writeValueAsString(body));
+        return json.readTree(mvc.perform(request)
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andReturn().getResponse().getContentAsString(java.nio.charset.StandardCharsets.UTF_8));
     }
 
     @Test

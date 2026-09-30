@@ -108,6 +108,13 @@ export function ContentPageCreateDialog({ token, sections, catalog, onCreated }:
               </SelectContent>
             </Select>
           </label>
+          {sectionsForKind.length === 0 && (
+            <p role="status" className="text-sm text-muted-foreground">
+              {selectedKind.requiresHotel
+                ? "지점 섹션이 없습니다. 대화상자를 닫고 섹션 추가로 먼저 만들어 주세요."
+                : "선택 가능한 상위 섹션이 없습니다."}
+            </p>
+          )}
           {selectedKind.requiresHotel && (
             <p className="text-sm text-muted-foreground">
               {selectedHotel

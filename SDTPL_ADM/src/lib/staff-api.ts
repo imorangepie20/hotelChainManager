@@ -553,6 +553,16 @@ export type CreateWebsitePageInput = {
   page: WebsitePageDraftMetadata;
   content: Record<string, unknown>;
 };
+export type CreateWebsiteSectionInput = {
+  hotelId: string;
+  slug: string;
+  menuLabel: string;
+  menuOrder: number;
+};
+export type WebsiteSectionDocument = Omit<WebsitePageDocument, "pageType" | "contentKind"> & {
+  pageType: "SECTION";
+  contentKind: null;
+};
 export type SaveWebsitePageInput = {
   expectedDraftVersion: number;
   page: WebsitePageDraftMetadata;
@@ -1597,6 +1607,13 @@ export function createWebsitePage(
 ) {
   return contentRequest<WebsitePageDocument>(
     "/api/staff/website/pages",
+    token,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+export function createWebsiteSection(token: string, input: CreateWebsiteSectionInput) {
+  return contentRequest<WebsiteSectionDocument>(
+    "/api/staff/website/sections",
     token,
     { method: "POST", body: JSON.stringify(input) },
   );
