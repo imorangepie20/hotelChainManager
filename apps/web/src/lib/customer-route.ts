@@ -78,8 +78,8 @@ function resolveBaseRoute(pathname: string): CustomerRoute | null {
   const globalCollections = { '/offers': 'PROMOTION', '/guides': 'GUIDE', '/brand': 'BRAND' } as const
   const globalKind = globalCollections[normalizedPathname as keyof typeof globalCollections]
   if (globalKind) return { kind: 'collection', pathname: normalizedPathname, contentKind: globalKind }
-  const roomDetail = normalizedPathname.match(/^\/stays\/[a-z0-9]+(?:-[a-z0-9]+)*\/(rooms|dining|facilities|experiences)\/[a-z0-9]+(?:-[a-z0-9]+)*$/)
-  if (roomDetail) return { kind: 'page', pathname: normalizedPathname, segments: normalizedPathname.slice(1).split('/') }
+  const contentDetail = normalizedPathname.match(/^\/stays\/[a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*$/)
+  if (contentDetail) return { kind: 'page', pathname: normalizedPathname, segments: normalizedPathname.slice(1).split('/') }
   if (normalizedPathname.slice(1).split('/').length > 2) return null
 
   return {

@@ -22,6 +22,11 @@ export function runCustomerRouteTests() {
   expectEqual(resolveCustomerRoute('/en'), { kind: 'home', pathname: '/en', locale: 'en' }, '영어 홈 경로를 구분한다')
   expectEqual(resolveCustomerRoute('/en/stays/sokcho/rooms/suite'), { kind: 'page', pathname: '/en/stays/sokcho/rooms/suite', segments: ['stays', 'sokcho', 'rooms', 'suite'], locale: 'en' }, 'locale 접두사는 콘텐츠 깊이에 포함하지 않는다')
   expectEqual(resolveCustomerRoute('/en/stays/sokcho/rooms'), { kind: 'collection', pathname: '/en/stays/sokcho/rooms', hotelSlug: 'sokcho', contentKind: 'ROOM', locale: 'en' }, '영어 목록을 구분한다')
+  expectEqual(resolveCustomerRoute('/stays/sokcho/discover/pado-table'), { kind: 'page', pathname: '/stays/sokcho/discover/pado-table', segments: ['stays', 'sokcho', 'discover', 'pado-table'] }, 'CMS에서 생성한 사용자 정의 섹션의 발행 상세를 해석한다')
+  expectEqual(resolveCustomerRoute('/en/stays/jeju/local-stories/coastal-walk'), { kind: 'page', pathname: '/en/stays/jeju/local-stories/coastal-walk', segments: ['stays', 'jeju', 'local-stories', 'coastal-walk'], locale: 'en' }, '영어 사용자 정의 섹션의 발행 상세도 해석한다')
+  expectEqual(resolveCustomerRoute('/stays/sokcho/discover'), null, '구조적 사용자 정의 섹션 자체를 공개 상세로 취급하지 않는다')
+  expectEqual(resolveCustomerRoute('/stays/sokcho/discover/pado-table/extra'), null, '사용자 정의 섹션도 기존 최대 경로 깊이를 유지한다')
+  expectEqual(resolveCustomerRoute('/brand/stories/detail/extra'), null, '지점 밖 임의 네 단계 경로를 허용하지 않는다')
   expectEqual(normalizeCustomerPathname('/'), '/', '루트 경로를 유지한다')
   expectEqual(normalizeCustomerPathname('/stays/SOKCHO/'), '/stays/sokcho', '지점 슬러그를 정규화한다')
   expectEqual(
