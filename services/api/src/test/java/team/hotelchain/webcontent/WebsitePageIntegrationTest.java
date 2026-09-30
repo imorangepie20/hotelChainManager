@@ -41,6 +41,7 @@ class WebsitePageIntegrationTest {
     @Autowired WebsitePageManagementController pageManagement;
     @Autowired ContentPageValidator contentPages;
     @Autowired WebsitePageConnectionValidator connectionValidator;
+    @Autowired WebsiteMediaService media;
 
     @BeforeEach
     void seed() {
@@ -645,6 +646,54 @@ class WebsitePageIntegrationTest {
     }
 
     @Test
+    void returnsEnglishContentReferencesFromEnglishPublicationOnly() throws Exception {
+        StaffSessionView headquarters = staffAccess.login("pages-hq@example.com", "hq-password");
+        UUID parentId = hotelScopedSection();
+        WebsitePageDocument koreanOnly = pages.createContentPage(
+                headquarters.token(), parentId, ContentKind.DINING, HOTEL,
+                new WebsitePageDraftMetadata("korean-only-reference", "한국어 전용", true, 10),
+                typedContent(ContentKind.DINING), WebsitePageConnections.empty());
+        koreanOnly = pages.publishPage(
+                headquarters.token(), koreanOnly.id(), koreanOnly.draftVersion(), koreanOnly.publishedVersion());
+        WebsitePageDocument englishOnly = pages.createContentPage(
+                headquarters.token(), parentId, ContentKind.FACILITY, HOTEL,
+                new WebsitePageDraftMetadata("english-only-reference", "영어 미발행 원문", true, 20),
+                typedContent(ContentKind.FACILITY), WebsitePageConnections.empty());
+        jdbc.update("""
+                insert into website_page_translation (
+                    page_id, locale, draft_content, published_content, draft_connections, published_connections,
+                    draft_path, published_path, draft_menu_label, published_menu_label,
+                    draft_menu_visible, published_menu_visible, draft_menu_order, published_menu_order,
+                    draft_version, published_version, published_from_draft_version
+                ) values (?, 'en', ?::jsonb, ?::jsonb, '{}'::jsonb, '{}'::jsonb,
+                          '/en/stays/page-test/english-only-reference', '/en/stays/page-test/english-only-reference',
+                          'English draft', 'English only', true, true, 20, 20, 1, 1, 1)
+                """, englishOnly.id(), json.writeValueAsString(typedContent(ContentKind.FACILITY)),
+                json.writeValueAsString(typedContent(ContentKind.FACILITY)));
+
+        var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(pageManagement).build();
+        String response = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .get("/api/staff/website/content-reference")
+                        .param("locale", "en")
+                        .header("X-Staff-Session", headquarters.token()))
+                .andReturn().getResponse().getContentAsString();
+        ContentReferenceCatalog catalog = json.readValue(response, ContentReferenceCatalog.class);
+
+        assertThat(catalog.pages()).extracting(ContentReferenceCatalog.Page::id)
+                .contains(englishOnly.id())
+                .doesNotContain(koreanOnly.id());
+        assertThat(catalog.pages()).filteredOn(page -> page.id().equals(englishOnly.id())).singleElement()
+                .satisfies(page -> {
+                    assertThat(page.title()).isEqualTo("English only");
+                    assertThat(page.path()).isEqualTo("/en/stays/page-test/english-only-reference");
+                });
+        assertThat(pages.contentReference(headquarters.token()).pages())
+                .extracting(ContentReferenceCatalog.Page::id)
+                .contains(koreanOnly.id())
+                .doesNotContain(englishOnly.id());
+    }
+
+    @Test
     void servesOnlyPublishedTypedCardsAndConnections() {
         StaffSessionView session = staffAccess.login("pages-hq@example.com", "hq-password");
         UUID roomType = UUID.randomUUID();
@@ -688,6 +737,134 @@ class WebsitePageIntegrationTest {
 
         pages.archiveContentPage(session.token(), created.id(), lifecycleRequest(published));
         assertThat(pages.publishedCollection(hotelSlug(HOTEL), ContentKind.ROOM)).isEmpty();
+    }
+
+    @Test
+    void publishesSelectedLandingRecommendationsAsAnOrderedSnapshot() {
+        StaffSessionView session = staffAccess.login("pages-hq@example.com", "hq-password");
+        UUID parentId = hotelScopedSection();
+        WebsitePageDocument dining = pages.createContentPage(
+                session.token(), parentId, ContentKind.DINING, HOTEL,
+                new WebsitePageDraftMetadata("landing-dining", "추천 다이닝", true, 10), typedContent(ContentKind.DINING),
+                WebsitePageConnections.empty());
+        WebsitePageDocument facility = pages.createContentPage(
+                session.token(), parentId, ContentKind.FACILITY, HOTEL,
+                new WebsitePageDraftMetadata("landing-facility", "추천 시설", true, 20), typedContent(ContentKind.FACILITY),
+                WebsitePageConnections.empty());
+        dining = pages.publishPage(session.token(), dining.id(), dining.draftVersion(), dining.publishedVersion());
+        facility = pages.publishPage(session.token(), facility.id(), facility.draftVersion(), facility.publishedVersion());
+
+        WebsitePageDocument landing = pages.landingDraft(session.token(), HOTEL);
+        WebsitePageConnections recommendations = new WebsitePageConnections(List.of(), List.of(), List.of(
+                new WebsitePageRelation(facility.id(), "MANUAL_CARD", 0),
+                new WebsitePageRelation(dining.id(), "MANUAL_CARD", 1)));
+        landing = pages.saveLandingDraft(session.token(), HOTEL, landing.draftVersion(),
+                draftMetadata(landing), validContent("추천 랜딩"), recommendations);
+        landing = pages.publishLanding(session.token(), HOTEL, landing.draftVersion(), landing.publishedVersion());
+
+        PublishedWebsitePage first = pages.resolvePublished(landing.publishedMetadata().path());
+        assertThat(first.connections().relatedPages()).containsExactlyElementsOf(recommendations.relatedPages());
+        assertThat(first.content().get("recommendedExperiences")).isEqualTo(List.of(
+                Map.of("pageId", facility.id().toString(), "contentKind", "FACILITY",
+                        "path", "/stays/page-test/landing-facility", "title", "시설",
+                        "summary", "시설 상세 소개", "image", "/images/sokcho-coast-hero.png"),
+                Map.of("pageId", dining.id().toString(), "contentKind", "DINING",
+                        "path", "/stays/page-test/landing-dining", "title", "다이닝",
+                        "summary", "다이닝 상세 소개", "image", "/images/sokcho-coast-hero.png")));
+
+        WebsitePageDocument changedDining = pages.saveContentPageDraft(
+                session.token(), dining.id(), dining.draftVersion(), draftMetadata(dining),
+                diningContentWithTitle("새 다이닝 제목"), dining.draftConnections());
+        pages.publishPage(session.token(), dining.id(), changedDining.draftVersion(), changedDining.publishedVersion());
+
+        assertThat(pages.resolvePublished(landing.publishedMetadata().path()).content().get("recommendedExperiences"))
+                .isEqualTo(first.content().get("recommendedExperiences"));
+    }
+
+    @Test
+    void keepsUploadedRecommendationSnapshotImageInUseAfterDetailRepublish() {
+        StaffSessionView session = staffAccess.login("pages-hq@example.com", "hq-password");
+        WebsiteMediaAsset snapshotImage = uploadedAsset("추천 snapshot 이미지");
+        WebsiteMediaAsset replacementImage = uploadedAsset("상세 교체 이미지");
+        UUID parentId = hotelScopedSection();
+        WebsitePageDocument dining = pages.createContentPage(
+                session.token(), parentId, ContentKind.DINING, HOTEL,
+                new WebsitePageDraftMetadata("snapshot-media-dining", "snapshot 다이닝", true, 10),
+                diningContent(snapshotImage, "기존 상세 이미지"), WebsitePageConnections.empty());
+        dining = pages.publishPage(session.token(), dining.id(), dining.draftVersion(), dining.publishedVersion());
+
+        WebsitePageDocument landing = pages.landingDraft(session.token(), HOTEL);
+        landing = pages.saveLandingDraft(session.token(), HOTEL, landing.draftVersion(), draftMetadata(landing),
+                validContent("snapshot 미디어 랜딩"), connections(dining.id(), 0));
+        landing = pages.publishLanding(session.token(), HOTEL, landing.draftVersion(), landing.publishedVersion());
+
+        WebsitePageDocument changedDining = pages.saveContentPageDraft(
+                session.token(), dining.id(), dining.draftVersion(), draftMetadata(dining),
+                diningContent(replacementImage, "새 상세 이미지"), dining.draftConnections());
+        pages.publishPage(session.token(), dining.id(), changedDining.draftVersion(), changedDining.publishedVersion());
+
+        UUID landingId = landing.id();
+        assertThat(media.usages(session.token(), snapshotImage.id())).singleElement().satisfies(usage -> {
+            assertThat(usage.pageId()).isEqualTo(landingId);
+            assertThat(usage.documentState()).isEqualTo("PUBLISHED");
+            assertThat(usage.fieldPath()).isEqualTo("recommendedExperiences[0].image");
+        });
+        assertThatThrownBy(() -> media.archive(session.token(), snapshotImage.id(),
+                new WebsiteMediaVersionRequest(snapshotImage.version())))
+                .isInstanceOf(WebsiteMediaConflictException.class)
+                .extracting(error -> ((WebsiteMediaConflictException) error).code())
+                .isEqualTo("WEBSITE_MEDIA_IN_USE");
+    }
+
+    @Test
+    void rejectsInvalidLandingRecommendationBoundaries() {
+        StaffSessionView session = staffAccess.login("pages-hq@example.com", "hq-password");
+        UUID otherHotel = UUID.randomUUID();
+        jdbc.update("insert into hotel values (?, '다른 추천 호텔', '제주', 'Asia/Seoul')", otherHotel);
+        UUID parentId = hotelScopedSection(HOTEL, "landing-boundaries");
+        UUID otherParentId = hotelScopedSection(otherHotel, "foreign-boundaries");
+        WebsitePageDocument dining = pages.createContentPage(
+                session.token(), parentId, ContentKind.DINING, HOTEL,
+                new WebsitePageDraftMetadata("boundary-dining", "경계 다이닝", true, 10),
+                typedContent(ContentKind.DINING), WebsitePageConnections.empty());
+        WebsitePageDocument guide = pages.createContentPage(
+                session.token(), parentId, ContentKind.GUIDE, HOTEL,
+                new WebsitePageDraftMetadata("boundary-guide", "경계 안내", true, 20),
+                typedContent(ContentKind.GUIDE), WebsitePageConnections.empty());
+        WebsitePageDocument foreignDining = pages.createContentPage(
+                session.token(), otherParentId, ContentKind.DINING, otherHotel,
+                new WebsitePageDraftMetadata("foreign-dining", "다른 지점 다이닝", true, 10),
+                typedContent(ContentKind.DINING), WebsitePageConnections.empty());
+        WebsitePageDocument landing = pages.landingDraft(session.token(), HOTEL);
+
+        assertThatThrownBy(() -> pages.saveLandingDraft(session.token(), HOTEL, landing.draftVersion(),
+                draftMetadata(landing), validContent("다른 지점 추천"), connections(foreignDining.id(), 0)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("같은 지점");
+        assertThatThrownBy(() -> pages.saveLandingDraft(session.token(), HOTEL, landing.draftVersion(),
+                draftMetadata(landing), validContent("비허용 추천"), connections(guide.id(), 0)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("다이닝·부대시설·체험");
+        WebsitePageConnections tooMany = new WebsitePageConnections(List.of(), List.of(), List.of(
+                new WebsitePageRelation(dining.id(), "MANUAL_CARD", 0),
+                new WebsitePageRelation(dining.id(), "MANUAL_CARD", 1),
+                new WebsitePageRelation(dining.id(), "MANUAL_CARD", 2),
+                new WebsitePageRelation(dining.id(), "MANUAL_CARD", 3)));
+        assertThatThrownBy(() -> pages.saveLandingDraft(session.token(), HOTEL, landing.draftVersion(),
+                draftMetadata(landing), validContent("추천 네 개"), tooMany))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("최대 3개");
+        assertThatThrownBy(() -> pages.saveLandingDraft(session.token(), HOTEL, landing.draftVersion(),
+                draftMetadata(landing), validContent("잘못된 순서"), connections(dining.id(), 1)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("0부터 연속");
+
+        WebsitePageDocument saved = pages.saveLandingDraft(session.token(), HOTEL, landing.draftVersion(),
+                draftMetadata(landing), validContent("미발행 추천"), connections(dining.id(), 0));
+        assertThatThrownBy(() -> pages.publishLanding(session.token(), HOTEL,
+                saved.draftVersion(), saved.publishedVersion()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("공개할 수 없습니다");
     }
 
     @Test
@@ -1247,6 +1424,10 @@ class WebsitePageIntegrationTest {
     }
 
     private UUID hotelScopedSection() {
+        return hotelScopedSection(HOTEL, "page-test");
+    }
+
+    private UUID hotelScopedSection(UUID hotelId, String slug) {
         UUID id = UUID.randomUUID();
         jdbc.update("""
                 insert into website_page (
@@ -1255,10 +1436,15 @@ class WebsitePageIntegrationTest {
                     draft_menu_label, published_menu_label, draft_menu_visible, published_menu_visible,
                     draft_menu_order, published_menu_order, draft_content, published_content,
                     draft_version, published_version, published_from_draft_version
-                ) values (?, ?, null, 'SECTION', null, 'page-test', 'page-test', '/stays/page-test', '/stays/page-test',
+                ) values (?, ?, null, 'SECTION', null, ?, ?, ?, ?,
                           '테스트 상세', '테스트 상세', true, true, 1, 1, '{}'::jsonb, '{}'::jsonb, 1, 1, 1)
-                """, id, HOTEL);
+                """, id, hotelId, slug, slug, "/stays/" + slug, "/stays/" + slug);
         return id;
+    }
+
+    private WebsitePageConnections connections(UUID targetId, int displayOrder) {
+        return new WebsitePageConnections(List.of(), List.of(), List.of(
+                new WebsitePageRelation(targetId, "MANUAL_CARD", displayOrder)));
     }
 
     private UUID brandSubsection(String slug, String label) {
@@ -1372,6 +1558,33 @@ class WebsitePageIntegrationTest {
                 hero(blockId(), "다이닝", "/images/sokcho-coast-hero.png"), gallery()));
         if (includeHours) blocks.add(operatingHours());
         return document(blocks);
+    }
+
+    private Map<String, Object> diningContent(WebsiteMediaAsset asset, String imageAlt) {
+        return document(List.of(
+                Map.ofEntries(
+                        Map.entry("blockId", blockId()), Map.entry("type", "HERO"),
+                        Map.entry("imageAssetId", asset.id().toString()), Map.entry("imageSrc", asset.deliveryUrl()),
+                        Map.entry("imageAlt", imageAlt), Map.entry("eyebrow", "STAY HANEUL"),
+                        Map.entry("title", "다이닝"), Map.entry("description", "다이닝 상세 소개")),
+                gallery(), operatingHours()));
+    }
+
+    private WebsiteMediaAsset uploadedAsset(String displayName) {
+        UUID assetId = UUID.randomUUID();
+        String deliveryPath = "/api/website/media/" + assetId + "/content";
+        jdbc.update("""
+                insert into website_media_asset (
+                    id, origin, delivery_path, storage_key, display_name, default_alt_text,
+                    mime_type, byte_size, width, height, status, version
+                ) values (?, 'UPLOADED', ?, ?, ?, ?, 'image/jpeg', 1000, 1600, 900, 'ACTIVE', 1)
+                """, assetId, deliveryPath, assetId + ".jpg", displayName, displayName);
+        return new WebsiteMediaAsset(assetId, displayName, deliveryPath, "image/jpeg", 1000, 1600, 900,
+                displayName, 0, "ACTIVE", 1, null, null, List.of());
+    }
+
+    private Map<String, Object> diningContentWithTitle(String title) {
+        return document(List.of(hero(blockId(), title, "/images/sokcho-coast-hero.png"), gallery(), operatingHours()));
     }
 
     private Map<String, Object> document(List<Map<String, Object>> blocks) {

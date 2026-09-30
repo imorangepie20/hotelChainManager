@@ -52,8 +52,10 @@ public class WebsitePageManagementController {
     }
 
     @GetMapping("/content-reference")
-    public ContentReferenceCatalog contentReference(@RequestHeader("X-Staff-Session") String token) {
-        return pages.contentReference(token);
+    public ContentReferenceCatalog contentReference(
+            @RequestParam(defaultValue = "ko") String locale,
+            @RequestHeader("X-Staff-Session") String token) {
+        return pages.contentReference(token, locale);
     }
 
     @PostMapping("/pages")

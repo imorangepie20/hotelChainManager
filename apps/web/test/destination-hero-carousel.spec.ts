@@ -34,11 +34,11 @@ const transparentPng = Buffer.from(
   'base64',
 )
 
-async function mockLanding(page: Page) {
+async function mockLanding(page: Page, content: Record<string, unknown> = landing) {
   await page.route('**/api/**', async route => {
     const url = new URL(route.request().url())
     if (url.pathname === '/api/hotels') return route.fulfill({ json: [hotel] })
-    if (url.pathname === '/api/hotels/sokcho/content') return route.fulfill({ json: landing })
+    if (url.pathname === '/api/hotels/sokcho/content') return route.fulfill({ json: content })
     if (url.pathname === '/api/website/navigation') return route.fulfill({ json: [] })
     if (url.pathname === '/api/website/pages/resolve') return route.fulfill({ status: 404, json: { code: 'NOT_FOUND', message: '없음' } })
     if (/^\/api\/website\/media\/[0-9a-f-]+\/(content|variants\/1280\.webp)$/.test(url.pathname)) {
@@ -47,6 +47,29 @@ async function mockLanding(page: Page) {
     return route.fulfill({ status: 404, json: { code: 'NOT_FOUND', message: '없음' } })
   })
 }
+
+test('links published recommendation cards to their detail pages', async ({ page }) => {
+  const detailPageId = '823e4567-e89b-12d3-a456-426614174000'
+  await mockLanding(page, {
+    ...landing,
+    experiences: [{ category: 'LEGACY', title: '이전 카드', description: '이전 설명' }],
+    recommendedExperiences: [{
+      pageId: detailPageId,
+      contentKind: 'DINING',
+      path: '/stays/sokcho/dining',
+      title: '동해 다이닝',
+      summary: '제철 식재료를 담은 식사',
+      image: '/images/sokcho-coast-hero.png',
+    }],
+  })
+  await page.goto('/')
+
+  const card = page.getByRole('link', { name: /동해 다이닝/ })
+  await expect(card).toHaveAttribute('href', '/stays/sokcho/dining')
+  await expect(card.getByRole('img', { name: '동해 다이닝' })).toHaveAttribute('src', '/images/sokcho-coast-hero.png')
+  await expect(card).toContainText('제철 식재료를 담은 식사')
+  await expect(page.getByText('이전 카드', { exact: true })).toHaveCount(0)
+})
 
 async function currentSlide(page: Page, position: number) {
   await expect(page.getByRole('button', { name: `메인 이미지 ${position} 보기` })).toHaveAttribute('aria-current', 'true')

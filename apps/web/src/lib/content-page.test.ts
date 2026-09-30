@@ -103,6 +103,24 @@ export function runContentPageTests() {
     heroAlt: '속초 해안',
   })
   expectEqual(staticLanding.heroImage, '/images/sokcho-coast-hero.png', '자산 UUID가 있는 내장 랜딩 이미지를 사용한다')
+  const recommendedExperiences = [
+    { pageId: bundledAssetId, contentKind: 'DINING', path: '/stays/sokcho/dining', title: '동해 다이닝', summary: '제철 식재료를 담은 식사', image: '/images/sokcho-coast-hero.png' },
+    { pageId: uploadedAssetId, contentKind: 'FACILITY', path: '/stays/sokcho/spa', title: '오션 스파', summary: '바다를 바라보는 휴식', image: `/api/website/media/${uploadedAssetId}/content` },
+  ]
+  const recommendedLanding = destinationContentFromPublished('속초', {
+    title: '추천 랜딩',
+    experiences: [{ category: 'LEGACY', title: '이전 카드', description: '이전 설명' }],
+    recommendedExperiences,
+  })
+  expectEqual(recommendedLanding.experiences, [
+    { category: 'DINING', title: '동해 다이닝', description: '제철 식재료를 담은 식사', href: '/stays/sokcho/dining', image: '/images/sokcho-coast-hero.png' },
+    { category: 'FACILITY', title: '오션 스파', description: '바다를 바라보는 휴식', href: '/stays/sokcho/spa', image: `/api/website/media/${uploadedAssetId}/content` },
+  ], '추천 상세 페이지 snapshot을 기존 자유 입력 카드보다 우선한다')
+  expectEqual(destinationContentFromPublished('속초', {
+    title: '안전하지 않은 추천',
+    experiences: [{ category: 'LEGACY', title: '안전한 이전 카드', description: '이전 설명' }],
+    recommendedExperiences: [{ ...recommendedExperiences[0], path: 'https://example.com/phishing' }],
+  }).experiences, [{ category: 'LEGACY', title: '안전한 이전 카드', description: '이전 설명' }], '외부 추천 링크는 기존 카드로 되돌린다')
   expectEqual(destinationContentByRegion('설악산').heroImage, '/images/seoraksan-forest-hero.png', '설악산은 지점별 기본 히어로 이미지를 사용한다')
   expectEqual(destinationContentByRegion('제주도').heroImage, '/images/jeju-island-hero.png', '제주도는 지점별 기본 히어로 이미지를 사용한다')
 

@@ -260,19 +260,22 @@ public class WebsiteTranslationService {
             throw new BusinessConflictException("WEBSITE_TRANSLATION_REVIEW_STALE",
                     "승인된 초안이 변경되었습니다. 다시 검토를 요청해 주세요.");
         }
-        normalize(source, current.draftContent(), current.draftConnections(), true);
+        Map<String, Object> normalized = normalize(source, current.draftContent(), current.draftConnections(), true);
+        Map<String, Object> publishedContent = source.pageType().equals("HOTEL_LANDING")
+                ? landingContentWithRecommendations(normalized, current.draftConnections())
+                : normalized;
         rejectCollision(pageId, current.draftMetadata().path());
         if (current.publishedMetadata() != null && !current.publishedMetadata().path().equals(current.draftMetadata().path())) {
             createRedirect(pageId, actor, current.publishedMetadata().path(), current.draftMetadata().path());
         }
         jdbc.update("""
-                update website_page_translation set published_content = draft_content, published_connections = draft_connections,
+                update website_page_translation set published_content = ?::jsonb, published_connections = draft_connections,
                     published_path = draft_path, published_menu_label = draft_menu_label,
                     published_menu_visible = draft_menu_visible, published_menu_order = draft_menu_order,
                     published_version = published_version + 1, published_from_draft_version = draft_version,
                     review_status = 'PUBLISHED',
                     updated_at = current_timestamp, updated_by = ? where page_id = ? and locale = 'en'
-                """, actor, pageId);
+                """, stringify(publishedContent), actor, pageId);
         Translation published = translation(pageId);
         media.synchronize(pageId, source.pageType(), "en", "PUBLISHED", published.publishedContent());
         WebsitePageDocument result = document(source, published);
@@ -411,12 +414,21 @@ public class WebsiteTranslationService {
     }
 
     private Map<String, Object> normalize(WebsitePageDocument source, Map<String, Object> content, WebsitePageConnections connections, boolean publishing) {
-        if (!source.pageType().equals("CONTENT_PAGE") && !WebsitePageConnections.empty().equals(connections)) {
-            throw new IllegalArgumentException("홈과 지점 랜딩에는 콘텐츠 연결을 둘 수 없습니다.");
+        if (source.pageType().equals("HOME_PAGE") && !WebsitePageConnections.empty().equals(connections)) {
+            throw new IllegalArgumentException("홈에는 콘텐츠 연결을 둘 수 없습니다.");
         }
         if (source.pageType().equals("HOTEL_LANDING")) WebContentService.validateLandingStructure(content);
         Map<String, Object> normalized = source.pageType().equals("HOTEL_LANDING") ? media.normalizeLandingContent(content) : media.normalizeStructuredContent(content);
-        if (source.pageType().equals("HOTEL_LANDING")) WebContentService.validateLandingContent(normalized);
+        if (source.pageType().equals("HOTEL_LANDING")) {
+            WebContentService.validateLandingContent(normalized);
+            connectionValidator.validateLandingRecommendations(source.id(), source.hotelId(), connections, false);
+            if (publishing) {
+                List<UUID> publishedTargets = publishedRows().stream().map(PublishedRow::id).toList();
+                if (connections.relatedPages().stream().anyMatch(relation -> !publishedTargets.contains(relation.targetPageId()))) {
+                    throw new IllegalArgumentException("추천 상세 페이지의 영어 발행본이 필요합니다.");
+                }
+            }
+        }
         else if (source.pageType().equals("HOME_PAGE")) contentValidator.validate(normalized);
         else {
             contentValidator.validate(source.contentKind(), normalized);
@@ -430,6 +442,44 @@ public class WebsiteTranslationService {
             }
         }
         return normalized;
+    }
+
+    private Map<String, Object> landingContentWithRecommendations(Map<String, Object> content,
+            WebsitePageConnections connections) {
+        Map<String, Object> snapshot = new LinkedHashMap<>(content);
+        Map<UUID, PublishedRow> published = new LinkedHashMap<>();
+        for (PublishedRow row : publishedRows()) published.put(row.id(), row);
+        List<Map<String, Object>> cards = connections.relatedPages().stream()
+                .filter(relation -> "MANUAL_CARD".equals(relation.relationType()))
+                .sorted(java.util.Comparator.comparingInt(WebsitePageRelation::displayOrder))
+                .map(relation -> recommendationCard(published.get(relation.targetPageId())))
+                .toList();
+        if (cards.isEmpty()) snapshot.remove("recommendedExperiences");
+        else snapshot.put("recommendedExperiences", cards);
+        return snapshot;
+    }
+
+    private Map<String, Object> recommendationCard(PublishedRow target) {
+        if (target == null || !(target.translation().publishedContent().get("blocks") instanceof List<?> blocks)) {
+            throw new IllegalArgumentException("추천 상세 페이지의 영어 발행본이 필요합니다.");
+        }
+        for (Object value : blocks) {
+            if (!(value instanceof Map<?, ?> block) || !"HERO".equals(block.get("type"))) continue;
+            if (!(block.get("title") instanceof String title) || title.isBlank()
+                    || !(block.get("description") instanceof String summary) || summary.isBlank()
+                    || !(block.get("imageSrc") instanceof String image) || image.isBlank()) {
+                break;
+            }
+            Map<String, Object> card = new LinkedHashMap<>();
+            card.put("pageId", target.id().toString());
+            card.put("contentKind", target.kind().name());
+            card.put("path", target.translation().publishedMetadata().path());
+            card.put("title", title);
+            card.put("summary", summary);
+            card.put("image", image);
+            return Map.copyOf(card);
+        }
+        throw new IllegalArgumentException("추천 상세 페이지의 영어 발행본에서 대표 카드를 만들 수 없습니다.");
     }
 
     private boolean hasTranslationPath(UUID target, UUID current, boolean published, HashSet<UUID> visited) {

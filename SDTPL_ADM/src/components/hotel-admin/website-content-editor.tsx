@@ -41,6 +41,7 @@ import {
   type WebsitePageMetadata,
   type WebsitePageTreeItem,
   type WebsitePageDocument,
+  type WebsitePageConnections,
   type ContentReferenceCatalog,
   type WebContentVersion,
 } from "@/lib/staff-api";
@@ -58,6 +59,7 @@ const hotels = [
 ];
 
 const customerWebOrigin = (process.env.NEXT_PUBLIC_CUSTOMER_WEB_ORIGIN ?? "http://127.0.0.1:4000").replace(/\/$/, "");
+const emptyConnections = (): WebsitePageConnections => ({ roomTypeIds: [], targetHotelIds: [], relatedPages: [] });
 
 type ContentRecord = Record<string, unknown>;
 
@@ -144,6 +146,7 @@ export function WebsiteContentEditor() {
   const [publishedVersion, setPublishedVersion] = useState(1);
   const [draftPage, setDraftPage] = useState<WebsitePageDraftMetadata>(() => defaultDraftPage(hotels[0].id));
   const [publishedPage, setPublishedPage] = useState<WebsitePageMetadata | null>(null);
+  const [draftConnections, setDraftConnections] = useState<WebsitePageConnections>(emptyConnections);
   const [versions, setVersions] = useState<WebContentVersion[]>([]);
   const [pageTree, setPageTree] = useState<WebsitePageTreeItem[]>([]);
   const [referenceCatalog, setReferenceCatalog] = useState<ContentReferenceCatalog>({ hotels: [], pages: [] });
@@ -155,11 +158,11 @@ export function WebsiteContentEditor() {
   const [busy, setBusy] = useState(false);
   const landingLoadRequest = useRef(0);
   const landingEditGeneration = useRef(0);
+  const referenceCatalogRequest = useRef(0);
   const token = typeof window === "undefined" ? null : window.localStorage.getItem("hotel-chain-staff-session");
   const content = parseContent(value);
   const arrival = recordValue(content, "arrival");
   const seo = recordValue(content, "seo");
-  const experiences = recordsValue(content, "experiences");
   const offers = recordsValue(content, "offers");
   const selectedHotel = hotels.find((hotel) => hotel.id === hotelId)?.name ?? "지점";
   const seoPreviewTitle = textValue(seo, "title") || `${selectedHotel} | STAY HANEUL`;
@@ -173,6 +176,11 @@ export function WebsiteContentEditor() {
     && contentPage.lifecycleStatus === "ACTIVE"
     && !contentDirty
     && !newContentPage;
+  const recommendationRelations = draftConnections.relatedPages
+    .filter((relation) => relation.relationType === "MANUAL_CARD")
+    .sort((left, right) => left.displayOrder - right.displayOrder);
+  const recommendationPages = referenceCatalog.pages.filter((page) => page.hotelId === hotelId
+    && (["DINING", "FACILITY", "EXPERIENCE"] as const).includes(page.contentKind as "DINING" | "FACILITY" | "EXPERIENCE"));
 
   function changeDocument(update: (next: ContentRecord) => void) {
     const next = structuredClone(parseContent(value));
@@ -212,7 +220,7 @@ export function WebsiteContentEditor() {
     setError("");
   }
 
-  function changeListItem(listKey: "experiences" | "offers", index: number, key: string, nextValue: string) {
+  function changeListItem(listKey: "offers", index: number, key: string, nextValue: string) {
     changeDocument((next) => {
       const items = recordsValue(next, listKey);
       items[index] = { ...items[index], [key]: nextValue };
@@ -220,23 +228,54 @@ export function WebsiteContentEditor() {
     });
   }
 
-  function addListItem(listKey: "experiences" | "offers") {
+  function addListItem(listKey: "offers") {
     changeDocument((next) => {
       const items = recordsValue(next, listKey);
-      items.push(listKey === "experiences"
-        ? { category: "EXPERIENCE", title: "", description: "" }
-        : { title: "", detail: "", bookingPeriod: "", stayPeriod: "" });
+      items.push({ title: "", detail: "", bookingPeriod: "", stayPeriod: "" });
       next[listKey] = items;
     });
   }
 
-  function removeListItem(listKey: "experiences" | "offers", index: number) {
+  function changeRecommendations(update: (current: WebsitePageConnections["relatedPages"]) => WebsitePageConnections["relatedPages"]) {
+    setDraftConnections((current) => ({
+      roomTypeIds: [],
+      targetHotelIds: [],
+      relatedPages: update(current.relatedPages
+        .filter((relation) => relation.relationType === "MANUAL_CARD")
+        .sort((left, right) => left.displayOrder - right.displayOrder))
+        .map((relation, displayOrder) => ({ ...relation, displayOrder })),
+    }));
+    landingEditGeneration.current += 1;
+    setDirty(true);
+    setNotice("");
+    setError("");
+  }
+
+  function toggleRecommendation(targetPageId: string, selected: boolean) {
+    changeRecommendations((current) => selected
+      ? current.length >= 3 || current.some((relation) => relation.targetPageId === targetPageId)
+        ? current
+        : [...current, { targetPageId, relationType: "MANUAL_CARD", displayOrder: current.length }]
+      : current.filter((relation) => relation.targetPageId !== targetPageId));
+  }
+
+  function moveRecommendation(index: number, direction: -1 | 1) {
+    changeRecommendations((current) => {
+      const next = [...current];
+      const destination = index + direction;
+      if (destination < 0 || destination >= next.length) return current;
+      [next[index], next[destination]] = [next[destination], next[index]];
+      return next;
+    });
+  }
+
+  function removeListItem(listKey: "offers", index: number) {
     changeDocument((next) => {
       next[listKey] = recordsValue(next, listKey).filter((_, itemIndex) => itemIndex !== index);
     });
   }
 
-  function moveListItem(listKey: "experiences" | "offers", index: number, direction: -1 | 1) {
+  function moveListItem(listKey: "offers", index: number, direction: -1 | 1) {
     changeDocument((next) => {
       const items = recordsValue(next, listKey);
       const destination = index + direction;
@@ -254,11 +293,10 @@ export function WebsiteContentEditor() {
     setError("");
     setNotice("");
     try {
-      const [document, history, tree, catalog] = await Promise.all([
+      const [document, history, tree] = await Promise.all([
         getWebContent(token, hotelId),
         getWebContentVersions(token, hotelId),
         getWebsitePageTree(token).catch(() => [] as WebsitePageTreeItem[]),
-        getContentReferenceCatalog(token).catch(() => null),
       ]);
       if (request !== landingLoadRequest.current || editGeneration !== landingEditGeneration.current) return;
       setValue(JSON.stringify(document.draftContent, null, 2));
@@ -267,10 +305,9 @@ export function WebsiteContentEditor() {
       setPublishedVersion(document.publishedVersion);
       setDraftPage(toDraftPage(document.draftPage, hotelId));
       setPublishedPage(document.publishedPage ?? null);
+      setDraftConnections(document.draftConnections ?? emptyConnections());
       setVersions(history);
       setPageTree(tree);
-      if (catalog) { setReferenceCatalog(catalog); setReferenceError(""); }
-      else setReferenceError("콘텐츠 선택 정보를 불러오지 못했습니다. 다시 시도해 주세요.");
       const landingPage = tree.flatMap((section) => section.children).find((page) => page.hotelId === hotelId);
       const firstLeaf = tree.flatMap((section) => section.children)[0];
       const homePage = tree.find((page) => page.pageType === "HOME_PAGE");
@@ -295,6 +332,22 @@ export function WebsiteContentEditor() {
   useEffect(() => {
     void load();
   }, [hotelId]);
+
+  useEffect(() => {
+    if (!token) return;
+    const request = ++referenceCatalogRequest.current;
+    void getContentReferenceCatalog(token, locale)
+      .then((catalog) => {
+        if (request !== referenceCatalogRequest.current) return;
+        setReferenceCatalog(catalog);
+        setReferenceError("");
+      })
+      .catch(() => {
+        if (request === referenceCatalogRequest.current) {
+          setReferenceError("콘텐츠 선택 정보를 불러오지 못했습니다. 다시 시도해 주세요.");
+        }
+      });
+  }, [locale, token]);
 
   async function loadContentPage(pageId: string) {
     if (!token) return;
@@ -406,12 +459,13 @@ export function WebsiteContentEditor() {
     setNotice("");
     setError("");
     try {
-      const document = await saveWebContent(token, hotelId, draftVersion, content, draftPage);
+      const document = await saveWebContent(token, hotelId, draftVersion, content, draftPage, draftConnections);
       setValue(JSON.stringify(document.draftContent, null, 2));
       setDirty(false);
       setDraftVersion(document.draftVersion);
       setDraftPage(toDraftPage(document.draftPage, hotelId));
       setPublishedPage(document.publishedPage ?? null);
+      setDraftConnections(document.draftConnections ?? draftConnections);
       if (document.draftPage) {
         setPageTree((current) => current.map((section) => ({
           ...section,
@@ -487,7 +541,7 @@ export function WebsiteContentEditor() {
             초안을 저장한 뒤 발행하면 고객 웹에 노출됩니다. 예약·요금·재고는 이 화면에서 수정하지 않습니다.
           </p>
           {dirty && <p className="mt-2 text-sm font-medium text-amber-700">저장되지 않은 변경사항이 있습니다.</p>}
-          {referenceError && <p role="status" className="mt-2 text-sm text-destructive">{referenceError} <Button type="button" variant="link" className="h-auto px-0" onClick={() => void getContentReferenceCatalog(token ?? "").then((catalog) => { setReferenceCatalog(catalog); setReferenceError(""); }).catch(() => setReferenceError("콘텐츠 선택 정보를 불러오지 못했습니다. 다시 시도해 주세요."))}>다시 시도</Button></p>}
+          {referenceError && <p role="status" className="mt-2 text-sm text-destructive">{referenceError} <Button type="button" variant="link" className="h-auto px-0" onClick={() => void getContentReferenceCatalog(token ?? "", locale).then((catalog) => { setReferenceCatalog(catalog); setReferenceError(""); }).catch(() => setReferenceError("콘텐츠 선택 정보를 불러오지 못했습니다. 다시 시도해 주세요."))}>다시 시도</Button></p>}
         </div>
         <div className="flex flex-wrap gap-2">
           {localeControls}
@@ -621,22 +675,31 @@ export function WebsiteContentEditor() {
             </section>
 
             <section className="space-y-4 rounded-xl border p-4">
-              <div className="flex items-center justify-between gap-3"><div><h2 className="font-semibold">경험</h2><p className="text-xs text-muted-foreground">객실·다이닝·체험 카드를 관리합니다.</p></div><Button type="button" size="sm" variant="outline" onClick={() => addListItem("experiences")}><Plus /> 추가</Button></div>
-              {experiences.map((item, index) => (
-                <div key={index} className="grid gap-3 rounded-lg bg-muted/30 p-3 md:grid-cols-2">
-                  <div className="flex items-center justify-between gap-2 md:col-span-2">
-                    <p className="text-sm font-medium">경험 카드 {index + 1}</p>
-                    <div className="flex gap-1">
-                      <Button type="button" variant="ghost" size="icon-sm" aria-label={`경험 ${index + 1} 위로 이동`} disabled={index === 0} onClick={() => moveListItem("experiences", index, -1)}><ChevronUp /></Button>
-                      <Button type="button" variant="ghost" size="icon-sm" aria-label={`경험 ${index + 1} 아래로 이동`} disabled={index === experiences.length - 1} onClick={() => moveListItem("experiences", index, 1)}><ChevronDown /></Button>
+              <div><h2 className="font-semibold">추천 즐길 거리</h2><p className="text-xs text-muted-foreground">같은 지점에서 발행된 다이닝·부대시설·체험 페이지를 최대 3개 선택합니다. 카드 문구와 이미지는 상세 페이지 발행본을 사용합니다.</p></div>
+              {recommendationRelations.length > 0 && <ol className="space-y-2" aria-label="선택한 추천 순서">
+                {recommendationRelations.map((relation, index) => {
+                  const page = referenceCatalog.pages.find((candidate) => candidate.id === relation.targetPageId);
+                  return <li key={relation.targetPageId} className="flex min-w-0 items-center justify-between gap-3 rounded-lg bg-muted/30 p-3">
+                    <div className="min-w-0"><p className="truncate text-sm font-medium">{index + 1}. {page?.title ?? "선택할 수 없는 상세 페이지"}</p><p className="truncate text-xs text-muted-foreground">{page?.path ?? relation.targetPageId}</p></div>
+                    <div className="flex shrink-0 gap-1">
+                      <Button type="button" variant="ghost" size="icon-sm" aria-label={`추천 ${index + 1} 위로 이동`} disabled={index === 0} onClick={() => moveRecommendation(index, -1)}><ChevronUp /></Button>
+                      <Button type="button" variant="ghost" size="icon-sm" aria-label={`추천 ${index + 1} 아래로 이동`} disabled={index === recommendationRelations.length - 1} onClick={() => moveRecommendation(index, 1)}><ChevronDown /></Button>
+                      <Button type="button" variant="ghost" size="icon-sm" aria-label={`추천 ${index + 1} 제거`} onClick={() => toggleRecommendation(relation.targetPageId, false)}><Trash2 /></Button>
                     </div>
-                  </div>
-                  <EditorField label={`경험 ${index + 1} 분류`} value={textValue(item, "category")} onChange={(next) => changeListItem("experiences", index, "category", next)} />
-                  <EditorField label={`경험 ${index + 1} 제목`} value={textValue(item, "title")} onChange={(next) => changeListItem("experiences", index, "title", next)} />
-                  <div className="md:col-span-2"><EditorField multiline label={`경험 ${index + 1} 설명`} value={textValue(item, "description")} onChange={(next) => changeListItem("experiences", index, "description", next)} /></div>
-                  <Button type="button" size="sm" variant="ghost" className="justify-self-end text-destructive md:col-span-2" onClick={() => removeListItem("experiences", index)}><Trash2 /> 삭제</Button>
-                </div>
-              ))}
+                  </li>;
+                })}
+              </ol>}
+              <div className="grid gap-2 md:grid-cols-2">
+                {recommendationPages.map((page) => {
+                  const selected = recommendationRelations.some((relation) => relation.targetPageId === page.id);
+                  return <label key={page.id} className="flex min-w-0 items-start gap-3 rounded-lg border p-3 text-sm">
+                    <input type="checkbox" aria-label={`${page.title} 추천`} checked={selected} disabled={!selected && recommendationRelations.length >= 3} onChange={(event) => toggleRecommendation(page.id, event.target.checked)} className="mt-0.5 size-4 shrink-0 accent-primary" />
+                    <span className="min-w-0"><span className="block font-medium">{page.title}</span><span className="block truncate text-xs text-muted-foreground">{page.path}</span></span>
+                  </label>;
+                })}
+              </div>
+              {recommendationPages.length === 0 && <p className="text-sm text-muted-foreground">선택할 수 있는 발행 상세 페이지가 없습니다.</p>}
+              <p className="text-xs text-muted-foreground">{recommendationRelations.length}/3개 선택</p>
             </section>
 
             <section className="space-y-4 rounded-xl border p-4">
@@ -791,18 +854,19 @@ export function WebsiteContentEditor() {
                 </div>
               </section>
 
-              {experiences.length > 0 && (
+              {recommendationRelations.length > 0 && (
                 <section>
                   <p className="text-xs font-semibold tracking-[0.18em] text-primary">EXPERIENCES</p>
                   <h2 className="mt-2 text-2xl font-semibold">머무는 동안의 경험</h2>
                   <div className="mt-5 grid gap-3 sm:grid-cols-3">
-                    {experiences.map((item, index) => (
-                      <div key={index} className="rounded-xl border bg-muted/30 p-4">
-                        <p className="text-xs font-semibold tracking-[0.14em] text-primary">{textValue(item, "category")}</p>
-                        <h3 className="mt-3 font-semibold">{textValue(item, "title")}</h3>
-                        <p className="mt-2 text-sm leading-6 text-muted-foreground">{textValue(item, "description")}</p>
-                      </div>
-                    ))}
+                    {recommendationRelations.map((relation) => {
+                      const page = referenceCatalog.pages.find((candidate) => candidate.id === relation.targetPageId);
+                      return <div key={relation.targetPageId} className="rounded-xl border bg-muted/30 p-4">
+                        <p className="text-xs font-semibold tracking-[0.14em] text-primary">{page?.contentKind ?? "EXPERIENCE"}</p>
+                        <h3 className="mt-3 font-semibold">{page?.title ?? "선택한 상세 페이지"}</h3>
+                        <p className="mt-2 text-sm leading-6 text-muted-foreground">{page?.path ?? relation.targetPageId}</p>
+                      </div>;
+                    })}
                   </div>
                 </section>
               )}

@@ -482,6 +482,8 @@ export type WebContentDocument = {
   publishedVersion: number;
   draftPage?: WebsitePageMetadata | null;
   publishedPage?: WebsitePageMetadata | null;
+  draftConnections: WebsitePageConnections;
+  publishedConnections: WebsitePageConnections;
 };
 export type WebContentVersion = { version: number; publishedAt: string };
 export type WebsitePageVersionSnapshot = {
@@ -1338,6 +1340,7 @@ export function saveWebContent(
   expectedDraftVersion: number,
   content: Record<string, unknown>,
   page?: WebsitePageDraftMetadata,
+  connections?: WebsitePageConnections,
 ) {
   return contentRequest<WebContentDocument>(
     `/api/staff/web-content/hotels/${hotelId}`,
@@ -1348,6 +1351,7 @@ export function saveWebContent(
         expectedDraftVersion,
         content,
         ...(page ? { page } : {}),
+        ...(connections ? { connections } : {}),
       }),
     },
   );
@@ -1581,9 +1585,9 @@ export function getWebsitePageTree(token: string) {
     token,
   );
 }
-export function getContentReferenceCatalog(token: string) {
+export function getContentReferenceCatalog(token: string, locale: "ko" | "en" = "ko") {
   return contentRequest<ContentReferenceCatalog>(
-    "/api/staff/website/content-reference",
+    locale === "en" ? "/api/staff/website/content-reference?locale=en" : "/api/staff/website/content-reference",
     token,
   );
 }

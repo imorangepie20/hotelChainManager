@@ -24,7 +24,8 @@ public class WebContentManagementController {
     @PutMapping("/hotels/{hotelId}")
     public WebContentDocument save(@PathVariable UUID hotelId, @RequestBody SaveWebContentRequest request,
             @RequestHeader("X-Staff-Session") String token) {
-        return content.saveDraft(token, hotelId, request.expectedDraftVersion(), request.content(), request.page());
+        return content.saveDraft(token, hotelId, request.expectedDraftVersion(), request.content(), request.page(),
+                request.connections());
     }
 
     @PostMapping("/hotels/{hotelId}/publish")

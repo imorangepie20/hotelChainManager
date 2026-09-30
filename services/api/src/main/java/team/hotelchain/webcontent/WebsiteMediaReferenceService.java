@@ -9,11 +9,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 @Service
 public class WebsiteMediaReferenceService {
+    private static final Pattern UPLOADED_MEDIA_PATH = Pattern.compile(
+            "^/api/website/media/([0-9a-fA-F-]{36})/content$");
+
     private final JdbcTemplate jdbc;
     private final ObjectMapper json;
     private final WebsiteMediaService media;
@@ -133,6 +138,7 @@ public class WebsiteMediaReferenceService {
                 insertUsage(pageId, locale, state, "heroAssetId", assetId(content.get("heroAssetId"), "heroAssetId"),
                         text(content.get("heroAlt"), "heroAlt"));
             }
+            synchronizeLandingRecommendationUsages(pageId, locale, state, content);
             return;
         }
         if (!"HOME_PAGE".equals(pageType) && !"CONTENT_PAGE".equals(pageType)) return;
@@ -212,6 +218,25 @@ public class WebsiteMediaReferenceService {
             String path = "blocks[" + blockIndex + "].items[" + itemIndex + "]";
             insertUsage(pageId, locale, state, path + ".imageAssetId", assetId(item.get("imageAssetId"), path + ".imageAssetId"),
                     text(item.get("imageAlt"), path + ".imageAlt"));
+        }
+    }
+
+    private void synchronizeLandingRecommendationUsages(
+            UUID pageId, String locale, String state, Map<String, Object> content) {
+        Object value = content.get("recommendedExperiences");
+        if (!(value instanceof List<?> recommendations)) return;
+        for (int index = 0; index < recommendations.size(); index++) {
+            if (!(recommendations.get(index) instanceof Map<?, ?> recommendation)
+                    || !(recommendation.get("image") instanceof String image)) continue;
+            Matcher matcher = UPLOADED_MEDIA_PATH.matcher(image);
+            if (!matcher.matches()) continue;
+            String path = "recommendedExperiences[" + index + "]";
+            WebsiteMediaService.MediaAssetRow asset = media.requireActiveAsset(assetId(matcher.group(1), path + ".image"));
+            if (!asset.deliveryPath().equals(image)) {
+                throw invalid(path + ".image는 선택한 미디어의 전달 경로와 일치해야 합니다.");
+            }
+            insertUsage(pageId, locale, state, path + ".image", asset.id(),
+                    text(recommendation.get("title"), path + ".title"));
         }
     }
 

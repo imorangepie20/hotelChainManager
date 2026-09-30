@@ -52,6 +52,19 @@ const initialPreview = reservationChangePaymentRoute || paymentReturnRoute
   : captureWebsitePreview(window.location, previewStorage, url => window.history.replaceState({}, '', url))
     ?? storedWebsitePreviewForPath(window.location.pathname, previewStorage)
 
+type DestinationExperience = DestinationContent['experiences'][number]
+
+function DestinationExperienceCard({ item, index, locale }: { item: DestinationExperience; index: number; locale: 'ko' | 'en' }) {
+  const details = <>
+    {item.image && <img src={item.image} alt={item.title} loading="lazy" style={{ width: '100%', aspectRatio: '4 / 3', objectFit: 'cover', marginBottom: 24 }} />}
+    <p>{item.category}</p>
+    <h3>{item.title}</h3>
+    <span>{item.description}</span>
+  </>
+  if (item.href) return <a className={`experience-card experience-${index}`} href={item.href} style={{ color: 'inherit', textDecoration: 'none' }}>{details}<strong>{locale === 'en' ? 'View details' : '자세히 보기'} <ArrowRight size={15} /></strong></a>
+  return <article className={`experience-card experience-${index}`}>{details}{locale === 'ko' && <a href="#booking">{item.title}로 예약하기 <ArrowRight size={15} /></a>}</article>
+}
+
 export default function App() {
   if (reservationChangePaymentRoute) return <ReservationChangePaymentPage returned={initialTossReturn} locale={initialCustomerRoute?.locale ?? 'ko'} />
   return <BookingApp />
@@ -316,7 +329,7 @@ function BookingApp() {
     if (page) return <>{renderHeader(true)}<main id="top"><ContentPage page={page} previewMode={previewMode} locale="en" onBookingIntent={applyContentBookingIntent} /></main>{englishFooter}</>
     if (publishedDestination) return <>{renderHeader(true)}<main id="top">
       <DestinationHero slides={publishedDestination.heroSlides} locale="en"><div className="hero-shade" /><div className="hero-copy"><p>{publishedDestination.eyebrow}</p><h1>{publishedDestination.title}</h1><p>{publishedDestination.description}</p><a href="/#booking" className="text-link">Book a room (Korean) <ArrowRight size={18} /></a></div></DestinationHero>
-      <section className="content-section editorial"><h2>Experiences</h2><div className="experience-grid">{publishedDestination.experiences.map((item, index) => <article className={`experience-card experience-${index}`} key={index}><p>{item.category}</p><h3>{item.title}</h3><span>{item.description}</span></article>)}</div></section>
+      <section className="content-section editorial"><h2>Experiences</h2><div className="experience-grid">{publishedDestination.experiences.map((item, index) => <DestinationExperienceCard item={item} index={index} locale="en" key={item.title} />)}</div></section>
       <section className="offers-band"><div className="content-section"><h2>Offers</h2><div className="story-offers">{publishedDestination.offers.map((item, index) => <article key={index}><h3>{item.title}</h3><p>{item.detail}</p><dl><div><dt>Booking period</dt><dd>{item.bookingPeriod}</dd></div><div><dt>Stay period</dt><dd>{item.stayPeriod}</dd></div></dl></article>)}</div></div></section>
       <section className="arrival-section"><div><h2>Arrival guide</h2><p>{publishedDestination.arrival.highlight}</p></div><dl><div><dt>Address</dt><dd>{publishedDestination.arrival.address}</dd></div><div><dt>Check-in / Check-out</dt><dd>{publishedDestination.arrival.checkInOut}</dd></div></dl></section>
     </main>{englishFooter}</>
@@ -329,7 +342,7 @@ function BookingApp() {
     <main id="top">{homeContentPage ? <ContentPageHero page={homeContentPage} previewMode={previewMode} headingId="hero-title" /> : <DestinationHero slides={destination.heroSlides} labelledBy="hero-title"><div className="hero-shade" /><div className="hero-copy" key={destination.title}><p className="eyebrow">{destination.eyebrow}</p><h1 id="hero-title">{destination.title.split('\n').map((line, index) => <span key={line}>{index > 0 && <br />}{line}</span>)}</h1><p>{destination.description}</p><a href="#booking" className="text-link">객실 예약하기 <ArrowRight size={18} /></a></div><div className="fiction">PORTFOLIO DEMO · 가상의 호텔입니다</div></DestinationHero>}
       <section id="booking" className="booking-shell" aria-labelledby="booking-title"><div className="booking-heading"><div><p className="section-kicker">BOOK YOUR STAY</p><h2 id="booking-title">여정을 예약하세요</h2></div><ConciergePanel previewMode={previewMode} criteria={{ region: selectedHotel?.region, checkIn, checkOut, adults, children, rooms }} onApply={applyConciergeCriteria} /></div><form onSubmit={search}><fieldset className="search-grid" disabled={previewMode} aria-label="예약 검색 조건"><HotelSelector hotels={hotels} value={hotelId} onChange={selectHotelForStay} /><StayDatePicker checkIn={checkIn} checkOut={checkOut} onChange={(nextCheckIn, nextCheckOut) => { if (previewMode) return; setCheckIn(nextCheckIn); setCheckOut(nextCheckOut) }} /><GuestSelector adults={adults} children={children} rooms={rooms} onChange={({ adults: nextAdults, children: nextChildren, rooms: nextRooms }) => { if (previewMode) return; setAdults(nextAdults); setChildren(nextChildren); setRooms(nextRooms) }} /><button className="primary search-button" disabled={previewMode || !hotelId}>객실 검색 <ArrowRight size={18} /></button></fieldset></form></section>
       {homeContentPage && <ContentPageAfterHero page={homeContentPage} previewMode={previewMode} />}
-      <section id="experiences" className="content-section editorial"><div className="section-head"><div><p className="section-kicker">A STAY TO REMEMBER</p><h2>{selectedHotel?.region ?? '속초'}에서 만나는 세 가지 장면</h2></div><p>머무는 시간에 따라<br />장소는 더 깊어집니다.</p></div><div className="experience-grid">{destination.experiences.map((item, index) => <article className={`experience-card experience-${index}`} key={item.title}><p>{item.category}</p><h3>{item.title}</h3><span>{item.description}</span><a href="#booking">{item.title}로 예약하기 <ArrowRight size={15} /></a></article>)}</div></section>
+      <section id="experiences" className="content-section editorial"><div className="section-head"><div><p className="section-kicker">A STAY TO REMEMBER</p><h2>{selectedHotel?.region ?? '속초'}에서 만나는 세 가지 장면</h2></div><p>머무는 시간에 따라<br />장소는 더 깊어집니다.</p></div><div className="experience-grid">{destination.experiences.map((item, index) => <DestinationExperienceCard item={item} index={index} locale="ko" key={item.title} />)}</div></section>
       <section id="offers" className="offers-band"><div className="content-section"><div className="section-head"><div><p className="section-kicker">SPECIAL OFFERS</p><h2>머무름을 위한 제안</h2></div><a href="#booking" className="text-link dark">전체 객실 보기 <ArrowRight size={17} /></a></div><div className="story-offers">{destination.offers.map((offer, index) => <article className="story-offer" key={offer.title}><span>0{index + 1}</span><h3>{offer.title}</h3><p>{offer.detail}</p><dl><div><dt>예약 기간</dt><dd>{offer.bookingPeriod}</dd></div><div><dt>투숙 기간</dt><dd>{offer.stayPeriod}</dd></div></dl><a href="#booking">예약하기 <ArrowRight size={16} /></a></article>)}</div></div></section>
 
       <section className="arrival-section"><div><p className="section-kicker">ARRIVAL GUIDE</p><h2>{selectedHotel?.region ?? '속초'}에 도착하는 시간</h2><p>{destination.arrival.highlight}</p></div><dl><div><dt>주소</dt><dd>{destination.arrival.address}</dd></div><div><dt>체크인 / 아웃</dt><dd>{destination.arrival.checkInOut}</dd></div></dl><a href="#booking" className="outline">객실 예약하기 <ArrowRight size={17} /></a></section>

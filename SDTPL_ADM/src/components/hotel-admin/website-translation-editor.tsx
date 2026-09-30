@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ChevronDown, ChevronUp, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -14,6 +15,7 @@ import {
   getWebsitePage, getWebsiteTranslation, getWebsiteTranslationReview, getWebsiteTranslationVersions, initializeWebsiteTranslation,
   publishWebsiteTranslation, saveWebsiteTranslation,
   type ContentReferenceCatalog, type StaffPrincipal, type WebContentVersion, type WebsitePageDocument, type WebsitePageDraftMetadata,
+  type WebsitePageConnections,
   type WebsiteTranslationReviewEvent, type WebsiteTranslationReviewState,
 } from "@/lib/staff-api";
 
@@ -37,14 +39,16 @@ function TranslationField({ label, value, onChange }: { label: string; value: un
   return <label className="grid gap-1 text-sm font-medium">{label}<Textarea aria-label={label} value={text(value)} maxLength={1000} onChange={(event) => onChange(event.target.value)} /></label>;
 }
 
-function LandingTranslationEditor({ token, document, externalBusy, previewDisabled, onDirtyChange, onBusyChange, onApplied }: {
+function LandingTranslationEditor({ token, document, catalog, externalBusy, previewDisabled, onDirtyChange, onBusyChange, onApplied }: {
   token: string; document: WebsitePageDocument; onDirtyChange: (dirty: boolean) => void; onBusyChange: (busy: boolean) => void;
+  catalog: ContentReferenceCatalog;
   externalBusy: boolean;
   previewDisabled: boolean;
   onApplied: (document: WebsitePageDocument) => void;
 }) {
   const [content, setContent] = useState(document.draftContent);
   const [metadata, setMetadata] = useState<WebsitePageDraftMetadata>(document.draftMetadata);
+  const [connections, setConnections] = useState<WebsitePageConnections>(document.draftConnections);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [previewBusy, setPreviewBusy] = useState(false);
@@ -54,17 +58,27 @@ function LandingTranslationEditor({ token, document, externalBusy, previewDisabl
   const interactionBusy = busy || previewBusy || externalBusy;
   function change(next: RecordValue) { setContent(next); setDirty(true); onDirtyChange(true); setError(""); setNotice(""); }
   function changeMetadata(next: WebsitePageDraftMetadata) { setMetadata(next); setDirty(true); onDirtyChange(true); setNotice(""); }
+  function changeConnections(update: (current: WebsitePageConnections["relatedPages"]) => WebsitePageConnections["relatedPages"]) {
+    setConnections((current) => ({ roomTypeIds: [], targetHotelIds: [], relatedPages: update(current.relatedPages
+      .filter((relation) => relation.relationType === "MANUAL_CARD")
+      .sort((left, right) => left.displayOrder - right.displayOrder))
+      .map((relation, displayOrder) => ({ ...relation, displayOrder })) }));
+    setDirty(true); onDirtyChange(true); setError(""); setNotice("");
+  }
   async function save() {
     if (interactionBusy || archived || !dirty) return;
     setBusy(true); onBusyChange(true); setError(""); setNotice("");
     try {
-      const result = await saveWebsiteTranslation(token, document.id, { expectedDraftVersion: document.draftVersion, page: metadata, content, connections: document.draftConnections });
-      setContent(result.draftContent); setMetadata(result.draftMetadata); setDirty(false); onDirtyChange(false); onApplied(result);
+      const result = await saveWebsiteTranslation(token, document.id, { expectedDraftVersion: document.draftVersion, page: metadata, content, connections });
+      setContent(result.draftContent); setMetadata(result.draftMetadata); setConnections(result.draftConnections); setDirty(false); onDirtyChange(false); onApplied(result);
       setNotice("영어 초안을 저장했습니다. 검토를 요청해 주세요.");
     } catch (cause) { setError(cause instanceof Error ? cause.message : "번역을 저장하지 못했습니다. 새로고침 후 다시 시도해 주세요."); }
     finally { setBusy(false); onBusyChange(false); }
   }
   const arrival = record(content.arrival), seo = record(content.seo);
+  const recommendations = connections.relatedPages.filter((relation) => relation.relationType === "MANUAL_CARD").sort((left, right) => left.displayOrder - right.displayOrder);
+  const recommendationPages = catalog.pages.filter((page) => page.hotelId === document.hotelId
+    && (["DINING", "FACILITY", "EXPERIENCE"] as const).includes(page.contentKind as "DINING" | "FACILITY" | "EXPERIENCE"));
   return <Card className="min-w-0"><CardHeader><CardTitle>영어 지점 랜딩 페이지</CardTitle><CardDescription>한국어 콘텐츠와 별도로 저장·발행합니다.</CardDescription>
     <div className="flex flex-wrap gap-2"><Button variant="outline" disabled={interactionBusy || archived || !dirty} onClick={() => void save()}>초안 저장</Button></div>
   </CardHeader><CardContent className="space-y-6">
@@ -84,13 +98,29 @@ function LandingTranslationEditor({ token, document, externalBusy, previewDisabl
       <section className="grid gap-4 rounded-xl border p-4"><h2 className="font-semibold">도착 안내</h2>
         {([['address', '주소'], ['checkInOut', '체크인·체크아웃'], ['highlight', '도착 안내 설명']] as const).map(([key, label]) => <TranslationField key={key} label={label} value={arrival[key]} onChange={(value) => change({ ...content, arrival: { ...arrival, [key]: value } })} />)}
       </section>
-      {(['experiences', 'offers'] as const).map((listKey) => {
-        const items = Array.isArray(content[listKey]) ? content[listKey] as RecordValue[] : [];
-        const fields = listKey === 'experiences' ? [['category', '분류'], ['title', '제목'], ['description', '설명']] : [['title', '제목'], ['detail', '상세'], ['bookingPeriod', '예약 기간'], ['stayPeriod', '투숙 기간']];
-        return <section key={listKey} className="grid gap-4 rounded-xl border p-4"><h2 className="font-semibold">{listKey === 'experiences' ? '경험' : '오퍼'}</h2>{items.map((item, index) => <div key={index} className="grid gap-3 rounded-lg bg-muted/20 p-3 md:grid-cols-2">
-          {fields.map(([key, label]) => <TranslationField key={key} label={`${listKey === 'experiences' ? '경험' : '오퍼'} ${index + 1} ${label}`} value={item[key]} onChange={(value) => change({ ...content, [listKey]: items.map((current, itemIndex) => itemIndex === index ? { ...current, [key]: value } : current) })} />)}
+      <section className="grid gap-4 rounded-xl border p-4"><div><h2 className="font-semibold">추천 즐길 거리</h2><p className="text-xs text-muted-foreground">같은 지점의 발행된 다이닝·부대시설·체험 페이지를 최대 3개 선택합니다.</p></div>
+        {recommendations.length > 0 && <ol className="grid gap-2" aria-label="선택한 영어 추천 순서">{recommendations.map((relation, index) => {
+          const page = catalog.pages.find((candidate) => candidate.id === relation.targetPageId);
+          return <li key={relation.targetPageId} className="flex min-w-0 items-center justify-between gap-3 rounded-lg bg-muted/20 p-3"><span className="min-w-0 truncate text-sm font-medium">{index + 1}. {page?.title ?? relation.targetPageId}</span><span className="flex shrink-0 gap-1">
+            <Button type="button" variant="ghost" size="icon-sm" aria-label={`영어 추천 ${index + 1} 위로 이동`} disabled={index === 0} onClick={() => changeConnections((current) => { const next = [...current]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; return next; })}><ChevronUp /></Button>
+            <Button type="button" variant="ghost" size="icon-sm" aria-label={`영어 추천 ${index + 1} 아래로 이동`} disabled={index === recommendations.length - 1} onClick={() => changeConnections((current) => { const next = [...current]; [next[index], next[index + 1]] = [next[index + 1], next[index]]; return next; })}><ChevronDown /></Button>
+            <Button type="button" variant="ghost" size="icon-sm" aria-label={`영어 추천 ${index + 1} 제거`} onClick={() => changeConnections((current) => current.filter((candidate) => candidate.targetPageId !== relation.targetPageId))}><Trash2 /></Button>
+          </span></li>;
+        })}</ol>}
+        <div className="grid gap-2 md:grid-cols-2">{recommendationPages.map((page) => {
+          const selected = recommendations.some((relation) => relation.targetPageId === page.id);
+          return <label key={page.id} className="flex min-w-0 items-start gap-3 rounded-lg border p-3 text-sm"><input type="checkbox" aria-label={`${page.title} 추천`} checked={selected} disabled={!selected && recommendations.length >= 3} onChange={(event) => changeConnections((current) => event.target.checked ? [...current, { targetPageId: page.id, relationType: "MANUAL_CARD", displayOrder: current.length }] : current.filter((relation) => relation.targetPageId !== page.id))} className="mt-0.5 size-4 shrink-0 accent-primary" /><span className="min-w-0"><span className="block font-medium">{page.title}</span><span className="block truncate text-xs text-muted-foreground">{page.path}</span></span></label>;
+        })}</div>
+        {recommendationPages.length === 0 && <p className="text-sm text-muted-foreground">선택할 수 있는 발행 상세 페이지가 없습니다.</p>}
+        <p className="text-xs text-muted-foreground">{recommendations.length}/3개 선택</p>
+      </section>
+      {(() => {
+        const items = Array.isArray(content.offers) ? content.offers as RecordValue[] : [];
+        const fields = [['title', '제목'], ['detail', '상세'], ['bookingPeriod', '예약 기간'], ['stayPeriod', '투숙 기간']];
+        return <section className="grid gap-4 rounded-xl border p-4"><h2 className="font-semibold">오퍼</h2>{items.map((item, index) => <div key={index} className="grid gap-3 rounded-lg bg-muted/20 p-3 md:grid-cols-2">
+          {fields.map(([key, label]) => <TranslationField key={key} label={`오퍼 ${index + 1} ${label}`} value={item[key]} onChange={(value) => change({ ...content, offers: items.map((current, itemIndex) => itemIndex === index ? { ...current, [key]: value } : current) })} />)}
         </div>)}</section>;
-      })}
+      })()}
       <section className="grid gap-4 rounded-xl border p-4"><h2 className="font-semibold">SEO</h2>
         <label className="grid gap-1 text-sm font-medium">SEO 제목<Input aria-label="SEO 제목" maxLength={60} value={text(seo.title)} onChange={(event) => change({ ...content, seo: { ...seo, title: event.target.value } })} /></label>
         <label className="grid gap-1 text-sm font-medium">SEO 설명<Textarea aria-label="SEO 설명" maxLength={160} value={text(seo.description)} onChange={(event) => change({ ...content, seo: { ...seo, description: event.target.value } })} /></label>
@@ -179,7 +209,7 @@ export function WebsiteTranslationEditor({ token, pageId, catalog, staff, onDirt
       <p role="status" className="rounded-lg border bg-muted/20 p-3 text-sm">영어 · {document.publishedVersion ? (Object.keys(document.publishedContent).length ? `발행본 v${document.publishedVersion}` : '공개 중단') : '미발행'} · 초안 v{document.draftVersion} — 한국어를 가져온 내용은 직접 번역하고 검토한 뒤 발행해 주세요.</p>
       {document.draftVersion === 0 ? <Card><CardHeader><CardTitle>영어 번역 초안이 없습니다.</CardTitle><CardDescription>한국어 초안을 가져와 제목·본문·SEO·이미지 설명을 번역합니다. 고객 웹에는 자동으로 공개되지 않습니다.</CardDescription></CardHeader><CardContent><Button disabled={!canEdit || initializing || document.lifecycleStatus !== "ACTIVE"} onClick={() => void initialize()}>한국어 초안을 가져오기</Button>{error && <p role="alert" className="mt-3 text-sm text-destructive">{error} <Button variant="link" onClick={retry}>다시 불러오기</Button></p>}</CardContent></Card>
         : <><WebsiteTranslationReviewActions token={token} pageId={document.id} draftVersion={document.draftVersion} state={reviewState} staff={staff} reviewReady={reviewReady} dirty={editorDirty} busy={editorBusy} archived={document.lifecycleStatus === "ARCHIVED"} onStateChange={applyReviewState} onPublish={publish} onBusyChange={changeBusy} onHistoryRefresh={refreshHistory} />
-          {document.pageType === "HOTEL_LANDING" ? <LandingTranslationEditor token={token} document={document} externalBusy={editorBusy || !canEdit} previewDisabled={editorBusy} onDirtyChange={changeDirty} onBusyChange={changeBusy} onApplied={saved} />
+          {document.pageType === "HOTEL_LANDING" ? <LandingTranslationEditor token={token} document={document} catalog={catalog} externalBusy={editorBusy || !canEdit} previewDisabled={editorBusy} onDirtyChange={changeDirty} onBusyChange={changeBusy} onApplied={saved} />
             : <ContentPageEditor token={token} document={document} catalog={catalog} locale="en" showPublishAction={false} externalBusy={editorBusy || !canEdit} previewDisabled={editorBusy} onDirtyChange={changeDirty} onBusyChange={changeBusy} onSaved={saved} onPublished={saved} onLifecycleChanged={saved} onDeleted={() => undefined} />}</>}
       {document.lifecycleStatus === "ARCHIVED" && <p className="text-sm text-muted-foreground">페이지가 보관되어 두 언어 모두 공개되지 않습니다. 한국어 화면에서 페이지를 복원한 뒤 언어별로 다시 발행해 주세요.</p>}
     </div>

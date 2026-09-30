@@ -65,6 +65,33 @@ public class WebsitePageConnectionValidator {
         }
     }
 
+    public void validateLandingRecommendations(UUID pageId, UUID hotelId, WebsitePageConnections connections,
+            boolean requirePublishedTarget) {
+        WebsitePageConnections next = connections == null ? WebsitePageConnections.empty() : connections;
+        if (!next.roomTypeIds().isEmpty() || !next.targetHotelIds().isEmpty()) {
+            throw invalid("지점 랜딩 추천에는 객실 유형 또는 대상 지점 연결을 둘 수 없습니다.");
+        }
+        if (next.relatedPages().size() > 3) {
+            throw invalid("지점 랜딩 추천은 최대 3개까지 선택할 수 있습니다.");
+        }
+        validateRelatedPageTargets(pageId, next, requirePublishedTarget);
+        List<WebsitePageRelation> ordered = next.relatedPages().stream()
+                .sorted(java.util.Comparator.comparingInt(WebsitePageRelation::displayOrder))
+                .toList();
+        for (int index = 0; index < ordered.size(); index++) {
+            WebsitePageRelation relation = ordered.get(index);
+            if (!"MANUAL_CARD".equals(relation.relationType()) || relation.displayOrder() != index) {
+                throw invalid("지점 랜딩 추천 순서는 0부터 연속되어야 합니다.");
+            }
+            RelatedPage target = relatedPage(relation.targetPageId());
+            if (target == null || !hotelId.equals(target.hotelId())
+                    || !List.of(ContentKind.DINING, ContentKind.FACILITY, ContentKind.EXPERIENCE).contains(target.kind())
+                    || (requirePublishedTarget && !target.published())) {
+                throw invalid("같은 지점의 발행 가능한 다이닝·부대시설·체험 페이지만 추천할 수 있습니다.");
+            }
+        }
+    }
+
     private void requireHotelScope(ContentKind kind, UUID hotelId) {
         if (kind.requiresHotel() && hotelId == null) throw invalid(kind + " 유형에는 소유 지점이 필요합니다.");
         if (!kind.allowsHotel() && hotelId != null) throw invalid(kind + " 유형에는 소유 지점을 둘 수 없습니다.");
@@ -105,6 +132,15 @@ public class WebsitePageConnectionValidator {
         if (count == null || count == 0) throw invalid("관련 페이지를 찾을 수 없거나 공개할 수 없습니다.");
     }
 
+    private RelatedPage relatedPage(UUID pageId) {
+        return jdbc.query("""
+                select content_kind, hotel_id, published_content <> '{}'::jsonb
+                  from website_page
+                 where id = ? and page_type = 'CONTENT_PAGE' and lifecycle_status = 'ACTIVE'
+                """, rs -> rs.next() ? new RelatedPage(
+                ContentKind.valueOf(rs.getString(1)), rs.getObject(2, UUID.class), rs.getBoolean(3)) : null, pageId);
+    }
+
     private boolean hasPathTo(UUID expectedTarget, UUID currentPage, String documentState, HashSet<UUID> visited) {
         if (expectedTarget.equals(currentPage)) return true;
         if (!visited.add(currentPage)) return false;
@@ -123,5 +159,8 @@ public class WebsitePageConnectionValidator {
 
     private IllegalArgumentException invalid(String message) {
         return new IllegalArgumentException("콘텐츠 연결 오류: " + message);
+    }
+
+    private record RelatedPage(ContentKind kind, UUID hotelId, boolean published) {
     }
 }

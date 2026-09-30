@@ -36,6 +36,12 @@ public class WebContentService {
         return document(pages.saveLandingDraft(token, hotelId, expectedDraftVersion, metadata, content));
     }
 
+    public WebContentDocument saveDraft(String token, java.util.UUID hotelId, int expectedDraftVersion,
+            Map<String, Object> content, WebsitePageDraftMetadata metadata, WebsitePageConnections connections) {
+        return document(pages.saveLandingDraft(token, hotelId, expectedDraftVersion, metadata, content,
+                connections == null ? pages.landingDraft(token, hotelId).draftConnections() : connections));
+    }
+
     public WebContentDocument publish(String token, java.util.UUID hotelId, int expectedDraftVersion,
             int expectedPublishedVersion) {
         return document(pages.publishLanding(token, hotelId, expectedDraftVersion, expectedPublishedVersion));
@@ -47,7 +53,7 @@ public class WebContentService {
 
     private WebContentDocument document(WebsitePageDocument page) {
         return new WebContentDocument(page.draftContent(), page.draftVersion(), page.publishedContent(), page.publishedVersion(),
-                page.draftMetadata(), page.publishedMetadata());
+                page.draftMetadata(), page.publishedMetadata(), page.draftConnections(), page.publishedConnections());
     }
 
     static void validateLandingContent(Map<String, Object> content) {

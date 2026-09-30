@@ -60,13 +60,24 @@ public class WebsitePageService {
     @Transactional
     public WebsitePageDocument saveLandingDraft(String token, UUID hotelId, int expectedDraftVersion,
             WebsitePageDraftMetadata metadata, Map<String, Object> content) {
+        PageRow current = ensureLanding(hotelId);
+        return saveLandingDraft(token, hotelId, expectedDraftVersion, metadata, content,
+                pageConnections(current.id(), "DRAFT"));
+    }
+
+    @Transactional
+    public WebsitePageDocument saveLandingDraft(String token, UUID hotelId, int expectedDraftVersion,
+            WebsitePageDraftMetadata metadata, Map<String, Object> content, WebsitePageConnections nextConnections) {
         StaffPrincipal actor = access.requireHeadquarters(token);
         PageRow current = ensureLanding(hotelId);
         WebsitePageDraftMetadata next = metadata == null ? metadata(current) : metadata;
         WebContentService.validateLandingStructure(content);
         Map<String, Object> normalized = mediaReferences.normalizeLandingContent(content);
         WebContentService.validateLandingContent(normalized);
-        return saveDraft(actor, current, expectedDraftVersion, next, normalized, landingPath(next.slug()));
+        connections.validateLandingRecommendations(current.id(), hotelId, nextConnections, false);
+        WebsitePageDocument saved = saveDraft(actor, current, expectedDraftVersion, next, normalized, landingPath(next.slug()));
+        replaceConnections(current.id(), "DRAFT", nextConnections);
+        return document(page(saved.id()));
     }
 
     @Transactional
@@ -547,7 +558,15 @@ public class WebsitePageService {
 
     @Transactional(readOnly = true)
     public ContentReferenceCatalog contentReference(String token) {
+        return contentReference(token, "ko");
+    }
+
+    @Transactional(readOnly = true)
+    public ContentReferenceCatalog contentReference(String token, String locale) {
         access.requireContentStaff(token);
+        if (!"ko".equals(locale) && !"en".equals(locale)) {
+            throw new IllegalArgumentException("콘텐츠 참조 언어는 ko 또는 en이어야 합니다.");
+        }
         List<ContentReferenceCatalog.Hotel> hotels = jdbc.query("select id, name, region from hotel order by name", (rs, rowNum) -> {
             UUID hotelId = rs.getObject("id", UUID.class);
             List<ContentReferenceCatalog.RoomType> roomTypes = jdbc.query("""
@@ -556,16 +575,41 @@ public class WebsitePageService {
                     room.getObject(1, UUID.class), room.getString(2), room.getInt(3)), hotelId);
             return new ContentReferenceCatalog.Hotel(hotelId, rs.getString("name"), rs.getString("region"), roomTypes);
         });
-        List<ContentReferenceCatalog.Page> pages = jdbc.query("""
+        List<ContentReferenceCatalog.Page> pages = "en".equals(locale)
+                ? englishContentReferences()
+                : koreanContentReferences();
+        return new ContentReferenceCatalog(hotels, pages);
+    }
+
+    private List<ContentReferenceCatalog.Page> koreanContentReferences() {
+        return jdbc.query("""
                 select id, content_kind, hotel_id, published_menu_label, published_path
                   from website_page
                  where page_type = 'CONTENT_PAGE' and lifecycle_status = 'ACTIVE'
                    and published_content <> '{}'::jsonb
                  order by published_path
-                """, (rs, rowNum) -> new ContentReferenceCatalog.Page(
+                """, (rs, rowNum) -> contentReferencePage(rs));
+    }
+
+    private List<ContentReferenceCatalog.Page> englishContentReferences() {
+        return jdbc.query("""
+                select page.id, page.content_kind, page.hotel_id,
+                       translation.published_menu_label, translation.published_path
+                  from website_page page
+                  join website_page_translation translation
+                    on translation.page_id = page.id and translation.locale = 'en'
+                 where page.page_type = 'CONTENT_PAGE' and page.lifecycle_status = 'ACTIVE'
+                   and translation.published_content <> '{}'::jsonb
+                   and translation.published_path is not null
+                   and translation.published_menu_label is not null
+                 order by translation.published_path
+                """, (rs, rowNum) -> contentReferencePage(rs));
+    }
+
+    private ContentReferenceCatalog.Page contentReferencePage(java.sql.ResultSet rs) throws java.sql.SQLException {
+        return new ContentReferenceCatalog.Page(
                 rs.getObject(1, UUID.class), contentKind(rs.getString(2)), rs.getObject(3, UUID.class),
-                rs.getString(4), rs.getString(5)));
-        return new ContentReferenceCatalog(hotels, pages);
+                rs.getString(4), rs.getString(5));
     }
 
     private WebsitePageDocument saveDraft(StaffPrincipal actor, PageRow current, int expectedDraftVersion,
@@ -599,22 +643,26 @@ public class WebsitePageService {
         requireExpectedDraftVersion(expectedDraftVersion);
         requireExpectedPublishedVersion(expectedPublishedVersion);
         WebsitePageConnections draftConnections = pageConnections(current.id(), "DRAFT");
+        Map<String, Object> publishedContent = current.draftContent();
         if ("CONTENT_PAGE".equals(current.pageType())) {
             ContentKind kind = contentKind(current);
             contentPages.validate(kind, mediaReferences.normalizeStructuredContent(current.draftContent()));
             connections.validate(kind, current.hotelId(), draftConnections);
             connections.validateRelatedPages(current.id(), "PUBLISHED", draftConnections, true);
+        } else if ("HOTEL_LANDING".equals(current.pageType())) {
+            connections.validateLandingRecommendations(current.id(), current.hotelId(), draftConnections, true);
+            publishedContent = landingContentWithRecommendations(current.draftContent(), draftConnections);
         }
         int nextPublishedVersion = expectedPublishedVersion + 1;
         int updated = jdbc.update("""
                 update website_page
                    set published_slug = draft_slug, published_path = draft_path,
                        published_menu_label = draft_menu_label, published_menu_visible = draft_menu_visible,
-                       published_menu_order = draft_menu_order, published_content = draft_content,
+                       published_menu_order = draft_menu_order, published_content = ?::jsonb,
                        published_version = ?, published_from_draft_version = draft_version,
                        updated_at = current_timestamp, updated_by = ?
                  where id = ? and lifecycle_status = 'ACTIVE' and draft_version = ? and published_version = ?
-                """, nextPublishedVersion, actor.id(), current.id(), expectedDraftVersion, expectedPublishedVersion);
+                """, stringify(publishedContent), nextPublishedVersion, actor.id(), current.id(), expectedDraftVersion, expectedPublishedVersion);
         if (updated == 0) throw staleDraft();
         PageRow published = page(current.id());
         replaceConnections(published.id(), "PUBLISHED", draftConnections);
@@ -628,6 +676,34 @@ public class WebsitePageService {
                 values (?, 'PUBLISHED', ?, jsonb_build_object('path', ?))
                 """, published.id(), actor.id(), published.publishedPath());
         return document(published);
+    }
+
+    private Map<String, Object> landingContentWithRecommendations(Map<String, Object> content,
+            WebsitePageConnections landingConnections) {
+        Map<String, Object> snapshot = new LinkedHashMap<>(content);
+        List<Map<String, Object>> cards = landingConnections.relatedPages().stream()
+                .filter(relation -> "MANUAL_CARD".equals(relation.relationType()))
+                .sorted(java.util.Comparator.comparingInt(WebsitePageRelation::displayOrder))
+                .map(relation -> page(relation.targetPageId()))
+                .map(target -> recommendationCard(target, collectionItem(target, target.hotelId())))
+                .toList();
+        if (cards.isEmpty()) snapshot.remove("recommendedExperiences");
+        else snapshot.put("recommendedExperiences", cards);
+        return snapshot;
+    }
+
+    private Map<String, Object> recommendationCard(PageRow target, WebsiteContentCollectionItem item) {
+        if (target == null || item == null) {
+            throw new IllegalArgumentException("추천 상세 페이지를 공개 카드로 만들 수 없습니다.");
+        }
+        Map<String, Object> card = new LinkedHashMap<>();
+        card.put("pageId", target.id().toString());
+        card.put("contentKind", item.contentKind().name());
+        card.put("path", item.path());
+        card.put("title", item.title());
+        card.put("summary", item.summary());
+        card.put("image", item.image());
+        return Map.copyOf(card);
     }
 
     private List<WebContentVersion> versions(UUID pageId) {

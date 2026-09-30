@@ -462,6 +462,52 @@ class WebsiteTranslationIntegrationTest {
     }
 
     @Test
+    void publishesEnglishLandingRecommendationsFromEnglishDetailSnapshots() {
+        String token = headquarters();
+        UUID hotelId = UUID.randomUUID();
+        jdbc.update("insert into hotel values (?, '영문 추천 호텔', '속초', 'Asia/Seoul')", hotelId);
+        UUID sectionId = hotelSection(hotelId, "english-recommendation-details");
+        WebsitePageDocument dining = pages.createContentPage(token, sectionId, ContentKind.DINING, hotelId,
+                new WebsitePageDraftMetadata("dining", "다이닝", true, 10),
+                diningContent("한국어 다이닝"), WebsitePageConnections.empty());
+        dining = pages.publishPage(token, dining.id(), dining.draftVersion(), dining.publishedVersion());
+        translations.initialize(token, dining.id(), dining.draftVersion(), dining.lifecycleVersion());
+        WebsitePageDocument englishDining = translations.save(token, dining.id(), new SaveWebsitePageRequest(1,
+                new WebsitePageDraftMetadata("dining", "Dining", true, 10),
+                diningContent("English dining"), WebsitePageConnections.empty()));
+        approveEnglish(token, dining.id(), englishDining.draftVersion());
+        translations.publish(token, dining.id(), new PublishWebsitePageRequest(englishDining.draftVersion(), 0));
+
+        WebsitePageConnections recommendations = new WebsitePageConnections(List.of(), List.of(), List.of(
+                new WebsitePageRelation(dining.id(), "MANUAL_CARD", 0)));
+        WebsitePageDocument landing = pages.landingDraft(token, hotelId);
+        landing = pages.saveLandingDraft(token, hotelId, landing.draftVersion(),
+                new WebsitePageDraftMetadata("english-recommendations", "추천 호텔", true, 10),
+                landingContent("한국어 랜딩"), recommendations);
+        translations.initialize(token, landing.id(), landing.draftVersion(), landing.lifecycleVersion());
+        WebsitePageDocument englishLanding = translations.save(token, landing.id(), new SaveWebsitePageRequest(1,
+                new WebsitePageDraftMetadata("english-recommendations", "Recommended hotel", true, 10),
+                landingContent("English landing"), recommendations));
+        approveEnglish(token, landing.id(), englishLanding.draftVersion());
+        translations.publish(token, landing.id(), new PublishWebsitePageRequest(englishLanding.draftVersion(), 0));
+
+        PublishedWebsitePage first = translations.resolve("/en/stays/english-recommendations");
+        assertThat(first.content().get("recommendedExperiences")).isEqualTo(List.of(Map.of(
+                "pageId", dining.id().toString(), "contentKind", "DINING",
+                "path", "/en/stays/english-recommendation-details/dining", "title", "English dining",
+                "summary", "English dining introduction", "image", "/images/sokcho-coast-hero.png")));
+
+        WebsitePageDocument nextDining = translations.save(token, dining.id(), new SaveWebsitePageRequest(2,
+                new WebsitePageDraftMetadata("dining", "Dining", true, 10),
+                diningContent("Changed English dining"), WebsitePageConnections.empty()));
+        approveEnglish(token, dining.id(), nextDining.draftVersion());
+        translations.publish(token, dining.id(), new PublishWebsitePageRequest(nextDining.draftVersion(), 1));
+
+        assertThat(translations.resolve("/en/stays/english-recommendations").content().get("recommendedExperiences"))
+                .isEqualTo(first.content().get("recommendedExperiences"));
+    }
+
+    @Test
     void supportsIndependentEnglishHomeAndHotelLandingDocuments() throws Exception {
         String token = headquarters();
         var home = pages.homeDraft(token);
@@ -649,6 +695,50 @@ class WebsiteTranslationIntegrationTest {
         var created = pages.createContentPage(token, UUID.fromString("12000000-0000-0000-0000-000000000005"),
                 new WebsitePageDraftMetadata("locale-story", "한국어 이야기", true, 10), content("한국어 제목", "한국어 alt"));
         return pages.publishPage(token, created.id(), created.draftVersion(), created.publishedVersion());
+    }
+
+    private UUID hotelSection(UUID hotelId, String slug) {
+        UUID id = UUID.randomUUID();
+        jdbc.update("""
+                insert into website_page (
+                    id, hotel_id, parent_id, page_type, content_kind,
+                    draft_slug, published_slug, draft_path, published_path,
+                    draft_menu_label, published_menu_label, draft_menu_visible, published_menu_visible,
+                    draft_menu_order, published_menu_order, draft_content, published_content,
+                    draft_version, published_version, published_from_draft_version
+                ) values (?, ?, null, 'SECTION', null, ?, ?, ?, ?, '상세', 'Details', true, true,
+                          1, 1, '{}'::jsonb, '{}'::jsonb, 1, 1, 1)
+                """, id, hotelId, slug, slug, "/stays/" + slug, "/stays/" + slug);
+        return id;
+    }
+
+    private Map<String, Object> diningContent(String title) {
+        String heroId = UUID.randomUUID().toString();
+        String galleryId = UUID.randomUUID().toString();
+        String hoursId = UUID.randomUUID().toString();
+        return Map.of(
+                "seo", Map.of("title", title + " | STAY HANEUL", "description", title + " description"),
+                "blocks", List.of(
+                        Map.of("blockId", heroId, "type", "HERO",
+                                "imageAssetId", WebsiteMediaService.BUNDLED_ASSET_ID.toString(),
+                                "imageSrc", "/images/sokcho-coast-hero.png", "imageAlt", title,
+                                "eyebrow", "DINING", "title", title, "description", title + " introduction"),
+                        Map.of("blockId", galleryId, "type", "IMAGE_GALLERY", "title", "Gallery", "items", List.of(
+                                Map.of("imageAssetId", WebsiteMediaService.BUNDLED_ASSET_ID.toString(),
+                                        "imageSrc", "/images/sokcho-coast-hero.png", "imageAlt", "Dining one"),
+                                Map.of("imageAssetId", WebsiteMediaService.BUNDLED_ASSET_ID.toString(),
+                                        "imageSrc", "/images/sokcho-coast-hero.png", "imageAlt", "Dining two"))),
+                        Map.of("blockId", hoursId, "type", "OPERATING_HOURS", "title", "Hours", "entries", List.of(
+                                Map.of("dayLabel", "Daily", "opensAt", "07:00", "closesAt", "22:00", "closed", false)))));
+    }
+
+    private Map<String, Object> landingContent(String title) {
+        return Map.of(
+                "heroAssetId", WebsiteMediaService.BUNDLED_ASSET_ID.toString(),
+                "heroImage", "/images/sokcho-coast-hero.png", "heroAlt", title,
+                "eyebrow", "STAY HANEUL", "title", title, "description", title + " description",
+                "arrival", Map.of("address", "Coast road", "checkInOut", "15:00 / 11:00", "highlight", "Arrive slowly"),
+                "experiences", List.of(), "offers", List.of());
     }
 
     private Map<?, ?> saveEnglish(MockMvc mvc, String path, String token, int version, String title, String alt) throws Exception {

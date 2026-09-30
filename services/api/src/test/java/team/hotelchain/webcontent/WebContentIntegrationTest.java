@@ -101,6 +101,48 @@ class WebContentIntegrationTest {
                 .hasMessageContaining("160자");
     }
 
+    @Test
+    void savesLandingRecommendationConnectionsThroughTheLegacyManagementContract() {
+        StaffSessionView session = staffAccess.login("cms-hq@example.com", "hq-password");
+        UUID diningId = insertDiningPage();
+        WebsitePageConnections recommendations = new WebsitePageConnections(List.of(), List.of(), List.of(
+                new WebsitePageRelation(diningId, "MANUAL_CARD", 0)));
+
+        WebContentDocument saved = content.saveDraft(session.token(), HOTEL, 1, validContent("추천 랜딩"),
+                null, recommendations);
+
+        assertThat(saved.draftConnections()).isEqualTo(recommendations);
+        assertThat(content.draft(session.token(), HOTEL).draftConnections()).isEqualTo(recommendations);
+    }
+
+    private UUID insertDiningPage() {
+        UUID parentId = UUID.randomUUID();
+        jdbc.update("""
+                insert into website_page (
+                    id, hotel_id, parent_id, page_type, content_kind,
+                    draft_slug, published_slug, draft_path, published_path,
+                    draft_menu_label, published_menu_label, draft_menu_visible, published_menu_visible,
+                    draft_menu_order, published_menu_order, draft_content, published_content,
+                    draft_version, published_version, published_from_draft_version
+                ) values (?, ?, null, 'SECTION', null, 'cms-test', 'cms-test', '/stays/cms-test', '/stays/cms-test',
+                          'CMS 상세', 'CMS 상세', true, true, 1, 1, '{}'::jsonb, '{}'::jsonb, 1, 1, 1)
+                """, parentId, HOTEL);
+        UUID id = UUID.randomUUID();
+        jdbc.update("""
+                insert into website_page (
+                    id, hotel_id, parent_id, page_type, content_kind,
+                    draft_slug, published_slug, draft_path, published_path,
+                    draft_menu_label, published_menu_label, draft_menu_visible, published_menu_visible,
+                    draft_menu_order, published_menu_order, draft_content, published_content,
+                    draft_version, published_version, published_from_draft_version
+                ) values (?, ?, ?, 'CONTENT_PAGE', 'DINING', 'cms-dining', 'cms-dining',
+                          '/stays/cms-test/cms-dining', '/stays/cms-test/cms-dining',
+                          'CMS 다이닝', 'CMS 다이닝', true, false,
+                          1, 0, '{}'::jsonb, '{}'::jsonb, 1, 1, null)
+                """, id, HOTEL, parentId);
+        return id;
+    }
+
     private Map<String, Object> validContent(String title) {
         return Map.of(
                 "heroAssetId", WebsiteMediaService.BUNDLED_ASSET_ID.toString(),

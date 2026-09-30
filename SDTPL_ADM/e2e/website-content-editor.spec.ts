@@ -402,15 +402,30 @@ test("does not expose Korean lifecycle writes from the English archived editor",
 
 test("saves, reviews, approves and publishes English landing content with one draft version", async ({ page }) => {
   const path = "/api/staff/website/pages/sokcho-page/translations/en";
+  const diningId = "sokcho-english-dining";
+  const facilityId = "sokcho-english-facility";
   let document = contentPageDocument({ id: "sokcho-page", pageType: "HOTEL_LANDING", hotelId: SOKCHO, contentKind: "LANDING", publishedVersion: 0, publishedMetadata: null,
     draftMetadata: { slug: "sokcho", path: "/en/stays/sokcho", menuLabel: "Sokcho", menuVisible: true, menuOrder: 10 },
+    draftConnections: { roomTypeIds: [], targetHotelIds: [], relatedPages: [{ targetPageId: diningId, relationType: "MANUAL_CARD", displayOrder: 0 }] },
     draftContent: { heroAssetId: BUNDLED_ASSET, heroImage: "/images/sokcho-coast-hero.png", heroAlt: "Coast", eyebrow: "SOKCHO", title: "English hotel", description: "By the sea", arrival: { address: "Coast road", checkInOut: "15:00 / 11:00", highlight: "Arrive slowly" }, experiences: [{ category: "ROOM", title: "Ocean room", description: "Ocean view" }], offers: [{ title: "Stay offer", detail: "Two nights", bookingPeriod: "September", stayPeriod: "October" }], seo: { title: "Sokcho", description: "Sokcho stay" } } });
   const writes: Record<string, unknown>[] = [];
+  const referenceLocales: Array<string | null> = [];
   const priorVersions = [{ version: 1, publishedAt: "2026-09-10T09:00:00Z" }];
   let review = translationReviewState({ status: "PUBLISHED", reviewedDraftVersion: 1, events: [{ id: 1, action: "PUBLISHED", draftVersion: 1, actorId: "hq-test", actorDisplayName: "본사 관리자", createdAt: "2026-09-10T09:00:00Z", comment: "기존 landing 발행" }] });
   let holdLandingRefresh = false;
   let releaseLandingReview: (() => Promise<void>) | undefined;
   let releaseLandingVersions: (() => Promise<void>) | undefined;
+  await page.route("**/api/staff/website/content-reference**", route => {
+    const locale = new URL(route.request().url()).searchParams.get("locale");
+    referenceLocales.push(locale);
+    const pages = locale === "en" ? [
+      { id: diningId, contentKind: "DINING", hotelId: SOKCHO, title: "English dining", path: "/en/stays/sokcho/dining" },
+      { id: facilityId, contentKind: "FACILITY", hotelId: SOKCHO, title: "English spa", path: "/en/stays/sokcho/spa" },
+    ] : [
+      { id: "korean-only-dining", contentKind: "DINING", hotelId: SOKCHO, title: "한국어 전용 다이닝", path: "/stays/sokcho/korean-only" },
+    ];
+    return route.fulfill({ json: { hotels: [], pages } });
+  });
   await page.route("**/api/staff/website/pages/sokcho-page", route => route.fulfill({ json: document }));
   await page.route(`**${path}/versions`, async route => {
     if (!holdLandingRefresh) return route.fulfill({ json: priorVersions });
@@ -419,7 +434,7 @@ test("saves, reviews, approves and publishes English landing content with one dr
   await page.route(`**${path}`, async route => {
     if (route.request().method() === "PUT") {
       const body = route.request().postDataJSON(); writes.push(body);
-      document = { ...document, draftContent: body.content, draftVersion: 2 };
+      document = { ...document, draftContent: body.content, draftConnections: body.connections, draftVersion: 2 };
       review = translationReviewState();
       holdLandingRefresh = true;
     }
@@ -435,11 +450,14 @@ test("saves, reviews, approves and publishes English landing content with one dr
   await page.goto("/dashboard/website");
   await expect(page.getByLabel("히어로 제목", { exact: true })).toHaveValue("속초 제목");
   await page.getByRole("button", { name: "영어", exact: true }).click();
+  await expect.poll(() => referenceLocales.includes("en")).toBe(true);
+  await expect(page.getByText("한국어 전용 다이닝", { exact: true })).toHaveCount(0);
   await expect(page.getByLabel("영어 발행 이력")).toContainText("발행본 v1");
   await page.getByLabel("히어로 제목", { exact: true }).fill("Sokcho by the sea");
   await page.getByLabel("메인 이미지 1 대체 텍스트", { exact: true }).fill("English coastal hotel");
   await page.getByLabel("SEO 제목", { exact: true }).fill("Sokcho English SEO");
-  await page.getByLabel("경험 1 제목").fill("Ocean suite");
+  await expect(page.getByRole("heading", { name: "추천 즐길 거리" })).toBeVisible();
+  await page.getByLabel("English spa 추천").check();
   await page.getByRole("button", { name: "초안 저장", exact: true }).click();
   await expect.poll(() => Boolean(releaseLandingReview && releaseLandingVersions)).toBe(true);
   await expect(page.getByLabel("영어 발행 이력")).toContainText("발행본 v1");
@@ -449,12 +467,52 @@ test("saves, reviews, approves and publishes English landing content with one dr
   await page.getByRole("button", { name: "승인", exact: true }).click();
   await page.getByRole("button", { name: "발행", exact: true }).click();
   await expect(page.getByText("발행본이 고객 웹에 적용되었습니다.", { exact: true })).toBeVisible();
-  expect(writes[0].content).toMatchObject({ title: "Sokcho by the sea", heroAlt: "English coastal hotel", seo: { title: "Sokcho English SEO" }, experiences: [{ title: "Ocean suite" }] });
+  expect(writes[0].content).toMatchObject({ title: "Sokcho by the sea", heroAlt: "English coastal hotel", seo: { title: "Sokcho English SEO" } });
+  expect(writes[0].connections).toEqual({ roomTypeIds: [], targetHotelIds: [], relatedPages: [
+    { targetPageId: diningId, relationType: "MANUAL_CARD", displayOrder: 0 },
+    { targetPageId: facilityId, relationType: "MANUAL_CARD", displayOrder: 1 },
+  ] });
   expect(writes[1]).toEqual({ expectedDraftVersion: 2, comment: null });
   expect(writes[2]).toEqual({ expectedDraftVersion: 2, comment: null });
   expect(writes[3]).toEqual({ expectedDraftVersion: 2, expectedPublishedVersion: 0 });
   await page.getByRole("button", { name: "한국어", exact: true }).click();
   await expect(page.getByLabel("히어로 제목", { exact: true })).toHaveValue("속초 제목");
+});
+
+test("keeps the English landing catalog when a slower Korean catalog request finishes", async ({ page }) => {
+  const path = "/api/staff/website/pages/sokcho-page/translations/en";
+  const englishId = "english-only-experience";
+  const koreanId = "korean-only-experience";
+  let englishRequested = false;
+  const releaseKorean: Array<() => void> = [];
+  const document = contentPageDocument({
+    id: "sokcho-page", pageType: "HOTEL_LANDING", hotelId: SOKCHO, contentKind: "LANDING", publishedVersion: 0, publishedMetadata: null,
+    draftMetadata: { slug: "sokcho", path: "/en/stays/sokcho", menuLabel: "Sokcho", menuVisible: true, menuOrder: 10 },
+    draftConnections: { roomTypeIds: [], targetHotelIds: [], relatedPages: [] },
+    draftContent: { heroAssetId: BUNDLED_ASSET, heroImage: "/images/sokcho-coast-hero.png", heroAlt: "Coast", eyebrow: "SOKCHO", title: "English hotel", description: "By the sea", arrival: { address: "Coast road", checkInOut: "15:00 / 11:00", highlight: "Arrive slowly" }, experiences: [], offers: [], seo: { title: "Sokcho", description: "Sokcho stay" } },
+  });
+  await page.addInitScript(() => localStorage.setItem("hotel-chain-staff", JSON.stringify({
+    id: "editor-test", email: "editor@example.test", displayName: "영문 편집자", role: "HQ_EDITOR", hotelId: null,
+  })));
+  await page.route("**/api/staff/website/content-reference**", async route => {
+    const locale = new URL(route.request().url()).searchParams.get("locale");
+    if (locale !== "en") {
+      if (!englishRequested) await new Promise<void>(resolve => releaseKorean.push(resolve));
+      return route.fulfill({ json: { hotels: [], pages: [{ id: koreanId, contentKind: "EXPERIENCE", hotelId: SOKCHO, title: "한국어 전용 체험", path: "/stays/sokcho/ko" }] } });
+    }
+    englishRequested = true;
+    releaseKorean.splice(0).forEach(resolve => resolve());
+    return route.fulfill({ json: { hotels: [], pages: [{ id: englishId, contentKind: "EXPERIENCE", hotelId: SOKCHO, title: "English only experience", path: "/en/stays/sokcho/experience" }] } });
+  });
+  await page.route("**/api/staff/website/pages/sokcho-page", route => route.fulfill({ json: document }));
+  await page.route(`**${path}/versions`, route => route.fulfill({ json: [] }));
+  await page.route(`**${path}/review`, route => route.fulfill({ json: translationReviewState() }));
+  await page.route(`**${path}`, route => route.fulfill({ json: document }));
+
+  await page.goto("/dashboard/website");
+  await expect(page.getByRole("button", { name: "영어", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByText("English only experience", { exact: true })).toBeVisible();
+  await expect(page.getByText("한국어 전용 체험", { exact: true })).toHaveCount(0);
 });
 
 test("runs the full English home workflow with one saved draft version", async ({ page }) => {
@@ -1316,15 +1374,11 @@ test("edits a landing block and requires saving before publishing", async ({ pag
   );
   await page.getByRole("button", { name: "Close" }).click();
 
-  await page.getByRole("button", { name: "경험 2 위로 이동" }).click();
-  await expect(page.getByLabel("경험 1 제목")).toHaveValue("동해의 식탁");
-
   await expect(page.getByRole("button", { name: "발행" })).toBeDisabled();
   const savedRequest = page.waitForRequest((request) => request.method() === "PUT" && request.url().includes(SOKCHO));
   await page.getByRole("button", { name: "초안 저장" }).click();
   const savedContent = (await savedRequest).postDataJSON().content;
   expect(savedContent.title).toBe("속초 새 문구");
-  expect(savedContent.experiences[0].title).toBe("동해의 식탁");
   expect(savedContent.seo).toEqual({
     title: "속초 오션 호텔 | STAY HANEUL",
     description: "동해와 설악을 바라보는 속초 오션 호텔의 객실과 예약 정보를 확인하세요.",
@@ -1336,6 +1390,127 @@ test("edits a landing block and requires saving before publishing", async ({ pag
     menuOrder: 11,
   });
   await expect(page.getByRole("button", { name: "발행" })).toBeEnabled();
+});
+
+test("selects and orders up to three published detail pages for landing recommendations", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const diningId = "sokcho-dining";
+  const facilityId = "sokcho-facility";
+  const experienceId = "sokcho-experience";
+  await page.route("**/api/staff/website/content-reference", route => route.fulfill({ json: {
+    hotels: [],
+    pages: [
+      { id: diningId, contentKind: "DINING", hotelId: SOKCHO, title: "동해 다이닝", path: "/stays/sokcho/dining" },
+      { id: facilityId, contentKind: "FACILITY", hotelId: SOKCHO, title: "오션 스파", path: "/stays/sokcho/spa" },
+      { id: experienceId, contentKind: "EXPERIENCE", hotelId: SOKCHO, title: "해변 산책", path: "/stays/sokcho/walk" },
+      { id: "sokcho-room", contentKind: "ROOM", hotelId: SOKCHO, title: "오션 객실", path: "/stays/sokcho/rooms/ocean" },
+      { id: "jeju-dining", contentKind: "DINING", hotelId: JEJU, title: "제주 다이닝", path: "/stays/jeju/dining" },
+    ],
+  } }));
+  await page.route(`**/api/staff/web-content/hotels/${SOKCHO}`, route => {
+    const request = route.request();
+    const body = request.method() === "PUT" ? request.postDataJSON() : null;
+    return route.fulfill({ json: {
+      draftContent: {
+        heroAssetId: BUNDLED_ASSET, heroImage: "/images/sokcho-coast-hero.png", heroAlt: "속초 해안", eyebrow: "SOKCHO",
+        title: "속초 제목", description: "동해를 담은 휴식",
+        arrival: { address: "가상 해안로 186", checkInOut: "15:00 / 11:00", highlight: "바다 곁의 하루" },
+        experiences: [], offers: [],
+      },
+      draftVersion: request.method() === "PUT" ? 2 : 1,
+      publishedContent: {}, publishedVersion: 1,
+      draftConnections: body?.connections ?? { roomTypeIds: [], targetHotelIds: [], relatedPages: [
+        { targetPageId: diningId, relationType: "MANUAL_CARD", displayOrder: 0 },
+        { targetPageId: facilityId, relationType: "MANUAL_CARD", displayOrder: 1 },
+      ] },
+      publishedConnections: { roomTypeIds: [], targetHotelIds: [], relatedPages: [] },
+    } });
+  });
+
+  await page.goto("/dashboard/website");
+  await expect(page.getByRole("heading", { name: "추천 즐길 거리" })).toBeVisible();
+  await expect(page.getByLabel("동해 다이닝 추천")).toBeChecked();
+  await expect(page.getByLabel("오션 스파 추천")).toBeChecked();
+  await expect(page.getByLabel("해변 산책 추천")).not.toBeChecked();
+  await expect(page.getByText("오션 객실", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("제주 다이닝", { exact: true })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "추천 2 위로 이동" }).focus();
+  await page.keyboard.press("Enter");
+  await page.getByLabel("해변 산책 추천").focus();
+  await page.keyboard.press("Space");
+  const savedRequest = page.waitForRequest(request => request.method() === "PUT" && request.url().endsWith(`/api/staff/web-content/hotels/${SOKCHO}`));
+  await page.getByRole("button", { name: "초안 저장" }).click();
+  expect((await savedRequest).postDataJSON().connections).toEqual({
+    roomTypeIds: [], targetHotelIds: [], relatedPages: [
+      { targetPageId: facilityId, relationType: "MANUAL_CARD", displayOrder: 0 },
+      { targetPageId: diningId, relationType: "MANUAL_CARD", displayOrder: 1 },
+      { targetPageId: experienceId, relationType: "MANUAL_CARD", displayOrder: 2 },
+    ],
+  });
+});
+
+test("removes a stale Korean landing recommendation and saves the remaining draft connections", async ({ page }) => {
+  const staleId = "archived-korean-experience";
+  let savedConnections: unknown;
+  await page.route("**/api/staff/website/content-reference", route => route.fulfill({ json: { hotels: [], pages: [] } }));
+  await page.route(`**/api/staff/web-content/hotels/${SOKCHO}`, route => {
+    const body = route.request().method() === "PUT" ? route.request().postDataJSON() : null;
+    if (body) savedConnections = body.connections;
+    return route.fulfill({ json: {
+      draftContent: {
+        heroAssetId: BUNDLED_ASSET, heroImage: "/images/sokcho-coast-hero.png", heroAlt: "속초 해안", eyebrow: "SOKCHO",
+        title: "속초 제목", description: "동해를 담은 휴식",
+        arrival: { address: "가상 해안로 186", checkInOut: "15:00 / 11:00", highlight: "바다 곁의 하루" },
+        experiences: [], offers: [],
+      },
+      draftVersion: body ? 2 : 1,
+      publishedContent: {}, publishedVersion: 1,
+      draftConnections: body?.connections ?? { roomTypeIds: [], targetHotelIds: [], relatedPages: [
+        { targetPageId: staleId, relationType: "MANUAL_CARD", displayOrder: 0 },
+      ] },
+      publishedConnections: { roomTypeIds: [], targetHotelIds: [], relatedPages: [] },
+    } });
+  });
+
+  await page.goto("/dashboard/website");
+  await expect(page.getByText(staleId, { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "추천 1 제거" }).focus();
+  await page.keyboard.press("Enter");
+  await page.getByRole("button", { name: "초안 저장", exact: true }).click();
+  await expect.poll(() => savedConnections).toEqual({ roomTypeIds: [], targetHotelIds: [], relatedPages: [] });
+});
+
+test("removes a stale English landing recommendation and saves the remaining draft connections", async ({ page }) => {
+  const staleId = "archived-english-experience";
+  const path = "/api/staff/website/pages/sokcho-page/translations/en";
+  let savedConnections: unknown;
+  let document = contentPageDocument({
+    id: "sokcho-page", pageType: "HOTEL_LANDING", hotelId: SOKCHO, contentKind: "LANDING", publishedVersion: 0, publishedMetadata: null,
+    draftMetadata: { slug: "sokcho", path: "/en/stays/sokcho", menuLabel: "Sokcho", menuVisible: true, menuOrder: 10 },
+    draftConnections: { roomTypeIds: [], targetHotelIds: [], relatedPages: [{ targetPageId: staleId, relationType: "MANUAL_CARD", displayOrder: 0 }] },
+    draftContent: { heroAssetId: BUNDLED_ASSET, heroImage: "/images/sokcho-coast-hero.png", heroAlt: "Coast", eyebrow: "SOKCHO", title: "English hotel", description: "By the sea", arrival: { address: "Coast road", checkInOut: "15:00 / 11:00", highlight: "Arrive slowly" }, experiences: [], offers: [], seo: { title: "Sokcho", description: "Sokcho stay" } },
+  });
+  await page.route("**/api/staff/website/content-reference**", route => route.fulfill({ json: { hotels: [], pages: [] } }));
+  await page.route("**/api/staff/website/pages/sokcho-page", route => route.fulfill({ json: document }));
+  await page.route(`**${path}/versions`, route => route.fulfill({ json: [] }));
+  await page.route(`**${path}/review`, route => route.fulfill({ json: translationReviewState() }));
+  await page.route(`**${path}`, route => {
+    if (route.request().method() === "PUT") {
+      const body = route.request().postDataJSON();
+      savedConnections = body.connections;
+      document = { ...document, draftConnections: body.connections, draftVersion: 2 };
+    }
+    return route.fulfill({ json: document });
+  });
+
+  await page.goto("/dashboard/website");
+  await page.getByRole("button", { name: "영어", exact: true }).click();
+  await expect(page.getByText(staleId)).toBeVisible();
+  await page.getByRole("button", { name: "영어 추천 1 제거" }).focus();
+  await page.keyboard.press("Enter");
+  await page.getByRole("button", { name: "초안 저장", exact: true }).click();
+  await expect.poll(() => savedConnections).toEqual({ roomTypeIds: [], targetHotelIds: [], relatedPages: [] });
 });
 
 test("confirms before discarding landing edits and clears landing dirtiness after switching pages", async ({ page }) => {

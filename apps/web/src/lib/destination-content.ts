@@ -18,7 +18,7 @@ export type DestinationContent = {
   description: string
   seo: { title: string; description: string }
   arrival: { address: string; checkInOut: string; highlight: string }
-  experiences: Array<{ category: string; title: string; description: string }>
+  experiences: Array<{ category: string; title: string; description: string; href?: string; image?: string }>
   offers: Array<{ title: string; detail: string; bookingPeriod: string; stayPeriod: string }>
 }
 
@@ -67,6 +67,8 @@ const isText = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const internalPagePath = /^\/[a-z0-9]+(?:-[a-z0-9]+)*(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)*$/
+const recommendationKinds = new Set(['DINING', 'FACILITY', 'EXPERIENCE'])
 
 const normalizedTextWithin = (value: unknown, maximumLength: number): string | null =>
   typeof value === 'string' && value.trim().length > 0 && value.trim().length <= maximumLength
@@ -96,15 +98,38 @@ function publishedHeroSlides(published: Record<string, unknown>): DestinationHer
   return slides
 }
 
+function legacyExperiences(value: unknown): DestinationContent['experiences'] | null {
+  return Array.isArray(value) && value.every(item =>
+    isRecord(item) && isText(item.category) && isText(item.title) && isText(item.description),
+  ) ? value as DestinationContent['experiences'] : null
+}
+
+function publishedRecommendations(value: unknown): DestinationContent['experiences'] | null {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 3) return null
+  const cards: DestinationContent['experiences'] = []
+  for (const item of value) {
+    if (!isRecord(item) || !isText(item.pageId) || !uuid.test(item.pageId)
+      || !isText(item.contentKind) || !recommendationKinds.has(item.contentKind)
+      || !isText(item.path) || !internalPagePath.test(item.path)
+      || !isText(item.title) || !isText(item.summary)) return null
+    const image = safeMediaDeliveryPath(undefined, item.image)
+    if (!image) return null
+    cards.push({ category: item.contentKind, title: item.title, description: item.summary, href: item.path, image })
+  }
+  return cards
+}
+
 export function destinationContentFromPublished(region: string, published: unknown): DestinationContent
 export function destinationContentFromPublished(region: string, published: unknown, locale: 'en'): DestinationContent | null
 export function destinationContentFromPublished(region: string, published: unknown, locale?: 'en'): DestinationContent | null {
   if (locale === 'en') {
+    const recommendations = isRecord(published) ? publishedRecommendations(published.recommendedExperiences) : null
+    const legacy = isRecord(published) ? legacyExperiences(published.experiences) : null
     if (!isRecord(published) || !['title', 'description', 'eyebrow'].every(key => isText(published[key]))
       || !normalizedTextWithin(published.heroAlt, 200)
       || !safeMediaDeliveryPath(published.heroAssetId, published.heroImage) || !isRecord(published.arrival)
       || !['address', 'checkInOut', 'highlight'].every(key => isText((published.arrival as Record<string, unknown>)[key]))
-      || !Array.isArray(published.experiences) || !published.experiences.every(item => isRecord(item) && ['category', 'title', 'description'].every(key => isText(item[key])))
+      || (!recommendations && !legacy)
       || !Array.isArray(published.offers) || !published.offers.every(item => isRecord(item) && ['title', 'detail', 'bookingPeriod', 'stayPeriod'].every(key => isText(item[key])))) return null
     const englishSeo = isRecord(published.seo) ? published.seo : {}
     return destinationContentFromPublished(region, { ...published, seo: {
@@ -117,9 +142,9 @@ export function destinationContentFromPublished(region: string, published: unkno
 
   const arrival = isRecord(published.arrival) ? published.arrival : {}
   const seo = isRecord(published.seo) ? published.seo : {}
-  const experiences = Array.isArray(published.experiences) && published.experiences.every(item =>
-    isRecord(item) && isText(item.category) && isText(item.title) && isText(item.description),
-  ) ? published.experiences as DestinationContent['experiences'] : fallback.experiences
+  const experiences = publishedRecommendations(published.recommendedExperiences)
+    ?? legacyExperiences(published.experiences)
+    ?? fallback.experiences
   const offers = Array.isArray(published.offers) && published.offers.every(item =>
     isRecord(item) && isText(item.title) && isText(item.detail) && isText(item.bookingPeriod) && isText(item.stayPeriod),
   ) ? published.offers as DestinationContent['offers'] : fallback.offers
