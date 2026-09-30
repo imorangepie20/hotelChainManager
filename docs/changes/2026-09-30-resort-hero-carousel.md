@@ -1,7 +1,7 @@
 # 리조트 랜딩 5장 히어로·Motion 전환 구현
 
 날짜: 2026-09-30
-상태: **독립 최종 리뷰 차단사항 수정·전체 회귀 완료, 배포·운영 연결·발행 미수행**
+상태: **Zorin 배포·운영 연결·발행·공개 검증 완료**
 설계: [리조트 랜딩 5장 히어로·격자 전환 설계](../superpowers/specs/2026-09-30-resort-hero-carousel-design.md)
 계획: [리조트 랜딩 5장 히어로·Motion 전환 구현 계획](../superpowers/plans/2026-09-30-resort-hero-carousel.md)
 자산: [리조트 메인 미디어 자산 15개 등록](2026-09-30-resort-main-media-assets.md)
@@ -42,7 +42,7 @@
 - preload와 outgoing·incoming 타일이 같은 검증된 WebP `srcset`·`sizes`를 사용해 첫 전환 중 별도 원본 요청을 피한다.
 - 공개 배열이 5장·대소문자를 무시한 고유 UUID·안전한 전달 경로·1~200자 alt 계약을 만족하지 않으면 배열 전체를 버리고 legacy 단일 이미지로 복귀한다.
 - 자동 전환은 live region으로 읽지 않고 수동 탐색만 안내한다. 고정 예약 링크의 hover·focus도 자동 전환을 멈춘다.
-- CTA를 가리던 제어 영역을 우측으로 분리했고 380px 이하에서는 2행 grid를 사용한다. 320·360·390px production 렌더링에서 모든 버튼이 viewport 안에 있고 실제 포인터 영역이 44×44px 이상임을 검사한다.
+- CTA를 가리던 제어 영역을 우측으로 분리했고 390px 이하에서는 5개 위치 버튼과 가운데 정렬한 이전·재생/일시정지·다음 버튼을 2행 grid로 배치한다. 320·360·384·385·390px production 렌더링에서 모든 버튼이 viewport 안에 있고 실제 포인터 영역이 44×44px 이상임을 검사한다.
 
 ## 테스트 우선 구현 근거
 
@@ -80,17 +80,19 @@
 
 - API 리뷰에서 UUID 형식·정규화 중복 검증이 일부 미디어 조회 뒤에 실행되는 문제와, 모양만 완전한 손상 배열이 legacy variant fallback을 억제하는 문제를 재현해 RED→GREEN으로 수정했다.
 - 고객 parser 리뷰에서 대소문자만 다른 중복 UUID와 200자 초과 alt를 허용하는 문제를 재현해 배열 전체 legacy fallback으로 고정했다.
-- 모바일 hit area 지적은 최신 production build에서 320·360·390px의 모든 제어가 44×44px 이상으로 이미 렌더링돼 재현되지 않았다. 해당 최소 크기 assertion을 회귀에 추가했다.
+- 모바일 hit area 지적을 운영 390px에서 재검증하던 중 일시정지 버튼이 42×42px인 실제 회귀를 확인했다. reduced-motion을 `no-preference`로 고정해 버튼이 반드시 렌더링되는 assertion을 먼저 RED로 추가하고 모든 조작 대상을 44×44px로 수정했다.
+- 독립 재리뷰에서 381~385px은 1행 flex와 우측 여백 때문에 첫 버튼이 잘린다는 추가 문제를 확인했다. 384·385px 회귀를 RED로 재현한 뒤 2행 grid breakpoint를 390px까지 확장했고, 390·385·384·360·320px 대상 회귀와 캐러셀 전체 10개가 통과했다.
+- 수정 후 독립 재리뷰는 `passed: true`, Critical·Important 차단사항 0건으로 종료됐다.
 - 배포 리뷰에서 working tree tar가 ignored 루트 `.env`와 생성 산출물을 포함하는 보안 문제를 확인했다. 배포 스크립트는 clean `HEAD`의 `git archive`만 전송하고 원격에 남은 루트 `.env`와 테스트·생성 산출물을 제거하도록 변경했다.
 
-## 아직 완료하지 않은 범위
+## 배포·운영 공개 결과
 
-1. `main` 커밋·push와 clean-HEAD Zorin 배포.
-2. 운영 관리자에서 속초·설악산·제주 각각의 등록 자산 5개를 순서대로 연결하는 작업.
-3. 초안 저장·미리보기·검토·승인·발행과 공개 API 재조회.
-4. 실제 공개 화면의 데스크톱·390px·reduced-motion·자동 전환·crop·alt·예약 UI 검증.
-
-따라서 이 시점에는 “애니메이션 코드 구현 완료”만 주장하며 “운영 공개 완료”로 보지 않는다.
+- `main`을 clean `HEAD`의 `git archive`로 Zorin에 배포했고 API·고객 웹·관리자·tunnel 컨테이너 health와 서버 내부 5개·Cloudflare 경유 3개 검증을 통과했다.
+- Windows archive가 shell script를 CRLF로 내보내던 배포 실패를 재현하고 `.gitattributes`의 `*.sh text eol=lf`로 수정했다.
+- 운영 관리자에서 속초 5장(v3), 설악산 5장(v2), 제주 5장(v2)을 저장·발행했다.
+- 속초 첫 legacy 번들 자산에는 READY variant가 없어 준비한 1600×900 원본을 신규 업로드해 교체했다. 홈 페이지가 기존 자산을 초안·발행본에서 참조하므로 해당 legacy 자산은 archive하지 않았다.
+- 공개 resolve API에서 각 경로가 정확히 5장·고유 UUID·첫 슬라이드 legacy mirror·자산별 READY variant 2개를 반환하는지 확인했다. 원본 15개와 WebP 30개가 모두 HTTP 200이다.
+- 실제 고객 페이지 세 경로에서 5개 위치 버튼, 5초 자동 전환, 수동 다음, 고정 문구, 모바일 12개 타일, 1280px WebP `srcset`, 콘솔 오류 없음을 확인했다. reduced-motion에서는 자동 전환이 멈추고 수동 전환이 페이드로 동작했다.
 
 ## 롤백
 

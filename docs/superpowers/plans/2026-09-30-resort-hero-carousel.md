@@ -8,7 +8,7 @@
 
 기술: Java 21, Spring Boot, PostgreSQL JSONB, Next.js 관리자, React 고객 웹, TypeScript, Motion for React, Playwright, JUnit.
 
-실행 상태(2026-09-30): Task 1~4 완료, Task 5 미수행. 독립 최종 리뷰 차단사항 수정 후 API 81개·관리자 Playwright 70개와 TypeScript·고객 Playwright 42개와 production build가 통과했다. 실제 결과는 [변경 기록](../../changes/2026-09-30-resort-hero-carousel.md)에 확정한다.
+실행 상태(2026-09-30): Task 1~5 완료. 독립 최종 리뷰 차단사항을 수정하고 API 81개·관리자 Playwright 70개와 TypeScript·고객 Playwright 42개와 production build를 통과한 뒤 Zorin에 배포했다. 운영에서 속초 v3·설악산 v2·제주 v2를 발행하고 3×5 공개 API·READY variants·실제 고객 전환을 검증했다. 운영 중 발견한 390px 42×42px hit area와 381~385px 잘림도 RED→GREEN으로 수정해 320·360·384·385·390px 회귀를 추가했다. 실제 결과는 [변경 기록](../../changes/2026-09-30-resort-hero-carousel.md)에 확정한다.
 
 ## 전역 제약
 
@@ -110,7 +110,7 @@
 
 완료 기준: 문서와 코드 상태가 일치하고 독립 리뷰의 차단 이슈가 없으며 모든 대상 검사가 통과한다.
 
-## Task 5: 배포·리조트별 5장 연결·공개 검증 — 미수행
+## Task 5: 배포·리조트별 5장 연결·공개 검증 — 완료
 
 파일/도구:
 - `infra/DEPLOY-ZORIN.md`

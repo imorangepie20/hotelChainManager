@@ -14,14 +14,15 @@
 
 ## 리조트 메인 미디어 15개·5장 Motion 히어로 (2026-09-30)
 
-- 속초·설악산·제주에 사용할 이미지를 지점별 5개, 총 15개 준비해 운영 관리자 미디어 자산으로 등록했다. 관리자 재조회에서 활성 자산 15개와 지점별 5개 구성을 확인했고, 모든 자산에 자산명과 한국어 기본 대체 텍스트가 있다.
-- 관리자 `저장소 점검`은 `로컬 · 정상`, DB 참조와 저장 파일 일치를 반환했다. 검토 모달은 `선택`하지 않고 닫아 기존 랜딩 초안·발행본을 변경하지 않았다.
+- 속초·설악산·제주에 사용할 이미지를 지점별 5개, 총 15개 준비해 운영 관리자 미디어 자산으로 연결했다. 모든 랜딩 자산에 자산명·한국어 기본 대체 텍스트와 READY 640px·1280px WebP가 있다. 속초 첫 legacy 번들 자산은 variant가 없어 준비한 1600×900 원본을 신규 업로드해 교체했다.
+- 기존 속초 번들 자산은 한국어 홈 페이지 초안·발행본에서 사용 중이라 archive하지 않았다. 따라서 관리자 전체 활성 자산은 16개지만 리조트 랜딩 운영 세트는 정확히 15개다. 관리자 `저장소 점검`은 `로컬 · 정상`, DB 참조와 저장 파일 일치를 반환했다.
 - `HOTEL_LANDING.heroSlides`의 정확히 5장·중복 없는 자산 계약을 구현했다. API는 UUID 형식과 정규화 기준 중복을 미디어 조회보다 먼저 검증하고 첫 슬라이드 alt를 trim한 동일 값으로 기존 `heroAssetId`/`heroImage`/`heroAlt`에 미러링한다. legacy 단일 snapshot을 계속 허용하며 usage·공개 variant·자산 교체를 다섯 배열 경로에 적용한다.
 - 공개 snapshot의 배열이 불완전하거나 손상돼도 legacy 자산의 READY variant를 항상 함께 제공한다. 한국어뿐 아니라 영어 5장 저장·usage·승인·발행·공개 variants와 비첫 슬롯 교체·중복 target rollback을 통합 테스트로 고정했다.
 - 한국어·영어 관리자에 5개 고정 슬롯, 누락·중복 안내, 인접 순서 이동과 390px 키보드 흐름을 구현했다.
 - 고객 웹은 Motion for React `^13.4.4`와 동적 `LazyMotion` feature chunk를 사용한다. 데스크톱 24개·모바일 12개 타일, 5초 자동 순환, 명시적 일시정지·재생, 이전·다음·위치 버튼, 전체 히어로 hover/focus/hidden 일시정지, 다음 이미지 preload를 제공한다. 자동 이동은 live region으로 읽지 않고 수동 이동만 안내하며 reduced-motion에서는 자동 순환을 시작하지 않고 180ms 수동 페이드를 사용한다.
-- 리뷰에서 확인된 CTA·제어 영역 중첩을 제거하고 380px 이하 제어를 2행으로 배치했다. 고객 parser는 UUID를 대소문자 무시로 중복 검사하고 alt를 1~200자로 제한한다. 320·360·390px production 렌더링에서 모든 제어가 viewport 안에 있고 44×44px 이상임을 검사한다.
-- Zorin 배포 archive는 ignored `.env`나 생성·테스트 산출물이 아니라 clean `HEAD`만 전송하도록 보강했다. 독립 최종 리뷰 수정 후 API 81개, 관리자 Playwright 70개와 TypeScript, 고객 parser·production build·Playwright 42개, PowerShell 구문·archive 안전성·diff 검사가 통과했다. 추가 자산은 아직 운영 랜딩에 연결·발행되지 않았으며, push·배포와 지점별 5장 연결·발행·공개 검증이 남았다.
+- 리뷰에서 확인된 CTA·제어 영역 중첩을 제거하고 390px 이하 제어를 2행 grid로 배치했다. 고객 parser는 UUID를 대소문자 무시로 중복 검사하고 alt를 1~200자로 제한한다. 320·360·384·385·390px 렌더링에서 모든 제어가 viewport 안에 있고 44×44px 이상임을 검사한다.
+- Zorin 배포 archive는 ignored `.env`나 생성·테스트 산출물이 아니라 clean `HEAD`만 전송한다. Windows `git archive`의 shell script CRLF 문제를 `.gitattributes`의 LF 고정으로 수정한 뒤 API·고객 웹·관리자·tunnel health와 서버 내부·Cloudflare 경유 검증을 통과했다.
+- 운영 관리자에서 속초 5장(v3), 설악산 5장(v2), 제주 5장(v2)을 발행했다. 공개 API는 세 경로 각각 5장·고유 UUID·legacy mirror·READY variant 2개를 반환하고, 원본 15개와 WebP 30개가 모두 HTTP 200이다. 실제 고객 페이지에서 자동·수동 전환, 12개 모바일 타일, 고정 문구, 1280px `srcset`, reduced-motion 자동 정지·수동 페이드를 확인했다.
 - 정확한 자산명·생성 출처·사용 조건은 [자산 변경 기록](../changes/2026-09-30-resort-main-media-assets.md), 코드·검증 상태는 [히어로 구현 기록](../changes/2026-09-30-resort-hero-carousel.md)을 따른다.
 
 ## Toss 라이브 정산 대사 사전 감사 (2026-09-27)

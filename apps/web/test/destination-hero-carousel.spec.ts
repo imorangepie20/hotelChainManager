@@ -161,13 +161,20 @@ test('uses a short fade instead of tiles for reduced motion', async ({ page }) =
   await expect(carousel.locator('.hero-carousel-fade')).toHaveCount(1)
 })
 
-for (const width of [390, 360, 320]) {
+for (const width of [390, 385, 384, 360, 320]) {
   test(`uses twelve visible transition tiles and controls at ${width}px`, async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'no-preference' })
     await page.setViewportSize({ width, height: 844 })
     await mockLanding(page)
     await page.goto('/')
 
     const carousel = page.getByRole('region', { name: '리조트 메인 이미지' })
+    const pause = carousel.getByRole('button', { name: '자동 전환 일시정지' })
+    await expect(pause).toBeVisible()
+    const pauseBox = await pause.boundingBox()
+    expect(pauseBox).not.toBeNull()
+    expect(pauseBox!.width).toBeGreaterThanOrEqual(44)
+    expect(pauseBox!.height).toBeGreaterThanOrEqual(44)
     const buttons = carousel.getByRole('button')
     for (let index = 0; index < await buttons.count(); index++) {
       const box = await buttons.nth(index).boundingBox()
