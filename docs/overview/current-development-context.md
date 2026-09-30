@@ -19,7 +19,7 @@
 - 한국어·영어 관리자는 콘텐츠 참조 카탈로그 기반 체크박스와 순서 버튼을 사용한다. 390px에서 Space 선택·Enter 순서 이동을 검증했다. 기존 자유 입력 `experiences`는 호환용으로 보존하지만 새 편집 대상에서는 제외했다.
 - 고객 웹은 유효한 추천 snapshot을 기존 카드보다 우선하고 이미지·요약·안전한 내부 상세 링크를 렌더링한다. snapshot이 없거나 손상되면 기존 `experiences`로 복귀한다.
 - 리뷰 Important 3건인 snapshot 이미지 media usage 보호, 영어 발행 카탈로그와 늦은 응답 폐기, 양 언어 stale 추천 제거를 수정했다. 최종 API 통합 58건, 관리자 TypeScript·CMS Playwright 68건, 고객 parser·production build·대상 Playwright 11건이 통과했다. 변경 파일 ESLint는 오류 0·경고 6건이다.
-- 사용자 요청에 따라 문서 갱신·main 커밋·푸시·Zorin 배포를 진행한다. 기존 운영 CMS 추천 저장·랜딩 발행은 자동 수행하지 않으며 실제 브라우저 확인은 사용자가 실행한다. 상세 결과와 후속 Minor는 [변경 기록](../changes/2026-09-30-landing-recommended-experiences.md)을 따른다.
+- 기능 커밋 `2e4d2cc`를 main에 푸시하고 GitHub 고객 웹 검사 success를 확인했다. Zorin 소스 23개 archive SHA-256 일치·실제 이미지 재빌드·서비스 health·내부 및 터널 검증을 통과했다. 운영 한국어 resolve는 세 지점 모두 200·추천 0개이며 영어 resolve는 세 지점 모두 404다. 기존 CMS 콘텐츠를 자동 발행하지 않았고 추천 저장·발행·실제 브라우저 클릭은 사용자가 실행한다. 상세 배포 결과와 후속 Minor는 [변경 기록](../changes/2026-09-30-landing-recommended-experiences.md)을 따른다.
 
 ## 리조트 메인 미디어 15개·5장 Motion 히어로 (2026-09-30)
 

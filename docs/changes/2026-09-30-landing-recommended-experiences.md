@@ -1,7 +1,7 @@
 # 지점 랜딩 추천 즐길 거리 상세 페이지 연결
 
 날짜: 2026-09-30
-상태: **리뷰 Important 수정·최종 대상 검증 완료, 커밋·푸시·Zorin 배포 진행**
+상태: **리뷰 Important 수정·최종 대상 검증·main 푸시·Zorin 배포 완료, 운영 추천 저장·발행은 사용자 확인 대기**
 계획: [지점 랜딩 추천 즐길 거리 구현 계획](../plans/2026-09-30-landing-recommended-experiences.md)
 
 ## 변경 이유
@@ -64,10 +64,21 @@
 ## 미검증·다음 작업
 
 - 실제 운영 DB에 추천 관계를 저장하거나 랜딩을 발행하지 않았다.
-- 사용자 요청에 따라 검증된 소스를 main에 커밋·푸시하고 clean HEAD archive로 기존 Zorin 서버에 배포한다. 기존 CMS 콘텐츠는 자동 재발행하지 않는다.
-- 배포 후 서비스 health와 공개 URL 응답을 확인한다. 운영 관리자 선택·저장·발행 및 실제 고객 카드 클릭은 사용자가 브라우저에서 확인한다.
+- 운영 관리자 선택·저장·발행 및 실제 고객 카드 클릭은 사용자가 브라우저에서 확인한다. 배포 자체가 추천 콘텐츠 발행을 수행하지는 않는다.
 - 전체 API·관리자 회귀, Firefox/WebKit과 고객 영어 추천 링크·손상 fallback 브라우저 회귀는 이번 최종 대상 검증 범위 밖이다.
 - Minor 3건(이미지 alt/제목 중복 낭독, 제목 기반 React key, 고객 영어 추천 브라우저 회귀 부족)은 후속으로 남겼다.
+
+## 커밋·배포 결과
+
+- 기능 커밋 `2e4d2cc3e45c8180a90d027b8b59e54ab11c8c99`를 `origin/main`에 푸시하고 원격 SHA 일치를 확인했다. 해당 커밋의 GitHub `customer-web-playwright` 검사도 success다.
+- clean HEAD archive만 `~/apps/hotel-chain-manager`에 전송했다. 배포 전 PostgreSQL 논리 백업은 서버 `backup/pre-recommendations-2e4d2cc.dump`에 권한 600으로 보관했다. 백업 복원 훈련은 수행하지 않았다.
+- Git Bash SSH는 인증 실패했지만 Windows 기본 OpenSSH는 기존 키로 연결됐다. 표준입력 명령 전달은 CRLF·빈 실행 문제가 있어 성공으로 인정하지 않았고, LF 셸 파일을 SCP로 전송해 `bash /tmp/hcm-landing-remote-deploy.sh`로 실제 배포했다.
+- archive의 변경 파일 23개와 서버 파일의 SHA-256을 배포 후 다시 대조해 모두 일치했다. API·고객 웹·관리자 이미지를 재생성하고 `up --wait --wait-timeout 240`을 통과했다. PostgreSQL·concierge는 healthy, tunnel은 running이다. 호스트 포트를 추가하지 않았다.
+- `verify-deployment.sh`의 서버 내부 API·고객·관리자·concierge health, chat→telemetry→PostgreSQL 왕복, Cloudflare 경유 고객 API·고객 웹·관리자 검사가 모두 통과했다. 지표 검증은 테스트 채팅에 따른 telemetry 이벤트를 추가하지만 예약·결제·CMS는 변경하지 않는다.
+- 고객 한국어·영어 랜딩 URL 6개와 관리자 `/login`은 HTML HTTP 200이다. 이는 SPA 전달 확인이며 영어 콘텐츠 발행 성공을 의미하지 않는다.
+- 공개 resolve API의 한국어 `/stays/{sokcho|seoraksan|jeju}`는 모두 `HOTEL_LANDING` HTTP 200이며 추천 snapshot은 0개다. 기존 `experiences` fallback이 유지된다.
+- 영어 `/en/stays/{sokcho|seoraksan|jeju}` resolve API는 모두 HTTP 404다. 운영 영어 발행 상태는 관리자에서 확인·발행해야 하며 이번 배포에서 자동으로 만들지 않았다.
+- 관리자 확인 주소: `https://admin-hcm.approid.team/dashboard/website`. 한국어 상세 페이지 발행 → 같은 지점 랜딩에서 추천 1~3개 선택·순서 변경 → 저장·발행 → 고객 상세 링크 클릭 순서로 확인한다. 영어는 영어 상세·랜딩의 검토·승인·발행 흐름을 별도로 수행한다.
 
 ## 롤백
 
