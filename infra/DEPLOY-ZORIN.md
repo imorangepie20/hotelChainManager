@@ -1,6 +1,6 @@
 # 호텔 체인 매니저 - Zorin 홈 서버 배포
 
-> 최종 갱신: 2026-09-26
+> 최종 갱신: 2026-09-30
 
 ## 대상
 
@@ -110,6 +110,8 @@ getent hosts admin-hcm.approid.team
 제외한 루트 `.env`, `infra/secrets/*.env`, 생성 이미지 `artifacts/`,
 Playwright 결과와 로컬 build 산출물은 배포 archive에 들어가지 않는다. 원격에
 과거 배포가 남긴 루트 `.env`와 생성·테스트 산출물이 있으면 전송 직후 제거한다.
+저장소의 `.gitattributes`는 `*.sh text eol=lf`를 강제하므로 Windows에서 만든
+archive의 서버 실행 스크립트도 Bash가 읽을 수 있는 LF 줄바꿈을 유지한다.
 
 ```bash
 # 로컬 Windows 에서 코드를 서버로 보낸다

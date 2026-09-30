@@ -1,2 +1,5 @@
 # Markdown은 텍스트로 취급해 줄 단위 diff와 CRLF 정규화를 허용한다.
 *.md text
+
+# Linux 서버에서 직접 실행하는 shell script는 Windows git archive에서도 LF를 유지한다.
+*.sh text eol=lf
