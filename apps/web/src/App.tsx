@@ -55,13 +55,22 @@ const initialPreview = reservationChangePaymentRoute || paymentReturnRoute
 type DestinationExperience = DestinationContent['experiences'][number]
 
 function DestinationExperienceCard({ item, index, locale }: { item: DestinationExperience; index: number; locale: 'ko' | 'en' }) {
+  if (item.href && item.image) return <a className="experience-card experience-card-linked" href={item.href}>
+    <img className="experience-card-image" src={item.image} alt={item.title} loading="lazy" />
+    <div className="experience-card-body">
+      <p>{item.category}</p>
+      <h3>{item.title}</h3>
+      <span>{item.description}</span>
+      <strong>{locale === 'en' ? 'View details' : '자세히 보기'} <ArrowRight size={15} aria-hidden="true" /></strong>
+    </div>
+  </a>
   const details = <>
     {item.image && <img src={item.image} alt={item.title} loading="lazy" style={{ width: '100%', aspectRatio: '4 / 3', objectFit: 'cover', marginBottom: 24 }} />}
     <p>{item.category}</p>
     <h3>{item.title}</h3>
     <span>{item.description}</span>
   </>
-  if (item.href) return <a className={`experience-card experience-${index}`} href={item.href} style={{ color: 'inherit', textDecoration: 'none' }}>{details}<strong>{locale === 'en' ? 'View details' : '자세히 보기'} <ArrowRight size={15} /></strong></a>
+  if (item.href) return <a className={`experience-card experience-${index}`} href={item.href} style={{ textDecoration: 'none' }}>{details}<strong>{locale === 'en' ? 'View details' : '자세히 보기'} <ArrowRight size={15} /></strong></a>
   return <article className={`experience-card experience-${index}`}>{details}{locale === 'ko' && <a href="#booking">{item.title}로 예약하기 <ArrowRight size={15} /></a>}</article>
 }
 
@@ -326,7 +335,7 @@ function BookingApp() {
     if (route?.kind === 'collection') return <>{renderHeader(true)}<ContentCollectionPage key={pathname} locale="en" contentKind={route.contentKind} hotelSlug={route.hotelSlug} />{englishFooter}</>
     if (websiteLoading || (!contentPage && !homeContentPage && !publishedDestination)) return <>{renderHeader(true)}<main className="content-section" aria-live="polite"><p>Loading English content…</p></main></>
     const page = contentPage ?? homeContentPage
-    if (page) return <>{renderHeader(true)}<main id="top"><ContentPage page={page} previewMode={previewMode} locale="en" onBookingIntent={applyContentBookingIntent} /></main>{englishFooter}</>
+    if (page) return <>{renderHeader(true)}<main id="top"><ContentPage page={page} previewMode={previewMode} locale="en" layout={contentPage ? 'detail' : 'home'} onBookingIntent={applyContentBookingIntent} /></main>{englishFooter}</>
     if (publishedDestination) return <>{renderHeader(true)}<main id="top">
       <DestinationHero slides={publishedDestination.heroSlides} locale="en"><div className="hero-shade" /><div className="hero-copy"><p>{publishedDestination.eyebrow}</p><h1>{publishedDestination.title}</h1><p>{publishedDestination.description}</p><a href="/#booking" className="text-link">Book a room (Korean) <ArrowRight size={18} /></a></div></DestinationHero>
       <section className="content-section editorial"><h2>Experiences</h2><div className="experience-grid">{publishedDestination.experiences.map((item, index) => <DestinationExperienceCard item={item} index={index} locale="en" key={item.title} />)}</div></section>

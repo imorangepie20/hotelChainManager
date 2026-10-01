@@ -1,0 +1,259 @@
+/* CMS 상세에만 적용한다. 홈·지점 랜딩의 hero와 예약 화면은 유지한다. */
+.cms-content-page .content-page-hero {
+  height: auto;
+  min-height: clamp(320px, 46vh, 440px);
+  display: grid;
+  align-items: center;
+  padding: 48px max(24px, calc((100% - 1120px) / 2));
+}
+
+.cms-content-page .content-page-hero > img,
+.cms-content-page .content-page-hero > .responsive-cms-picture > img {
+  position: absolute;
+  inset: 0;
+}
+
+.cms-content-page .hero-copy {
+  position: relative;
+  top: auto;
+  left: auto;
+  right: auto;
+  transform: none;
+  width: min(680px, 100%);
+  max-width: none;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cms-content-page .hero h1 {
+  font-size: clamp(36px, 4vw, 56px);
+  line-height: 1.15;
+  margin: 14px 0;
+}
+
+.cms-content-page .hero-copy > p:not(.eyebrow):not(.content-kind-label) {
+  font-size: 16px;
+  line-height: 1.7;
+  max-width: 54ch;
+}
+
+.cms-content-page .hero-copy .content-kind-label {
+  font-size: 11px;
+  letter-spacing: .14em;
+}
+
+.cms-content-page .hero-copy .text-link {
+  margin-top: 20px;
+}
+
+.cms-content-body {
+  width: min(1120px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: 56px 0 72px;
+  display: flex;
+  flex-direction: column;
+  gap: 48px;
+}
+
+.cms-content-body > .content-section,
+.cms-content-body > .content-page-cta,
+.cms-content-body > .content-page-booking-cta {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  min-width: 0;
+}
+
+.cms-content-body .content-page-text h2 {
+  font-size: clamp(28px, 2.8vw, 36px);
+  line-height: 1.3;
+  margin: 8px 0 20px;
+}
+
+.cms-content-body .content-page-text > p:not(.section-kicker) {
+  max-width: 68ch;
+  margin: 0 0 12px;
+  font-size: 16px;
+  line-height: 1.85;
+  color: #43585c;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+.cms-content-body .content-page-text > p:last-child {
+  margin-bottom: 0;
+}
+
+.cms-content-body .section-kicker {
+  margin: 0;
+  color: var(--teal);
+}
+
+.cms-content-body .content-detail-heading {
+  max-width: 68ch;
+  margin-bottom: 24px;
+}
+
+.cms-content-body .content-detail-heading h2,
+.cms-content-body .content-page-detail > h2 {
+  font-size: clamp(23px, 2.2vw, 28px);
+  line-height: 1.35;
+  margin: 8px 0 12px;
+}
+
+.cms-content-body .content-page-detail {
+  padding-top: 28px;
+  border-top: 1px solid var(--line);
+}
+
+.cms-content-body .content-page-detail ul.content-notice-list {
+  padding-left: 0;
+}
+
+.cms-content-body .content-page-detail .content-block-note {
+  max-width: none;
+}
+
+.cms-content-body .content-gallery-media {
+  aspect-ratio: 16 / 9;
+}
+
+.cms-content-body .content-gallery-controls button {
+  width: 44px;
+  height: 44px;
+}
+
+.cms-content-body .content-page-cta h2,
+.cms-content-body .content-page-booking-cta h2 {
+  font-size: clamp(26px, 2.5vw, 34px);
+}
+
+/* 발행 상세로 연결된 사진 카드는 기존 장식형 legacy 카드와 분리한다. */
+.experience-grid:has(> .experience-card-linked) {
+  gap: 24px;
+  background: transparent;
+}
+
+.experience-card.experience-card-linked {
+  min-height: 0;
+  padding: 0;
+  justify-content: flex-start;
+  background: #fff;
+  color: var(--navy);
+  text-decoration: none;
+  border: 1px solid var(--line);
+}
+
+.experience-card.experience-card-linked::before {
+  content: none;
+}
+
+.experience-card-linked .experience-card-image {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+}
+
+.experience-card-linked .experience-card-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 24px;
+}
+
+.experience-card-linked .experience-card-body > p {
+  margin: 0;
+  color: var(--teal);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.experience-card-linked .experience-card-body > h3 {
+  margin: 0;
+  font-size: 26px;
+  line-height: 1.3;
+}
+
+.experience-card-linked .experience-card-body > span {
+  flex: 1;
+  font-size: 15px;
+  line-height: 1.75;
+  opacity: 1;
+  color: #43585c;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+.experience-card-linked .experience-card-body > strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--teal);
+}
+
+.experience-card.experience-card-linked:hover,
+.experience-card.experience-card-linked:focus-visible {
+  border-color: var(--teal);
+}
+
+@media (max-width: 900px) {
+  .experience-grid:has(> .experience-card-linked) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .experience-grid:has(> .experience-card-linked) {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+  }
+
+  .experience-card-linked .experience-card-body {
+    padding: 20px;
+  }
+
+  .cms-content-page .content-page-hero {
+    min-height: 340px;
+    padding: 36px 20px;
+  }
+
+  .cms-content-page .hero-copy {
+    width: 100%;
+  }
+
+  .cms-content-page .hero h1 {
+    font-size: 32px;
+  }
+
+  .cms-content-page .hero-copy > p:not(.eyebrow):not(.content-kind-label) {
+    font-size: 14px;
+  }
+
+  .cms-content-body {
+    width: calc(100% - 40px);
+    padding: 36px 0 48px;
+    gap: 32px;
+  }
+
+  .cms-content-body .content-page-text > p:not(.section-kicker) {
+    font-size: 15px;
+  }
+
+  .cms-content-body .content-detail-heading {
+    margin-bottom: 18px;
+  }
+
+  .cms-content-body .content-gallery-media {
+    aspect-ratio: 4 / 3;
+  }
+
+  .cms-content-body .content-page-detail {
+    padding-top: 22px;
+  }
+}

@@ -169,9 +169,15 @@ export function ContentPageAfterHero({ page, onBookingIntent, locale = 'ko', pre
   </>
 }
 
-export function ContentPage({ page, onBookingIntent, locale = 'ko', previewMode = false }: { page: ContentPageDocument; onBookingIntent?: (intent: BookingIntent) => void; locale?: 'ko' | 'en'; previewMode?: boolean }) {
-  return <>
+export function ContentPage({ page, onBookingIntent, locale = 'ko', previewMode = false, layout = 'detail' }: { page: ContentPageDocument; onBookingIntent?: (intent: BookingIntent) => void; locale?: 'ko' | 'en'; previewMode?: boolean; layout?: 'detail' | 'home' }) {
+  if (layout === 'home') return <>
     <ContentPageHero page={page} previewMode={previewMode} />
     <ContentPageAfterHero page={page} previewMode={previewMode} onBookingIntent={onBookingIntent} locale={locale} />
   </>
+  return <article className="cms-content-page">
+    <ContentPageHero page={page} previewMode={previewMode} />
+    <div className="cms-content-body">
+      <ContentPageAfterHero page={page} previewMode={previewMode} onBookingIntent={onBookingIntent} locale={locale} />
+    </div>
+  </article>
 }
